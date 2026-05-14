@@ -911,6 +911,173 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun businessOwnerCanConfigureHoursHolidaysPublishAndReadPublicRestaurant() {
+        val owner = createBusinessUser("settings-owner@example.com")
+        val sessionCookie = loginAndExtractSessionCookie(owner.email)
+        val restaurant = createApprovedRestaurantForSettings(owner, "Public Table")
+
+        mockMvc.get("/api/business/restaurants/current") {
+            cookie(sessionCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.id") { value(restaurant.id.toInt()) }
+            jsonPath("$.status") { value("APPROVED") }
+        }
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "Public Table",
+              "description": "예약제 다이닝",
+              "phone": "02-7777-1000",
+              "addressLine1": "서울시 공개구 1",
+              "addressLine2": "2층",
+              "postalCode": "04500",
+              "cuisineTypes": ["dining", "wine"]
+            }
+            """.trimIndent()
+            header("X-Forwarded-For", "203.0.113.30")
+            header("User-Agent", "restaurant-settings-test")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.description") { value("예약제 다이닝") }
+            jsonPath("$.cuisineTypes[1]") { value("wine") }
+        }
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/business-hours") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "hours": [
+                {"dayOfWeek": "MONDAY", "opensAt": "11:30:00", "closesAt": "15:00:00"},
+                {"dayOfWeek": "MONDAY", "opensAt": "17:30:00", "closesAt": "22:00:00"},
+                {"dayOfWeek": "TUESDAY", "closed": true}
+              ]
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$[0].dayOfWeek") { value("MONDAY") }
+            jsonPath("$[0].sequence") { value(1) }
+            jsonPath("$[1].sequence") { value(2) }
+            jsonPath("$[2].closed") { value(true) }
+        }
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/business-hours") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "hours": [
+                {"dayOfWeek": "MONDAY", "opensAt": "12:00:00", "closesAt": "21:00:00"}
+              ]
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$[0].dayOfWeek") { value("MONDAY") }
+            jsonPath("$[0].sequence") { value(1) }
+        }
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/holiday-rules") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "rules": [
+                {"type": "WEEKLY", "dayOfWeek": "TUESDAY", "reason": "정기 휴무"},
+                {"type": "TEMPORARY_DATE", "date": "2026-06-01", "reason": "워크숍"}
+              ]
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$[0].reason") { isNotEmpty() }
+        }
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/reservation-page") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"slug": "public-table", "status": "PUBLIC"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.slug") { value("public-table") }
+            jsonPath("$.status") { value("PUBLIC") }
+            jsonPath("$.publicUrl") { value("/r/public-table") }
+            jsonPath("$.publishable") { value(true) }
+        }
+
+        mockMvc.get("/api/public/restaurants/public-table").andExpect {
+            status { isOk() }
+            jsonPath("$.name") { value("Public Table") }
+            jsonPath("$.reservationPage.status") { value("PUBLIC") }
+            jsonPath("$.businessHours[0].dayOfWeek") { value("MONDAY") }
+            jsonPath("$.holidayRules[0].reason") { isNotEmpty() }
+        }
+
+        val restaurantLogs = auditLogRepository.findByTargetTypeAndTargetId("restaurant", restaurant.id)
+        assertThat(restaurantLogs.map { it.action })
+            .contains("RESTAURANT_UPDATED", "BUSINESS_HOURS_UPDATED", "HOLIDAY_RULES_UPDATED")
+        val pageId = reservationPageRepository.findByRestaurantId(restaurant.id)?.id
+            ?: error("Reservation page should exist.")
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("reservation_page", pageId).map { it.action })
+            .contains("RESERVATION_PAGE_UPDATED")
+    }
+
+    @Test
+    fun reservationPagePublishRequiresApprovedOwnedRestaurantAndBusinessHours() {
+        val owner = createBusinessUser("settings-blocked-owner@example.com")
+        val sessionCookie = loginAndExtractSessionCookie(owner.email)
+        val otherOwner = createBusinessUser("settings-other-owner@example.com")
+        val otherCookie = loginAndExtractSessionCookie(otherOwner.email)
+        val restaurant = createApprovedRestaurantForSettings(owner, "Hidden Table", "hidden-table")
+
+        mockMvc.get("/api/public/restaurants/hidden-table").andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/reservation-page") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"slug": "hidden-table", "status": "PUBLIC"}"""
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("VALIDATION_ERROR") }
+            jsonPath("$.message") { value(org.hamcrest.Matchers.containsString("businessHours")) }
+        }
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/business-hours") {
+            cookie(otherCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"hours": [{"dayOfWeek": "MONDAY", "opensAt": "11:00:00", "closesAt": "12:00:00"}]}"""
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/business-hours") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "hours": [
+                {"dayOfWeek": "MONDAY", "opensAt": "11:00:00", "closesAt": "13:00:00"},
+                {"dayOfWeek": "MONDAY", "opensAt": "12:30:00", "closesAt": "14:00:00"}
+              ]
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("VALIDATION_ERROR") }
+            jsonPath("$.message") { value("같은 요일의 영업 구간은 겹칠 수 없습니다.") }
+        }
+    }
+
+    @Test
     fun businessRestaurantApplicationSubmitRejectsMissingRequiredFields() {
         val sessionCookie = loginAndExtractSessionCookie(
             createBusinessUser("application-missing-required@example.com").email,
@@ -1161,6 +1328,39 @@ class RestaurantApiApplicationTests {
                 submittedAt = Instant.now(),
             ),
         )
+    }
+
+    private fun createApprovedRestaurantForSettings(
+        owner: BusinessUserEntity,
+        restaurantName: String,
+        slug: String? = null,
+    ): RestaurantEntity {
+        val restaurant = restaurantRepository.saveAndFlush(
+            RestaurantEntity(
+                owner = owner,
+                name = restaurantName,
+                slug = slug,
+                description = "승인된 매장",
+                phone = "02-7777-1000",
+                addressLine1 = "서울시 공개구 1",
+                cuisineTypesJson = """["dining"]""",
+                status = RestaurantStatus.APPROVED,
+                approvedAt = Instant.now(),
+            ),
+        )
+        owner.linkedRestaurantId = restaurant.id
+        owner.linkedRestaurantStatus = restaurant.status.name
+        userRepository.saveAndFlush(owner)
+        if (slug != null) {
+            reservationPageRepository.saveAndFlush(
+                ReservationPageEntity(
+                    restaurant = restaurant,
+                    slug = slug,
+                    status = ReservationPageStatus.PRIVATE,
+                ),
+            )
+        }
+        return restaurant
     }
 
     private fun fullRestaurantApplicationJson(
