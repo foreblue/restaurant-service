@@ -9,4 +9,9 @@ interface RestaurantApplicationRepository : JpaRepository<RestaurantApplicationE
         restaurantId: Long,
         status: RestaurantApplicationStatus,
     ): Boolean
+
+    fun existsByBusinessRegistrationNoAndStatus(
+        businessRegistrationNo: String,
+        status: RestaurantApplicationStatus,
+    ): Boolean
 }

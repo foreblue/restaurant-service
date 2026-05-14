@@ -25,8 +25,8 @@ class RestaurantEntity(
     @JoinColumn(name = "owner_user_id", nullable = false)
     val owner: BusinessUserEntity,
 
-    @Column(nullable = false, length = 80)
-    var name: String,
+    @Column(length = 80)
+    var name: String? = null,
 
     @Column(unique = true, length = 60)
     var slug: String? = null,
@@ -34,11 +34,11 @@ class RestaurantEntity(
     @Column(columnDefinition = "text")
     var description: String? = null,
 
-    @Column(nullable = false, length = 32)
-    var phone: String,
+    @Column(length = 32)
+    var phone: String? = null,
 
-    @Column(name = "address_line1", nullable = false)
-    var addressLine1: String,
+    @Column(name = "address_line1")
+    var addressLine1: String? = null,
 
     @Column(name = "address_line2")
     var addressLine2: String? = null,
@@ -46,8 +46,8 @@ class RestaurantEntity(
     @Column(name = "postal_code", length = 20)
     var postalCode: String? = null,
 
-    @Column(name = "cuisine_types", nullable = false, columnDefinition = "json")
-    var cuisineTypesJson: String = "[]",
+    @Column(name = "cuisine_types", columnDefinition = "json")
+    var cuisineTypesJson: String? = null,
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "cover_image_file_id")
