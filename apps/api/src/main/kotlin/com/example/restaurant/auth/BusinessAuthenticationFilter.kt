@@ -53,6 +53,13 @@ class BusinessAuthenticationFilter(
         if (request.method.equals("OPTIONS", ignoreCase = true)) {
             return false
         }
-        return !(request.method == "POST" && path == "/api/business/auth/login")
+        if (request.method != "POST") {
+            return true
+        }
+        return path !in setOf(
+            "/api/business/auth/login",
+            "/api/business/auth/password-reset-requests",
+            "/api/business/auth/password-reset-confirmations",
+        )
     }
 }

@@ -40,7 +40,34 @@ class BusinessAuthController(
         response.addHeader(HttpHeaders.SET_COOKIE, authService.expiredSessionCookie())
     }
 
+    @PostMapping("/auth/password-reset-requests")
+    fun requestPasswordReset(
+        servletRequest: HttpServletRequest,
+        @Valid @RequestBody request: PasswordResetRequestRequest,
+    ): PasswordResetRequestResponse =
+        authService.requestPasswordReset(
+            request = request,
+            metadata = servletRequest.toMetadata(),
+        )
+
+    @PostMapping("/auth/password-reset-confirmations")
+    fun confirmPasswordReset(
+        servletRequest: HttpServletRequest,
+        @Valid @RequestBody request: PasswordResetConfirmationRequest,
+    ): PasswordResetConfirmationResponse =
+        authService.confirmPasswordReset(
+            request = request,
+            metadata = servletRequest.toMetadata(),
+        )
+
     @GetMapping("/me")
     fun me(request: HttpServletRequest): BusinessMeResponse =
         authService.currentUser(BusinessAuthContext.principal(request))
+
+    private fun HttpServletRequest.toMetadata(): BusinessAuthRequestMetadata =
+        BusinessAuthRequestMetadata(
+            ipAddress = getHeader("X-Forwarded-For")?.substringBefore(",")?.trim()
+                ?: remoteAddr,
+            userAgent = getHeader("User-Agent"),
+        )
 }
