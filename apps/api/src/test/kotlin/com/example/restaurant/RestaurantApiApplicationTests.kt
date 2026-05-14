@@ -2,6 +2,7 @@ package com.example.restaurant
 
 import com.example.restaurant.auth.BusinessUserEntity
 import com.example.restaurant.auth.BusinessUserRepository
+import com.example.restaurant.auth.BusinessUserRole
 import com.example.restaurant.auth.BusinessUserStatus
 import com.example.restaurant.auth.BusinessPasswordResetNotificationRepository
 import com.example.restaurant.auth.BusinessPasswordResetTokenEntity
@@ -229,14 +230,25 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
-    fun adminApiReturnsAccessDeniedUntilAdminAuthIsImplemented() {
-        mockMvc.get("/api/admin/restaurants") {
+    fun adminApiRequiresAdminSession() {
+        mockMvc.get("/api/admin/restaurant-applications") {
             header(TraceContext.TRACE_ID_HEADER, "admin-trace-1")
+        }.andExpect {
+            status { isUnauthorized() }
+            jsonPath("$.code") { value("AUTHENTICATION_REQUIRED") }
+            jsonPath("$.message") { value("인증이 필요합니다.") }
+            jsonPath("$.traceId") { value("admin-trace-1") }
+        }
+
+        val ownerCookie = loginAndExtractSessionCookie()
+        mockMvc.get("/api/admin/restaurant-applications") {
+            cookie(ownerCookie)
+            header(TraceContext.TRACE_ID_HEADER, "admin-trace-2")
         }.andExpect {
             status { isForbidden() }
             jsonPath("$.code") { value("ACCESS_DENIED") }
             jsonPath("$.message") { value("접근 권한이 없습니다.") }
-            jsonPath("$.traceId") { value("admin-trace-1") }
+            jsonPath("$.traceId") { value("admin-trace-2") }
         }
     }
 
@@ -797,6 +809,108 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun adminCanListReadAndApproveSubmittedRestaurantApplication() {
+        val admin = createBusinessUser("admin-approve@example.com", BusinessUserRole.ADMIN)
+        val adminCookie = loginAndExtractSessionCookie(admin.email)
+        val owner = createBusinessUser("approval-owner@example.com")
+        val application = createSubmittedRestaurantApplication(
+            owner = owner,
+            businessRegistrationNo = "3333333333",
+            restaurantName = "Blue Table",
+        )
+
+        mockMvc.get("/api/admin/restaurant-applications?status=SUBMITTED") {
+            cookie(adminCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$[0].id") { value(application.id.toInt()) }
+            jsonPath("$[0].status") { value("SUBMITTED") }
+        }
+
+        mockMvc.get("/api/admin/restaurant-applications/${application.id}") {
+            cookie(adminCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.id") { value(application.id.toInt()) }
+            jsonPath("$.restaurant.name") { value("Blue Table") }
+        }
+
+        mockMvc.post("/api/admin/restaurant-applications/${application.id}/approve") {
+            cookie(adminCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reviewNote": "확인 완료"}"""
+            header("X-Forwarded-For", "203.0.113.20")
+            header("User-Agent", "admin-approve-test")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("APPROVED") }
+            jsonPath("$.restaurant.status") { value("APPROVED") }
+            jsonPath("$.restaurant.slug") { value("blue-table") }
+            jsonPath("$.restaurant.reservationPage.slug") { value("blue-table") }
+            jsonPath("$.restaurant.reservationPage.status") { value("PRIVATE") }
+            jsonPath("$.reviewedAt") { isNotEmpty() }
+            jsonPath("$.reviewNote") { value("확인 완료") }
+        }
+
+        val approvedRestaurant = restaurantRepository.findById(application.restaurant.id).orElseThrow()
+        assertThat(approvedRestaurant.status).isEqualTo(RestaurantStatus.APPROVED)
+        assertThat(approvedRestaurant.approvedAt).isNotNull()
+        assertThat(reservationPageRepository.findByRestaurantId(approvedRestaurant.id)?.slug)
+            .isEqualTo("blue-table")
+        assertThat(userRepository.findByEmail(owner.email)?.linkedRestaurantStatus)
+            .isEqualTo(RestaurantStatus.APPROVED.name)
+
+        val auditLogs = auditLogRepository.findByTargetTypeAndTargetId("restaurant_application", application.id)
+        assertThat(auditLogs.map { it.action }).contains("RESTAURANT_APPLICATION_APPROVED")
+        assertThat(auditLogs.single { it.action == "RESTAURANT_APPLICATION_APPROVED" }.ipAddress)
+            .isEqualTo("203.0.113.20")
+    }
+
+    @Test
+    fun adminCanRejectAndOwnerCanResubmitRestaurantApplication() {
+        val admin = createBusinessUser("admin-reject@example.com", BusinessUserRole.ADMIN)
+        val adminCookie = loginAndExtractSessionCookie(admin.email)
+        val owner = createBusinessUser("rejection-owner@example.com")
+        val ownerCookie = loginAndExtractSessionCookie(owner.email)
+        val application = createSubmittedRestaurantApplication(
+            owner = owner,
+            businessRegistrationNo = "4444444444",
+            restaurantName = "Rejectable Table",
+        )
+
+        mockMvc.post("/api/admin/restaurant-applications/${application.id}/reject") {
+            cookie(adminCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"rejectionReason": "서류 보완 필요", "reviewNote": "사업자등록증 확인 실패"}"""
+            header("X-Forwarded-For", "203.0.113.21")
+            header("User-Agent", "admin-reject-test")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("REJECTED") }
+            jsonPath("$.restaurant.status") { value("REJECTED") }
+            jsonPath("$.rejectionReason") { value("서류 보완 필요") }
+            jsonPath("$.reviewNote") { value("사업자등록증 확인 실패") }
+        }
+
+        assertThat(userRepository.findByEmail(owner.email)?.linkedRestaurantStatus)
+            .isEqualTo(RestaurantStatus.REJECTED.name)
+        val auditLogs = auditLogRepository.findByTargetTypeAndTargetId("restaurant_application", application.id)
+        assertThat(auditLogs.map { it.action }).contains("RESTAURANT_APPLICATION_REJECTED")
+        assertThat(auditLogs.single { it.action == "RESTAURANT_APPLICATION_REJECTED" }.ipAddress)
+            .isEqualTo("203.0.113.21")
+
+        mockMvc.post("/api/business/restaurant-applications/${application.id}/submit") {
+            cookie(ownerCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("SUBMITTED") }
+            jsonPath("$.restaurant.status") { value("APPROVAL_REQUESTED") }
+            jsonPath("$.rejectionReason") { value(org.hamcrest.Matchers.nullValue()) }
+            jsonPath("$.reviewedAt") { value(org.hamcrest.Matchers.nullValue()) }
+        }
+    }
+
+    @Test
     fun businessRestaurantApplicationSubmitRejectsMissingRequiredFields() {
         val sessionCookie = loginAndExtractSessionCookie(
             createBusinessUser("application-missing-required@example.com").email,
@@ -956,13 +1070,17 @@ class RestaurantApiApplicationTests {
         return Cookie("BUSINESS_SESSION", token)
     }
 
-    private fun createBusinessUser(email: String): BusinessUserEntity =
+    private fun createBusinessUser(
+        email: String,
+        role: BusinessUserRole = BusinessUserRole.OWNER,
+    ): BusinessUserEntity =
         userRepository.saveAndFlush(
             BusinessUserEntity(
                 email = email,
                 passwordHash = passwordEncoder.encode("CorrectPassword123!")
                     ?: error("Password encoder returned null."),
                 displayName = email.substringBefore("@"),
+                role = role,
                 status = BusinessUserStatus.ACTIVE,
             ),
         )
@@ -1001,6 +1119,49 @@ class RestaurantApiApplicationTests {
                 createdBy = createdBy,
             ),
         )
+
+    private fun createSubmittedRestaurantApplication(
+        owner: BusinessUserEntity,
+        businessRegistrationNo: String,
+        restaurantName: String,
+    ): RestaurantApplicationEntity {
+        val businessLicense = createStoredFile(
+            storageKey = "business-licenses/$businessRegistrationNo.pdf",
+            purpose = StoredFilePurpose.BUSINESS_LICENSE,
+            visibility = StoredFileVisibility.PRIVATE,
+            createdBy = owner,
+        )
+        val restaurant = restaurantRepository.saveAndFlush(
+            RestaurantEntity(
+                owner = owner,
+                name = restaurantName,
+                phone = "02-7777-0000",
+                addressLine1 = "서울시 테스트구 승인로 1",
+                cuisineTypesJson = """["dining"]""",
+                status = RestaurantStatus.APPROVAL_REQUESTED,
+            ),
+        )
+        owner.linkedRestaurantId = restaurant.id
+        owner.linkedRestaurantStatus = restaurant.status.name
+        userRepository.saveAndFlush(owner)
+
+        return restaurantApplicationRepository.saveAndFlush(
+            RestaurantApplicationEntity(
+                restaurant = restaurant,
+                businessRegistrationNo = businessRegistrationNo,
+                businessName = restaurantName,
+                representativeName = "대표자",
+                businessAddress = "서울시 테스트구 승인로 1",
+                businessLicenseFile = businessLicense,
+                managerName = "매니저",
+                managerPhone = "010-7777-0000",
+                managerEmail = "${businessRegistrationNo}@example.com",
+                contactVerifiedAt = Instant.now(),
+                status = RestaurantApplicationStatus.SUBMITTED,
+                submittedAt = Instant.now(),
+            ),
+        )
+    }
 
     private fun fullRestaurantApplicationJson(
         businessRegistrationNo: String,
