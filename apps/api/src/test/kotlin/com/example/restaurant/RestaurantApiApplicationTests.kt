@@ -8,14 +8,31 @@ import com.example.restaurant.auth.ReservationLookupTokenService
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
 import com.example.restaurant.common.trace.TraceContext
+import com.example.restaurant.restaurant.FileStorage
+import com.example.restaurant.restaurant.FileStorageSaveRequest
+import com.example.restaurant.restaurant.ReservationPageEntity
+import com.example.restaurant.restaurant.ReservationPageRepository
+import com.example.restaurant.restaurant.ReservationPageStatus
+import com.example.restaurant.restaurant.RestaurantEntity
+import com.example.restaurant.restaurant.RestaurantRepository
+import com.example.restaurant.restaurant.RestaurantStatus
+import com.example.restaurant.restaurant.StoredFileEntity
+import com.example.restaurant.restaurant.StoredFilePurpose
+import com.example.restaurant.restaurant.StoredFileRepository
+import com.example.restaurant.restaurant.StoredFileVisibility
+import com.example.restaurant.restaurantapplication.RestaurantApplicationEntity
+import com.example.restaurant.restaurantapplication.RestaurantApplicationRepository
+import com.example.restaurant.restaurantapplication.RestaurantApplicationStatus
 import com.jayway.jsonpath.JsonPath
 import jakarta.servlet.http.Cookie
 import jakarta.validation.Valid
 import jakarta.validation.constraints.NotBlank
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.context.DynamicPropertyRegistry
@@ -60,6 +77,21 @@ class RestaurantApiApplicationTests {
 
     @Autowired
     private lateinit var reservationLookupTokenService: ReservationLookupTokenService
+
+    @Autowired
+    private lateinit var storedFileRepository: StoredFileRepository
+
+    @Autowired
+    private lateinit var restaurantRepository: RestaurantRepository
+
+    @Autowired
+    private lateinit var restaurantApplicationRepository: RestaurantApplicationRepository
+
+    @Autowired
+    private lateinit var reservationPageRepository: ReservationPageRepository
+
+    @Autowired
+    private lateinit var fileStorage: FileStorage
 
     @Test
     fun contextLoads() {
@@ -305,6 +337,216 @@ class RestaurantApiApplicationTests {
         }
     }
 
+    @Test
+    fun restaurantDomainRepositoriesPersistStoreApplicationPageAndFileMetadata() {
+        val owner = createBusinessUser("restaurant-owner@example.com")
+        val coverImage = storedFileRepository.saveAndFlush(
+            StoredFileEntity(
+                storageKey = "restaurant-cover-images/cover-1.webp",
+                originalFilename = "cover.webp",
+                contentType = "image/webp",
+                byteSize = 1024,
+                checksumSha256 = "a".repeat(64),
+                visibility = StoredFileVisibility.PUBLIC,
+                purpose = StoredFilePurpose.RESTAURANT_COVER_IMAGE,
+                createdBy = owner,
+            ),
+        )
+        val businessLicense = storedFileRepository.saveAndFlush(
+            StoredFileEntity(
+                storageKey = "business-licenses/license-1.pdf",
+                originalFilename = "license.pdf",
+                contentType = "application/pdf",
+                byteSize = 2048,
+                checksumSha256 = "b".repeat(64),
+                visibility = StoredFileVisibility.PRIVATE,
+                purpose = StoredFilePurpose.BUSINESS_LICENSE,
+                createdBy = owner,
+            ),
+        )
+        val restaurant = restaurantRepository.saveAndFlush(
+            RestaurantEntity(
+                owner = owner,
+                name = "스시윤",
+                slug = null,
+                description = "예약제 스시야",
+                phone = "02-1234-5678",
+                addressLine1 = "서울시 강남구 테헤란로 1",
+                addressLine2 = "2층",
+                postalCode = "06123",
+                cuisineTypesJson = """["sushi","omakase"]""",
+                coverImageFile = coverImage,
+                status = RestaurantStatus.DRAFT,
+            ),
+        )
+        restaurantApplicationRepository.saveAndFlush(
+            RestaurantApplicationEntity(
+                restaurant = restaurant,
+                businessRegistrationNo = "1234567890",
+                businessName = "스시윤",
+                representativeName = "윤대표",
+                businessAddress = "서울시 강남구 테헤란로 1",
+                businessLicenseFile = businessLicense,
+                managerName = "윤매니저",
+                managerPhone = "010-1111-2222",
+                managerEmail = "manager@example.com",
+                status = RestaurantApplicationStatus.DRAFT,
+            ),
+        )
+        reservationPageRepository.saveAndFlush(
+            ReservationPageEntity(
+                restaurant = restaurant,
+                slug = "sushi-yoon",
+                status = ReservationPageStatus.PRIVATE,
+            ),
+        )
+
+        assertThat(restaurantRepository.findByOwnerId(owner.id)?.name).isEqualTo("스시윤")
+        assertThat(restaurantRepository.findByOwnerId(owner.id)?.status).isEqualTo(RestaurantStatus.DRAFT)
+        assertThat(storedFileRepository.findByStorageKey("business-licenses/license-1.pdf")?.visibility)
+            .isEqualTo(StoredFileVisibility.PRIVATE)
+        assertThat(
+            restaurantApplicationRepository
+                .findTopByRestaurantIdOrderByCreatedAtDesc(restaurant.id)
+                ?.businessRegistrationNo,
+        ).isEqualTo("1234567890")
+        assertThat(reservationPageRepository.findBySlug("sushi-yoon")?.status)
+            .isEqualTo(ReservationPageStatus.PRIVATE)
+    }
+
+    @Test
+    fun restaurantRepositoryEnforcesSingleRestaurantPerOwner() {
+        val owner = createBusinessUser("single-restaurant-owner@example.com")
+        restaurantRepository.saveAndFlush(
+            RestaurantEntity(
+                owner = owner,
+                name = "첫번째 매장",
+                phone = "02-1000-0001",
+                addressLine1 = "서울시 중구 1",
+                cuisineTypesJson = """["korean"]""",
+            ),
+        )
+
+        assertThatThrownBy {
+            restaurantRepository.saveAndFlush(
+                RestaurantEntity(
+                    owner = owner,
+                    name = "두번째 매장",
+                    phone = "02-1000-0002",
+                    addressLine1 = "서울시 중구 2",
+                    cuisineTypesJson = """["korean"]""",
+                ),
+            )
+        }.isInstanceOf(DataIntegrityViolationException::class.java)
+    }
+
+    @Test
+    fun restaurantSlugsAreUniqueButNullable() {
+        val firstOwner = createBusinessUser("nullable-slug-owner-1@example.com")
+        val secondOwner = createBusinessUser("nullable-slug-owner-2@example.com")
+        val thirdOwner = createBusinessUser("duplicate-slug-owner-1@example.com")
+        val fourthOwner = createBusinessUser("duplicate-slug-owner-2@example.com")
+
+        restaurantRepository.saveAndFlush(
+            RestaurantEntity(
+                owner = firstOwner,
+                name = "슬러그 없음 1",
+                phone = "02-2000-0001",
+                addressLine1 = "서울시 용산구 1",
+                cuisineTypesJson = """["dining"]""",
+            ),
+        )
+        restaurantRepository.saveAndFlush(
+            RestaurantEntity(
+                owner = secondOwner,
+                name = "슬러그 없음 2",
+                phone = "02-2000-0002",
+                addressLine1 = "서울시 용산구 2",
+                cuisineTypesJson = """["dining"]""",
+            ),
+        )
+        restaurantRepository.saveAndFlush(
+            RestaurantEntity(
+                owner = thirdOwner,
+                name = "슬러그 있음 1",
+                slug = "unique-restaurant",
+                phone = "02-2000-0003",
+                addressLine1 = "서울시 용산구 3",
+                cuisineTypesJson = """["dining"]""",
+            ),
+        )
+
+        assertThatThrownBy {
+            restaurantRepository.saveAndFlush(
+                RestaurantEntity(
+                    owner = fourthOwner,
+                    name = "슬러그 있음 2",
+                    slug = "unique-restaurant",
+                    phone = "02-2000-0004",
+                    addressLine1 = "서울시 용산구 4",
+                    cuisineTypesJson = """["dining"]""",
+                ),
+            )
+        }.isInstanceOf(DataIntegrityViolationException::class.java)
+    }
+
+    @Test
+    fun reservationPageSlugsAreUniqueButNullable() {
+        val firstRestaurant = createRestaurantForTest(
+            owner = createBusinessUser("nullable-page-slug-owner-1@example.com"),
+            name = "예약 페이지 슬러그 없음 1",
+        )
+        val secondRestaurant = createRestaurantForTest(
+            owner = createBusinessUser("nullable-page-slug-owner-2@example.com"),
+            name = "예약 페이지 슬러그 없음 2",
+        )
+        val thirdRestaurant = createRestaurantForTest(
+            owner = createBusinessUser("duplicate-page-slug-owner-1@example.com"),
+            name = "예약 페이지 슬러그 있음 1",
+        )
+        val fourthRestaurant = createRestaurantForTest(
+            owner = createBusinessUser("duplicate-page-slug-owner-2@example.com"),
+            name = "예약 페이지 슬러그 있음 2",
+        )
+
+        reservationPageRepository.saveAndFlush(ReservationPageEntity(restaurant = firstRestaurant))
+        reservationPageRepository.saveAndFlush(ReservationPageEntity(restaurant = secondRestaurant))
+        reservationPageRepository.saveAndFlush(
+            ReservationPageEntity(
+                restaurant = thirdRestaurant,
+                slug = "unique-page",
+            ),
+        )
+
+        assertThatThrownBy {
+            reservationPageRepository.saveAndFlush(
+                ReservationPageEntity(
+                    restaurant = fourthRestaurant,
+                    slug = "unique-page",
+                ),
+            )
+        }.isInstanceOf(DataIntegrityViolationException::class.java)
+    }
+
+    @Test
+    fun localFileStorageStoresAndReadsFileWithoutExternalProvider() {
+        val result = fileStorage.save(
+            FileStorageSaveRequest(
+                originalFilename = "cover image.webp",
+                contentType = "image/webp",
+                content = "cover".encodeToByteArray(),
+                visibility = StoredFileVisibility.PUBLIC,
+                purpose = StoredFilePurpose.RESTAURANT_COVER_IMAGE,
+            ),
+        )
+
+        assertThat(result.storageKey).startsWith("restaurant_cover_image/")
+        assertThat(result.byteSize).isEqualTo(5)
+        assertThat(result.checksumSha256).hasSize(64)
+        assertThat(fileStorage.read(result.storageKey)?.decodeToString()).isEqualTo("cover")
+        assertThat(fileStorage.publicUrl(result.storageKey)).isNull()
+    }
+
     companion object {
         @Container
         @JvmField
@@ -382,4 +624,31 @@ class RestaurantApiApplicationTests {
             .substringBefore(";")
         return Cookie("BUSINESS_SESSION", token)
     }
+
+    private fun createBusinessUser(email: String): BusinessUserEntity =
+        userRepository.saveAndFlush(
+            BusinessUserEntity(
+                email = email,
+                passwordHash = passwordEncoder.encode("CorrectPassword123!")
+                    ?: error("Password encoder returned null."),
+                displayName = email.substringBefore("@"),
+                status = BusinessUserStatus.ACTIVE,
+            ),
+        )
+
+    private fun createRestaurantForTest(
+        owner: BusinessUserEntity,
+        name: String,
+        slug: String? = null,
+    ): RestaurantEntity =
+        restaurantRepository.saveAndFlush(
+            RestaurantEntity(
+                owner = owner,
+                name = name,
+                slug = slug,
+                phone = "02-9999-0000",
+                addressLine1 = "서울시 테스트구 1",
+                cuisineTypesJson = """["dining"]""",
+            ),
+        )
 }
