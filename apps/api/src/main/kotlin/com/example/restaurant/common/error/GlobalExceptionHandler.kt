@@ -10,6 +10,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException
 import org.springframework.web.bind.MissingServletRequestParameterException
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
+import org.springframework.web.servlet.resource.NoResourceFoundException
 
 @RestControllerAdvice
 class GlobalExceptionHandler {
@@ -34,6 +35,10 @@ class GlobalExceptionHandler {
     @ExceptionHandler(HttpRequestMethodNotSupportedException::class)
     fun handleMethodNotAllowedException(): ResponseEntity<ApiErrorResponse> =
         errorResponse(ErrorCode.METHOD_NOT_ALLOWED)
+
+    @ExceptionHandler(NoResourceFoundException::class)
+    fun handleNoResourceFoundException(): ResponseEntity<ApiErrorResponse> =
+        errorResponse(ErrorCode.NOT_FOUND)
 
     @ExceptionHandler(Exception::class)
     fun handleException(): ResponseEntity<ApiErrorResponse> =

@@ -110,6 +110,18 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun notFoundResponseUsesCommonErrorShape() {
+        mockMvc.get("/test/foundation/missing") {
+            header(TraceContext.TRACE_ID_HEADER, "trace-test-3")
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+            jsonPath("$.message") { value("요청한 리소스를 찾을 수 없습니다.") }
+            jsonPath("$.traceId") { value("trace-test-3") }
+        }
+    }
+
+    @Test
     fun actuatorHealthIsExposed() {
         mockMvc.get("/actuator/health").andExpect {
             status { isOk() }
