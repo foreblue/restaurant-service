@@ -2,11 +2,22 @@
 
 Kotlin, Spring Boot, Spring MVC, Spring Security, Spring Data JPA 기반 API 모듈입니다.
 
-초기 골격 단계에서는 다음 백엔드 단계의 MySQL/Flyway 작업이 반영되기 전에도 애플리케이션 컨텍스트가 기동될 수 있도록 인메모리 H2 datasource를 사용합니다.
+로컬 개발 DB는 `apps/api/compose.yaml`의 MySQL 8.4 컨테이너를 사용하고, schema 변경은 Flyway migration으로 관리합니다.
 
 ## 명령어
 
 ```bash
+docker compose -f apps/api/compose.yaml --project-directory apps/api up -d mysql
 ./gradlew :apps:api:build
 ./gradlew :apps:api:bootRun
 ```
+
+로컬 기본 DB 접속 정보는 다음과 같습니다.
+
+| 항목 | 값 |
+| --- | --- |
+| URL | `jdbc:mysql://localhost:3306/restaurant_service` |
+| Username | `restaurant_app` |
+| Password | `restaurant_app` |
+
+운영/개발 환경에서는 `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` 환경 변수로 datasource를 주입합니다.
