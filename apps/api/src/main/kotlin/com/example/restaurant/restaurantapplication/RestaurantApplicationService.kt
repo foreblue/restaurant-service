@@ -4,9 +4,12 @@ import com.example.restaurant.audit.AuditLogService
 import com.example.restaurant.auth.BusinessPrincipal
 import com.example.restaurant.auth.BusinessUserEntity
 import com.example.restaurant.auth.BusinessUserRepository
+import com.example.restaurant.auth.BusinessUserRole
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.example.restaurant.restaurant.ReservationPageEntity
 import com.example.restaurant.restaurant.ReservationPageRepository
+import com.example.restaurant.restaurant.ReservationPageStatus
 import com.example.restaurant.restaurant.RestaurantEntity
 import com.example.restaurant.restaurant.RestaurantRepository
 import com.example.restaurant.restaurant.RestaurantStatus
@@ -19,6 +22,7 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
 import java.time.Instant
+import java.util.Locale
 
 @Service
 class RestaurantApplicationService(
@@ -107,8 +111,8 @@ class RestaurantApplicationService(
         val application = ownedApplication(principal, applicationId)
         val restaurant = application.restaurant
 
-        if (application.status != RestaurantApplicationStatus.DRAFT) {
-            throw ApiException(ErrorCode.CONFLICT, "작성중 입점 신청만 제출할 수 있습니다.")
+        if (application.status !in setOf(RestaurantApplicationStatus.DRAFT, RestaurantApplicationStatus.REJECTED)) {
+            throw ApiException(ErrorCode.CONFLICT, "작성중 또는 반려된 입점 신청만 제출할 수 있습니다.")
         }
         if (applicationRepository.existsByRestaurantIdAndStatus(restaurant.id, RestaurantApplicationStatus.SUBMITTED)) {
             throw ApiException(ErrorCode.CONFLICT, "이미 제출된 입점 신청이 있습니다.")
@@ -129,6 +133,10 @@ class RestaurantApplicationService(
         val now = Instant.now(clock)
         application.status = RestaurantApplicationStatus.SUBMITTED
         application.submittedAt = now
+        application.reviewedBy = null
+        application.reviewedAt = null
+        application.reviewNote = null
+        application.rejectionReason = null
         restaurant.status = RestaurantStatus.APPROVAL_REQUESTED
         owner.linkedRestaurantId = restaurant.id
         owner.linkedRestaurantStatus = restaurant.status.name
@@ -153,9 +161,140 @@ class RestaurantApplicationService(
         return application.toResponse()
     }
 
+    @Transactional(readOnly = true)
+    fun listForAdmin(
+        principal: BusinessPrincipal,
+        status: RestaurantApplicationStatus?,
+    ): List<RestaurantApplicationResponse> {
+        admin(principal)
+        val applications = if (status == null) {
+            applicationRepository.findAllByOrderBySubmittedAtDescIdDesc()
+        } else {
+            applicationRepository.findByStatusOrderBySubmittedAtDescIdDesc(status)
+        }
+        return applications.map { it.toResponse() }
+    }
+
+    @Transactional(readOnly = true)
+    fun getForAdmin(
+        principal: BusinessPrincipal,
+        applicationId: Long,
+    ): RestaurantApplicationResponse {
+        admin(principal)
+        return applicationRepository.findById(applicationId)
+            .orElseThrow { ApiException(ErrorCode.NOT_FOUND, "입점 신청을 찾을 수 없습니다.") }
+            .toResponse()
+    }
+
+    @Transactional
+    fun approveForAdmin(
+        principal: BusinessPrincipal,
+        applicationId: Long,
+        request: RestaurantApplicationReviewRequest,
+        metadata: BusinessRequestMetadata,
+    ): RestaurantApplicationResponse {
+        val admin = admin(principal)
+        val application = submittedApplication(applicationId)
+        val restaurant = application.restaurant
+        val now = Instant.now(clock)
+        val reservationPage = ensureReservationPageForApproval(restaurant)
+
+        application.status = RestaurantApplicationStatus.APPROVED
+        application.reviewedBy = admin
+        application.reviewedAt = now
+        application.reviewNote = request.reviewNote.trimToNull()
+        application.rejectionReason = null
+        restaurant.status = RestaurantStatus.APPROVED
+        restaurant.approvedAt = now
+        restaurant.suspendedAt = null
+        restaurant.owner.linkedRestaurantId = restaurant.id
+        restaurant.owner.linkedRestaurantStatus = restaurant.status.name
+
+        auditLogService.record(
+            actorUser = admin,
+            actorRole = "ADMIN",
+            action = "RESTAURANT_APPLICATION_APPROVED",
+            targetType = "restaurant_application",
+            targetId = application.id,
+            afterValue = objectMapper.writeValueAsString(
+                mapOf(
+                    "restaurantId" to restaurant.id,
+                    "status" to application.status.name,
+                    "restaurantStatus" to restaurant.status.name,
+                    "reservationPageId" to reservationPage.id,
+                    "slug" to restaurant.slug,
+                ),
+            ),
+            ipAddress = metadata.ipAddress,
+            userAgent = metadata.userAgent,
+        )
+
+        return application.toResponse()
+    }
+
+    @Transactional
+    fun rejectForAdmin(
+        principal: BusinessPrincipal,
+        applicationId: Long,
+        request: RestaurantApplicationRejectRequest,
+        metadata: BusinessRequestMetadata,
+    ): RestaurantApplicationResponse {
+        val admin = admin(principal)
+        val application = submittedApplication(applicationId)
+        val restaurant = application.restaurant
+        val now = Instant.now(clock)
+
+        application.status = RestaurantApplicationStatus.REJECTED
+        application.reviewedBy = admin
+        application.reviewedAt = now
+        application.reviewNote = request.reviewNote.trimToNull()
+        application.rejectionReason = request.rejectionReason.trimToNull()
+            ?: throw ApiException(ErrorCode.VALIDATION_ERROR, "반려 사유가 필요합니다.")
+        restaurant.status = RestaurantStatus.REJECTED
+        restaurant.owner.linkedRestaurantId = restaurant.id
+        restaurant.owner.linkedRestaurantStatus = restaurant.status.name
+
+        auditLogService.record(
+            actorUser = admin,
+            actorRole = "ADMIN",
+            action = "RESTAURANT_APPLICATION_REJECTED",
+            targetType = "restaurant_application",
+            targetId = application.id,
+            afterValue = objectMapper.writeValueAsString(
+                mapOf(
+                    "restaurantId" to restaurant.id,
+                    "status" to application.status.name,
+                    "restaurantStatus" to restaurant.status.name,
+                    "rejectionReason" to application.rejectionReason,
+                ),
+            ),
+            ipAddress = metadata.ipAddress,
+            userAgent = metadata.userAgent,
+        )
+
+        return application.toResponse()
+    }
+
     private fun owner(principal: BusinessPrincipal): BusinessUserEntity =
         userRepository.findById(principal.userId)
             .orElseThrow { ApiException(ErrorCode.AUTHENTICATION_REQUIRED) }
+
+    private fun admin(principal: BusinessPrincipal): BusinessUserEntity {
+        if (principal.role != BusinessUserRole.ADMIN) {
+            throw ApiException(ErrorCode.ACCESS_DENIED)
+        }
+        return userRepository.findById(principal.userId)
+            .orElseThrow { ApiException(ErrorCode.AUTHENTICATION_REQUIRED) }
+    }
+
+    private fun submittedApplication(applicationId: Long): RestaurantApplicationEntity {
+        val application = applicationRepository.findById(applicationId)
+            .orElseThrow { ApiException(ErrorCode.NOT_FOUND, "입점 신청을 찾을 수 없습니다.") }
+        if (application.status != RestaurantApplicationStatus.SUBMITTED) {
+            throw ApiException(ErrorCode.CONFLICT, "제출된 입점 신청만 검토할 수 있습니다.")
+        }
+        return application
+    }
 
     private fun ownedApplication(
         principal: BusinessPrincipal,
@@ -242,6 +381,64 @@ class RestaurantApplicationService(
                 "승인 요청 필수 정보가 부족합니다: ${missing.joinToString(", ")}",
             )
         }
+    }
+
+    private fun ensureReservationPageForApproval(restaurant: RestaurantEntity): ReservationPageEntity {
+        val slug = restaurant.slug ?: generateUniqueSlug(restaurant)
+        restaurant.slug = slug
+        val reservationPage = reservationPageRepository.findByRestaurantId(restaurant.id)
+            ?: reservationPageRepository.save(
+                ReservationPageEntity(
+                    restaurant = restaurant,
+                    slug = slug,
+                    status = ReservationPageStatus.PRIVATE,
+                ),
+            )
+        reservationPage.slug = reservationPage.slug ?: slug
+        if (reservationPage.status == ReservationPageStatus.DRAFT) {
+            reservationPage.status = ReservationPageStatus.PRIVATE
+        }
+        return reservationPage
+    }
+
+    private fun generateUniqueSlug(restaurant: RestaurantEntity): String {
+        val base = restaurant.name
+            ?.lowercase(Locale.ROOT)
+            ?.replace(Regex("[^a-z0-9]+"), "-")
+            ?.trim('-')
+            ?.take(48)
+            ?.trim('-')
+            ?.takeIf { it.isNotBlank() }
+            ?: "restaurant-${restaurant.id}"
+
+        var candidate = base.take(60)
+        if (isSlugAvailable(candidate, restaurant.id)) {
+            return candidate
+        }
+
+        candidate = appendSlugSuffix(base, "-${restaurant.id}")
+        if (isSlugAvailable(candidate, restaurant.id)) {
+            return candidate
+        }
+
+        var sequence = 2
+        while (true) {
+            candidate = appendSlugSuffix(base, "-${restaurant.id}-$sequence")
+            if (isSlugAvailable(candidate, restaurant.id)) {
+                return candidate
+            }
+            sequence += 1
+        }
+    }
+
+    private fun appendSlugSuffix(base: String, suffix: String): String =
+        "${base.take(60 - suffix.length).trim('-')}$suffix"
+
+    private fun isSlugAvailable(slug: String, restaurantId: Long): Boolean {
+        val restaurant = restaurantRepository.findBySlug(slug)
+        val reservationPage = reservationPageRepository.findBySlug(slug)
+        return (restaurant == null || restaurant.id == restaurantId) &&
+            (reservationPage == null || reservationPage.restaurant.id == restaurantId)
     }
 
     private fun RestaurantApplicationEntity.toResponse(): RestaurantApplicationResponse =

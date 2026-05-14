@@ -3,6 +3,7 @@ package com.example.restaurant.restaurantapplication
 import com.example.restaurant.restaurant.ReservationPageStatus
 import com.example.restaurant.restaurant.RestaurantStatus
 import jakarta.validation.constraints.Email
+import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.Pattern
 import jakarta.validation.constraints.Size
 import java.time.Instant
@@ -55,6 +56,20 @@ data class RestaurantApplicationSaveRequest(
     val managerEmail: String? = null,
 
     val contactVerified: Boolean? = null,
+)
+
+data class RestaurantApplicationReviewRequest(
+    @field:Size(max = 1000)
+    val reviewNote: String? = null,
+)
+
+data class RestaurantApplicationRejectRequest(
+    @field:NotBlank
+    @field:Size(max = 1000)
+    val rejectionReason: String,
+
+    @field:Size(max = 1000)
+    val reviewNote: String? = null,
 )
 
 data class RestaurantApplicationResponse(
