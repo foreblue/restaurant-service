@@ -6,3 +6,10 @@ spring:
     url: ${DB_URL:jdbc:mysql://localhost:3306/restaurant_service?useUnicode=true&characterEncoding=utf8&connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true}
     username: ${DB_USERNAME:restaurant_app}
     password: ${DB_PASSWORD:restaurant_app}
+app:
+  auth:
+    session:
+      cookie-secure: ${BUSINESS_SESSION_COOKIE_SECURE:false}
+    initial-owner:
+      enabled: ${INITIAL_OWNER_ENABLED:true}
+      password: ${INITIAL_OWNER_PASSWORD:ChangeMe123!}

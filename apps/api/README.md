@@ -22,3 +22,14 @@ docker compose up -d mysql
 | Password | `restaurant_app` |
 
 운영/개발 환경에서는 `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` 환경 변수로 datasource를 주입합니다.
+
+## 로컬 초기 사업자 계정
+
+`local` profile은 API 기동 시 초기 사업자 계정을 자동 생성합니다. 이미 같은 이메일 계정이 있으면 다시 생성하지 않습니다.
+
+| 항목 | 기본값 |
+| --- | --- |
+| Email | `owner@example.com` |
+| Password | `ChangeMe123!` |
+
+환경 변수 `INITIAL_OWNER_EMAIL`, `INITIAL_OWNER_PASSWORD`, `INITIAL_OWNER_DISPLAY_NAME`으로 기본값을 바꿀 수 있습니다.
