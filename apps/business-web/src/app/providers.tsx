@@ -1,6 +1,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { type PropsWithChildren, useState } from "react";
 
+import { ToastViewport } from "@/components/feedback/ToastViewport";
 import { BusinessApiClientProvider } from "@/shared/api/BusinessApiClientProvider";
 import { type BusinessApiClient, createBusinessQueryClient } from "@/shared/api/businessApiClient";
 
@@ -13,7 +14,10 @@ export function AppProviders({ apiClient, children }: AppProvidersProps) {
 
   return (
     <BusinessApiClientProvider client={apiClient}>
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      <QueryClientProvider client={queryClient}>
+        {children}
+        <ToastViewport />
+      </QueryClientProvider>
     </BusinessApiClientProvider>
   );
 }
