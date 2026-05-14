@@ -1,0 +1,12 @@
+{
+  "name": "restaurant-service",
+  "private": true,
+  "packageManager": "pnpm@11.1.2",
+  "scripts": {
+    "dev": "pnpm --filter @restaurant/business-web dev",
+    "build": "pnpm --filter @restaurant/business-web build",
+    "test": "pnpm --filter @restaurant/business-web test",
+    "lint": "pnpm --filter @restaurant/business-web lint",
+    "format": "pnpm --filter @restaurant/business-web format"
+  }
+}
