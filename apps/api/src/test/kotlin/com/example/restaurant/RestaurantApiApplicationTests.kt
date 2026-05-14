@@ -3,8 +3,12 @@ package com.example.restaurant
 import com.example.restaurant.auth.BusinessUserEntity
 import com.example.restaurant.auth.BusinessUserRepository
 import com.example.restaurant.auth.BusinessUserStatus
+import com.example.restaurant.auth.BusinessPasswordResetNotificationRepository
+import com.example.restaurant.auth.BusinessPasswordResetTokenEntity
+import com.example.restaurant.auth.BusinessPasswordResetTokenRepository
 import com.example.restaurant.auth.ReservationLookupTokenRepository
 import com.example.restaurant.auth.ReservationLookupTokenService
+import com.example.restaurant.auth.TokenHash
 import com.example.restaurant.audit.AuditLogRepository
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
@@ -56,6 +60,7 @@ import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RestController
+import java.time.Instant
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -79,6 +84,12 @@ class RestaurantApiApplicationTests {
 
     @Autowired
     private lateinit var reservationLookupTokenService: ReservationLookupTokenService
+
+    @Autowired
+    private lateinit var passwordResetTokenRepository: BusinessPasswordResetTokenRepository
+
+    @Autowired
+    private lateinit var passwordResetNotificationRepository: BusinessPasswordResetNotificationRepository
 
     @Autowired
     private lateinit var storedFileRepository: StoredFileRepository
@@ -301,6 +312,152 @@ class RestaurantApiApplicationTests {
         }.andExpect {
             status { isUnauthorized() }
             jsonPath("$.code") { value("AUTHENTICATION_REQUIRED") }
+        }
+    }
+
+    @Test
+    fun passwordResetRequestCanIssueTokenAndConfirmationChangesPassword() {
+        val owner = createBusinessUser("reset-owner@example.com")
+
+        val requestResult = mockMvc.post("/api/business/auth/password-reset-requests") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"email": "RESET-OWNER@example.com"}"""
+            header("X-Forwarded-For", "198.51.100.10")
+            header("User-Agent", "password-reset-test")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.accepted") { value(true) }
+            jsonPath("$.resetToken") { isNotEmpty() }
+            jsonPath("$.expiresAt") { isNotEmpty() }
+        }.andReturn()
+
+        val resetToken = JsonPath.read<String>(requestResult.response.contentAsString, "$.resetToken")
+        val savedToken = passwordResetTokenRepository.findAll().single { it.user.id == owner.id }
+        assertThat(savedToken.tokenHash).hasSize(64)
+        assertThat(savedToken.tokenHash).isNotEqualTo(resetToken)
+        assertThat(savedToken.tokenHash).isEqualTo(TokenHash.sha256Hex(resetToken))
+
+        val notification = passwordResetNotificationRepository.findByResetTokenId(savedToken.id).single()
+        assertThat(notification.recipientEmail).isEqualTo(owner.email)
+        assertThat(notification.deliveryPayload)
+            .contains("BUSINESS_PASSWORD_RESET")
+            .contains("resetTokenId")
+            .contains(savedToken.id.toString())
+            .doesNotContain(resetToken)
+
+        mockMvc.post("/api/business/auth/password-reset-confirmations") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"token": "$resetToken", "newPassword": "NewPassword123!"}"""
+            header("X-Forwarded-For", "198.51.100.11")
+            header("User-Agent", "password-reset-confirm-test")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.passwordChanged") { value(true) }
+        }
+
+        val updatedOwner = userRepository.findByEmail(owner.email) ?: error("Owner should exist.")
+        assertThat(passwordEncoder.matches("NewPassword123!", updatedOwner.passwordHash)).isTrue()
+        assertThat(passwordResetTokenRepository.findById(savedToken.id).orElseThrow().usedAt).isNotNull()
+
+        mockMvc.post("/api/business/auth/login") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"email": "${owner.email}", "password": "CorrectPassword123!"}"""
+        }.andExpect {
+            status { isUnauthorized() }
+            jsonPath("$.code") { value("INVALID_CREDENTIALS") }
+        }
+
+        mockMvc.post("/api/business/auth/login") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"email": "${owner.email}", "password": "NewPassword123!"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.user.email") { value(owner.email) }
+        }
+
+        val auditLogs = auditLogRepository.findByTargetTypeAndTargetId("business_user", owner.id)
+        assertThat(auditLogs.map { it.action })
+            .contains("BUSINESS_PASSWORD_RESET_REQUESTED", "BUSINESS_PASSWORD_RESET_COMPLETED")
+        assertThat(auditLogs.single { it.action == "BUSINESS_PASSWORD_RESET_REQUESTED" }.ipAddress)
+            .isEqualTo("198.51.100.10")
+    }
+
+    @Test
+    fun passwordResetRequestDoesNotCreateAnotherTokenDuringRetryInterval() {
+        val owner = createBusinessUser("reset-rate-limit@example.com")
+
+        mockMvc.post("/api/business/auth/password-reset-requests") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"email": "reset-rate-limit@example.com"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.accepted") { value(true) }
+        }
+
+        mockMvc.post("/api/business/auth/password-reset-requests") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"email": "reset-rate-limit@example.com"}"""
+            header(TraceContext.TRACE_ID_HEADER, "password-reset-rate-limit")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.accepted") { value(true) }
+        }
+
+        val savedTokens = passwordResetTokenRepository.findAll().filter { it.user.id == owner.id }
+        assertThat(savedTokens).hasSize(1)
+        assertThat(passwordResetNotificationRepository.findByResetTokenId(savedTokens.single().id)).hasSize(1)
+    }
+
+    @Test
+    fun passwordResetConfirmationRejectsInvalidExpiredAndUsedTokens() {
+        val owner = createBusinessUser("reset-invalid@example.com")
+        val now = Instant.now()
+
+        mockMvc.post("/api/business/auth/password-reset-confirmations") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"token": "missing-token", "newPassword": "NewPassword123!"}"""
+            header(TraceContext.TRACE_ID_HEADER, "password-reset-invalid")
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("PASSWORD_RESET_TOKEN_INVALID") }
+            jsonPath("$.traceId") { value("password-reset-invalid") }
+        }
+
+        passwordResetTokenRepository.saveAndFlush(
+            BusinessPasswordResetTokenEntity(
+                user = owner,
+                tokenHash = TokenHash.sha256Hex("expired-token"),
+                requestedAt = now.minusSeconds(3_600),
+                expiresAt = now.minusSeconds(1),
+            ),
+        )
+        mockMvc.post("/api/business/auth/password-reset-confirmations") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"token": "expired-token", "newPassword": "NewPassword123!"}"""
+            header(TraceContext.TRACE_ID_HEADER, "password-reset-expired")
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("PASSWORD_RESET_TOKEN_EXPIRED") }
+            jsonPath("$.traceId") { value("password-reset-expired") }
+        }
+
+        passwordResetTokenRepository.saveAndFlush(
+            BusinessPasswordResetTokenEntity(
+                user = owner,
+                tokenHash = TokenHash.sha256Hex("used-token"),
+                requestedAt = now,
+                expiresAt = now.plusSeconds(1_800),
+                usedAt = now,
+            ),
+        )
+        mockMvc.post("/api/business/auth/password-reset-confirmations") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"token": "used-token", "newPassword": "NewPassword123!"}"""
+            header(TraceContext.TRACE_ID_HEADER, "password-reset-used")
+        }.andExpect {
+            status { isConflict() }
+            jsonPath("$.code") { value("PASSWORD_RESET_TOKEN_USED") }
+            jsonPath("$.traceId") { value("password-reset-used") }
         }
     }
 
@@ -742,6 +899,7 @@ class RestaurantApiApplicationTests {
             registry.add("app.auth.initial-owner.password") { "CorrectPassword123!" }
             registry.add("app.auth.initial-owner.display-name") { "Initial Owner" }
             registry.add("app.auth.session.cookie-secure") { "true" }
+            registry.add("app.auth.password-reset.expose-token-in-response") { "true" }
         }
 
         private fun mysqlJdbcUrl(): String {

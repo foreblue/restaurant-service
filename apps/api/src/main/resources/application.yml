@@ -51,6 +51,10 @@ app:
       cookie-secure: ${BUSINESS_SESSION_COOKIE_SECURE:true}
     reservation-lookup:
       ttl-seconds: ${RESERVATION_LOOKUP_TOKEN_TTL_SECONDS:86400}
+    password-reset:
+      ttl-seconds: ${BUSINESS_PASSWORD_RESET_TTL_SECONDS:1800}
+      request-interval-seconds: ${BUSINESS_PASSWORD_RESET_REQUEST_INTERVAL_SECONDS:60}
+      expose-token-in-response: ${BUSINESS_PASSWORD_RESET_EXPOSE_TOKEN_IN_RESPONSE:false}
     initial-owner:
       enabled: ${INITIAL_OWNER_ENABLED:false}
       email: ${INITIAL_OWNER_EMAIL:owner@example.com}

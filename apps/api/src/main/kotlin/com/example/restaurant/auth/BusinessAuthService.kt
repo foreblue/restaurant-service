@@ -1,7 +1,9 @@
 package com.example.restaurant.auth
 
+import com.example.restaurant.audit.AuditLogService
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.springframework.http.ResponseCookie
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.stereotype.Service
@@ -17,10 +19,14 @@ class BusinessAuthService(
     private val properties: BusinessAuthProperties,
     private val userRepository: BusinessUserRepository,
     private val sessionRepository: BusinessSessionRepository,
+    private val passwordResetTokenRepository: BusinessPasswordResetTokenRepository,
+    private val passwordResetNotificationRepository: BusinessPasswordResetNotificationRepository,
+    private val auditLogService: AuditLogService,
     private val passwordEncoder: PasswordEncoder,
     private val clock: Clock,
 ) {
     private val secureRandom = SecureRandom()
+    private val objectMapper = jacksonObjectMapper()
 
     @Transactional
     fun login(request: BusinessLoginRequest): LoginResult {
@@ -85,6 +91,122 @@ class BusinessAuthService(
 
         sessionRepository.findByTokenHashAndRevokedAtIsNull(TokenHash.sha256Hex(token))
             ?.revokedAt = Instant.now(clock)
+    }
+
+    @Transactional
+    fun requestPasswordReset(
+        request: PasswordResetRequestRequest,
+        metadata: BusinessAuthRequestMetadata,
+    ): PasswordResetRequestResponse {
+        val email = request.email.trim().lowercase()
+        val user = userRepository.findByEmail(email)
+
+        if (user == null || user.status != BusinessUserStatus.ACTIVE) {
+            return PasswordResetRequestResponse(accepted = true)
+        }
+
+        val now = Instant.now(clock)
+        val latestActiveToken = passwordResetTokenRepository
+            .findFirstByUserIdAndUsedAtIsNullOrderByRequestedAtDesc(user.id)
+        if (
+            latestActiveToken != null &&
+            latestActiveToken.requestedAt.plusSeconds(properties.passwordReset.requestIntervalSeconds).isAfter(now)
+        ) {
+            return PasswordResetRequestResponse(accepted = true)
+        }
+
+        val token = generateToken()
+        val expiresAt = now.plusSeconds(properties.passwordReset.ttlSeconds)
+        val resetToken = passwordResetTokenRepository.save(
+            BusinessPasswordResetTokenEntity(
+                user = user,
+                tokenHash = TokenHash.sha256Hex(token),
+                requestedAt = now,
+                expiresAt = expiresAt,
+            ),
+        )
+
+        passwordResetNotificationRepository.save(
+            BusinessPasswordResetNotificationEntity(
+                resetToken = resetToken,
+                recipientEmail = user.email,
+                deliveryPayload = objectMapper.writeValueAsString(
+                    mapOf(
+                        "type" to "BUSINESS_PASSWORD_RESET",
+                        "recipientEmail" to user.email,
+                        "resetTokenId" to resetToken.id,
+                        "expiresAt" to expiresAt.toString(),
+                    ),
+                ),
+            ),
+        )
+
+        auditLogService.record(
+            actorUser = user,
+            actorRole = "PASSWORD_RESET",
+            action = "BUSINESS_PASSWORD_RESET_REQUESTED",
+            targetType = "business_user",
+            targetId = user.id,
+            afterValue = objectMapper.writeValueAsString(
+                mapOf(
+                    "expiresAt" to expiresAt.toString(),
+                    "notificationStatus" to PasswordResetNotificationStatus.RECORDED.name,
+                ),
+            ),
+            ipAddress = metadata.ipAddress,
+            userAgent = metadata.userAgent,
+        )
+
+        return PasswordResetRequestResponse(
+            accepted = true,
+            resetToken = token.takeIf { properties.passwordReset.exposeTokenInResponse },
+            expiresAt = expiresAt.takeIf { properties.passwordReset.exposeTokenInResponse },
+        )
+    }
+
+    @Transactional
+    fun confirmPasswordReset(
+        request: PasswordResetConfirmationRequest,
+        metadata: BusinessAuthRequestMetadata,
+    ): PasswordResetConfirmationResponse {
+        val now = Instant.now(clock)
+        val resetToken = passwordResetTokenRepository.findByTokenHashForUpdate(TokenHash.sha256Hex(request.token.trim()))
+            ?: throw ApiException(ErrorCode.PASSWORD_RESET_TOKEN_INVALID)
+
+        if (resetToken.usedAt != null) {
+            throw ApiException(ErrorCode.PASSWORD_RESET_TOKEN_USED)
+        }
+        if (!resetToken.expiresAt.isAfter(now)) {
+            throw ApiException(ErrorCode.PASSWORD_RESET_TOKEN_EXPIRED)
+        }
+
+        val user = resetToken.user
+        if (user.status != BusinessUserStatus.ACTIVE) {
+            throw ApiException(ErrorCode.ACCESS_DENIED)
+        }
+
+        user.passwordHash = passwordEncoder.encode(request.newPassword)
+            ?: error("Password encoder returned null.")
+        resetToken.usedAt = now
+        sessionRepository.revokeActiveSessionsForUser(user.id, now)
+
+        auditLogService.record(
+            actorUser = user,
+            actorRole = "PASSWORD_RESET",
+            action = "BUSINESS_PASSWORD_RESET_COMPLETED",
+            targetType = "business_user",
+            targetId = user.id,
+            afterValue = objectMapper.writeValueAsString(
+                mapOf(
+                    "resetTokenId" to resetToken.id,
+                    "revokedSessions" to true,
+                ),
+            ),
+            ipAddress = metadata.ipAddress,
+            userAgent = metadata.userAgent,
+        )
+
+        return PasswordResetConfirmationResponse(passwordChanged = true)
     }
 
     @Transactional(readOnly = true)

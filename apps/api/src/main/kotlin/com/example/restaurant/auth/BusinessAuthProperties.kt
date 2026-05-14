@@ -6,6 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties
 data class BusinessAuthProperties(
     val session: Session = Session(),
     val reservationLookup: ReservationLookup = ReservationLookup(),
+    val passwordReset: PasswordReset = PasswordReset(),
     val initialOwner: InitialOwner = InitialOwner(),
 ) {
     data class Session(
@@ -16,6 +17,12 @@ data class BusinessAuthProperties(
 
     data class ReservationLookup(
         val ttlSeconds: Long = 86_400,
+    )
+
+    data class PasswordReset(
+        val ttlSeconds: Long = 1_800,
+        val requestIntervalSeconds: Long = 60,
+        val exposeTokenInResponse: Boolean = false,
     )
 
     data class InitialOwner(
