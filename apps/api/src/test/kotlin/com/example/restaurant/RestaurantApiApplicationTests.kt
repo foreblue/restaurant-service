@@ -5,6 +5,7 @@ import com.example.restaurant.auth.BusinessUserRepository
 import com.example.restaurant.auth.BusinessUserStatus
 import com.example.restaurant.auth.ReservationLookupTokenRepository
 import com.example.restaurant.auth.ReservationLookupTokenService
+import com.example.restaurant.audit.AuditLogRepository
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
 import com.example.restaurant.common.trace.TraceContext
@@ -40,6 +41,7 @@ import org.springframework.test.context.DynamicPropertySource
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
+import org.springframework.test.web.servlet.put
 import org.testcontainers.containers.MySQLContainer
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
@@ -92,6 +94,9 @@ class RestaurantApiApplicationTests {
 
     @Autowired
     private lateinit var fileStorage: FileStorage
+
+    @Autowired
+    private lateinit var auditLogRepository: AuditLogRepository
 
     @Test
     fun contextLoads() {
@@ -547,6 +552,171 @@ class RestaurantApiApplicationTests {
         assertThat(fileStorage.publicUrl(result.storageKey)).isNull()
     }
 
+    @Test
+    fun businessRestaurantApplicationCanBeCreatedUpdatedSubmittedAndRead() {
+        val owner = createBusinessUser("application-owner@example.com")
+        val sessionCookie = loginAndExtractSessionCookie("application-owner@example.com")
+        val coverImage = createStoredFile(
+            storageKey = "restaurant-cover-images/application-cover.webp",
+            purpose = StoredFilePurpose.RESTAURANT_COVER_IMAGE,
+            visibility = StoredFileVisibility.PUBLIC,
+            createdBy = owner,
+        )
+        val businessLicense = createStoredFile(
+            storageKey = "business-licenses/application-license.pdf",
+            purpose = StoredFilePurpose.BUSINESS_LICENSE,
+            visibility = StoredFileVisibility.PRIVATE,
+            createdBy = owner,
+        )
+
+        val createResult = mockMvc.post("/api/business/restaurant-applications") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = fullRestaurantApplicationJson(
+                businessRegistrationNo = "1111111111",
+                coverImageFileId = coverImage.id,
+                businessLicenseFileId = businessLicense.id,
+                managerEmail = "before@example.com",
+            )
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.status") { value("DRAFT") }
+            jsonPath("$.restaurant.status") { value("DRAFT") }
+            jsonPath("$.restaurant.name") { value("스시온") }
+            jsonPath("$.contactVerified") { value(true) }
+        }.andReturn()
+        val applicationId = JsonPath.read<Int>(createResult.response.contentAsString, "$.id").toLong()
+
+        mockMvc.put("/api/business/restaurant-applications/$applicationId") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = fullRestaurantApplicationJson(
+                businessRegistrationNo = "1111111111",
+                coverImageFileId = coverImage.id,
+                businessLicenseFileId = businessLicense.id,
+                restaurantDescription = "수정된 소개",
+                managerEmail = "updated@example.com",
+            )
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.restaurant.description") { value("수정된 소개") }
+            jsonPath("$.managerEmail") { value("updated@example.com") }
+        }
+
+        mockMvc.post("/api/business/restaurant-applications/$applicationId/submit") {
+            cookie(sessionCookie)
+            header("X-Forwarded-For", "203.0.113.10")
+            header("User-Agent", "restaurant-test")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("SUBMITTED") }
+            jsonPath("$.restaurant.status") { value("APPROVAL_REQUESTED") }
+            jsonPath("$.submittedAt") { isNotEmpty() }
+        }
+
+        mockMvc.get("/api/business/restaurant-applications/current") {
+            cookie(sessionCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.id") { value(applicationId.toInt()) }
+            jsonPath("$.status") { value("SUBMITTED") }
+        }
+
+        mockMvc.put("/api/business/restaurant-applications/$applicationId") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"managerEmail": "submitted-update@example.com"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("SUBMITTED") }
+            jsonPath("$.managerEmail") { value("submitted-update@example.com") }
+            jsonPath("$.restaurant.description") { value("수정된 소개") }
+        }
+
+        val auditLogs = auditLogRepository.findByTargetTypeAndTargetId("restaurant_application", applicationId)
+        assertThat(auditLogs.map { it.action }).contains("RESTAURANT_APPLICATION_SUBMITTED")
+        assertThat(auditLogs.single { it.action == "RESTAURANT_APPLICATION_SUBMITTED" }.ipAddress)
+            .isEqualTo("203.0.113.10")
+    }
+
+    @Test
+    fun businessRestaurantApplicationSubmitRejectsMissingRequiredFields() {
+        val sessionCookie = loginAndExtractSessionCookie(
+            createBusinessUser("application-missing-required@example.com").email,
+        )
+        val createResult = mockMvc.post("/api/business/restaurant-applications") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"restaurantName": "미완성 매장"}"""
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.status") { value("DRAFT") }
+        }.andReturn()
+        val applicationId = JsonPath.read<Int>(createResult.response.contentAsString, "$.id").toLong()
+
+        mockMvc.post("/api/business/restaurant-applications/$applicationId/submit") {
+            cookie(sessionCookie)
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("VALIDATION_ERROR") }
+            jsonPath("$.message") {
+                value(org.hamcrest.Matchers.containsString("승인 요청 필수 정보가 부족합니다"))
+            }
+        }
+    }
+
+    @Test
+    fun businessRestaurantApplicationSubmitRejectsApprovedBusinessRegistrationDuplicate() {
+        val approvedOwner = createBusinessUser("approved-business-owner@example.com")
+        val approvedRestaurant = createRestaurantForTest(
+            owner = approvedOwner,
+            name = "승인 완료 매장",
+        )
+        restaurantApplicationRepository.saveAndFlush(
+            RestaurantApplicationEntity(
+                restaurant = approvedRestaurant,
+                businessRegistrationNo = "2222222222",
+                status = RestaurantApplicationStatus.APPROVED,
+            ),
+        )
+
+        val owner = createBusinessUser("duplicate-business-owner@example.com")
+        val sessionCookie = loginAndExtractSessionCookie(owner.email)
+        val coverImage = createStoredFile(
+            storageKey = "restaurant-cover-images/duplicate-cover.webp",
+            purpose = StoredFilePurpose.RESTAURANT_COVER_IMAGE,
+            visibility = StoredFileVisibility.PUBLIC,
+            createdBy = owner,
+        )
+        val businessLicense = createStoredFile(
+            storageKey = "business-licenses/duplicate-license.pdf",
+            purpose = StoredFilePurpose.BUSINESS_LICENSE,
+            visibility = StoredFileVisibility.PRIVATE,
+            createdBy = owner,
+        )
+        val createResult = mockMvc.post("/api/business/restaurant-applications") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = fullRestaurantApplicationJson(
+                businessRegistrationNo = "2222222222",
+                coverImageFileId = coverImage.id,
+                businessLicenseFileId = businessLicense.id,
+                managerEmail = "duplicate@example.com",
+            )
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val applicationId = JsonPath.read<Int>(createResult.response.contentAsString, "$.id").toLong()
+
+        mockMvc.post("/api/business/restaurant-applications/$applicationId/submit") {
+            cookie(sessionCookie)
+        }.andExpect {
+            status { isConflict() }
+            jsonPath("$.code") { value("CONFLICT") }
+            jsonPath("$.message") { value("이미 승인된 사업자등록번호입니다.") }
+        }
+    }
+
     companion object {
         @Container
         @JvmField
@@ -605,13 +775,16 @@ class RestaurantApiApplicationTests {
         val name: String,
     )
 
-    private fun loginAndExtractSessionCookie(): Cookie {
+    private fun loginAndExtractSessionCookie(
+        email: String = "owner@example.com",
+        password: String = "CorrectPassword123!",
+    ): Cookie {
         val result = mockMvc.post("/api/business/auth/login") {
             contentType = MediaType.APPLICATION_JSON
-            content = """{"email": "owner@example.com", "password": "CorrectPassword123!"}"""
+            content = """{"email": "$email", "password": "$password"}"""
         }.andExpect {
             status { isOk() }
-            jsonPath("$.user.email") { value("owner@example.com") }
+            jsonPath("$.user.email") { value(email) }
             header { string(HttpHeaders.SET_COOKIE, org.hamcrest.Matchers.containsString("HttpOnly")) }
             header { string(HttpHeaders.SET_COOKIE, org.hamcrest.Matchers.containsString("Secure")) }
             header { string(HttpHeaders.SET_COOKIE, org.hamcrest.Matchers.containsString("SameSite=Lax")) }
@@ -651,4 +824,52 @@ class RestaurantApiApplicationTests {
                 cuisineTypesJson = """["dining"]""",
             ),
         )
+
+    private fun createStoredFile(
+        storageKey: String,
+        purpose: StoredFilePurpose,
+        visibility: StoredFileVisibility,
+        createdBy: BusinessUserEntity,
+    ): StoredFileEntity =
+        storedFileRepository.saveAndFlush(
+            StoredFileEntity(
+                storageKey = storageKey,
+                originalFilename = storageKey.substringAfterLast('/'),
+                contentType = if (purpose == StoredFilePurpose.BUSINESS_LICENSE) "application/pdf" else "image/webp",
+                byteSize = 1024,
+                checksumSha256 = storageKey.hashCode().toUInt().toString(16).padStart(64, '0').takeLast(64),
+                visibility = visibility,
+                purpose = purpose,
+                createdBy = createdBy,
+            ),
+        )
+
+    private fun fullRestaurantApplicationJson(
+        businessRegistrationNo: String,
+        coverImageFileId: Long,
+        businessLicenseFileId: Long,
+        restaurantDescription: String = "예약제 다이닝",
+        managerEmail: String,
+    ): String =
+        """
+        {
+          "restaurantName": "스시온",
+          "restaurantDescription": "$restaurantDescription",
+          "restaurantPhone": "02-555-1000",
+          "addressLine1": "서울시 강남구 선릉로 10",
+          "addressLine2": "3층",
+          "postalCode": "06100",
+          "cuisineTypes": ["sushi", "omakase"],
+          "coverImageFileId": $coverImageFileId,
+          "businessRegistrationNo": "$businessRegistrationNo",
+          "businessName": "스시온",
+          "representativeName": "김대표",
+          "businessAddress": "서울시 강남구 선릉로 10",
+          "businessLicenseFileId": $businessLicenseFileId,
+          "managerName": "김매니저",
+          "managerPhone": "010-3333-4444",
+          "managerEmail": "$managerEmail",
+          "contactVerified": true
+        }
+        """.trimIndent()
 }
