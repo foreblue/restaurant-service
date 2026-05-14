@@ -1,9 +1,9 @@
 plugins {
-    id("io.spring.dependency-management")
-    id("org.springframework.boot")
-    kotlin("jvm")
-    kotlin("plugin.jpa")
-    kotlin("plugin.spring")
+    id("io.spring.dependency-management") version "1.1.7"
+    id("org.springframework.boot") version "4.0.6"
+    kotlin("jvm") version "2.2.21"
+    kotlin("plugin.jpa") version "2.2.21"
+    kotlin("plugin.spring") version "2.2.21"
 }
 
 group = "com.example"

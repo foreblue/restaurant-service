@@ -12,6 +12,4 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "restaurant-service"
-
-include("apps:api")
+rootProject.name = "restaurant-service-api"

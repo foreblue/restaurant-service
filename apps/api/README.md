@@ -7,9 +7,10 @@ Kotlin, Spring Boot, Spring MVC, Spring Security, Spring Data JPA 기반 API 모
 ## 명령어
 
 ```bash
-docker compose -f apps/api/compose.yaml --project-directory apps/api up -d mysql
-./gradlew :apps:api:build
-./gradlew :apps:api:bootRun
+cd apps/api
+docker compose up -d mysql
+./gradlew build
+./gradlew bootRun
 ```
 
 로컬 기본 DB 접속 정보는 다음과 같습니다.
