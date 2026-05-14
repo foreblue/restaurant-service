@@ -42,3 +42,15 @@ logging:
   structured:
     format:
       console: logstash
+
+app:
+  auth:
+    session:
+      cookie-name: ${BUSINESS_SESSION_COOKIE_NAME:BUSINESS_SESSION}
+      ttl-seconds: ${BUSINESS_SESSION_TTL_SECONDS:28800}
+      cookie-secure: ${BUSINESS_SESSION_COOKIE_SECURE:true}
+    initial-owner:
+      enabled: ${INITIAL_OWNER_ENABLED:false}
+      email: ${INITIAL_OWNER_EMAIL:owner@example.com}
+      password: ${INITIAL_OWNER_PASSWORD:}
+      display-name: ${INITIAL_OWNER_DISPLAY_NAME:Initial Owner}

@@ -1,8 +1,12 @@
 package com.example.restaurant
 
+import com.example.restaurant.auth.BusinessUserEntity
+import com.example.restaurant.auth.BusinessUserRepository
+import com.example.restaurant.auth.BusinessUserStatus
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
 import com.example.restaurant.common.trace.TraceContext
+import jakarta.servlet.http.Cookie
 import jakarta.validation.Valid
 import jakarta.validation.constraints.NotBlank
 import org.assertj.core.api.Assertions.assertThat
@@ -23,7 +27,9 @@ import org.testcontainers.utility.DockerImageName
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Bean
+import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
+import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
@@ -39,6 +45,12 @@ class RestaurantApiApplicationTests {
 
     @Autowired
     private lateinit var mockMvc: MockMvc
+
+    @Autowired
+    private lateinit var userRepository: BusinessUserRepository
+
+    @Autowired
+    private lateinit var passwordEncoder: PasswordEncoder
 
     @Test
     fun contextLoads() {
@@ -138,6 +150,102 @@ class RestaurantApiApplicationTests {
         }
     }
 
+    @Test
+    fun initialBusinessUserIsSeededWithHashedPassword() {
+        val user = userRepository.findByEmail("owner@example.com")
+
+        assertThat(user).isNotNull
+        assertThat(user!!.passwordHash).startsWith("$2")
+        assertThat(user.status).isEqualTo(BusinessUserStatus.ACTIVE)
+    }
+
+    @Test
+    fun unauthenticatedBusinessApiReturnsAuthenticationError() {
+        mockMvc.get("/api/business/me") {
+            header(TraceContext.TRACE_ID_HEADER, "auth-trace-1")
+        }.andExpect {
+            status { isUnauthorized() }
+            jsonPath("$.code") { value("AUTHENTICATION_REQUIRED") }
+            jsonPath("$.message") { value("인증이 필요합니다.") }
+            jsonPath("$.traceId") { value("auth-trace-1") }
+        }
+    }
+
+    @Test
+    fun invalidLoginReturnsInvalidCredentials() {
+        mockMvc.post("/api/business/auth/login") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"email": "owner@example.com", "password": "wrong-password"}"""
+            header(TraceContext.TRACE_ID_HEADER, "auth-trace-2")
+        }.andExpect {
+            status { isUnauthorized() }
+            jsonPath("$.code") { value("INVALID_CREDENTIALS") }
+            jsonPath("$.message") { value("이메일 또는 비밀번호가 올바르지 않습니다.") }
+            jsonPath("$.traceId") { value("auth-trace-2") }
+        }
+    }
+
+    @Test
+    fun suspendedLoginReturnsAccessDenied() {
+        userRepository.save(
+            BusinessUserEntity(
+                email = "suspended@example.com",
+                passwordHash = passwordEncoder.encode("SuspendedPassword123!")
+                    ?: error("Password encoder returned null."),
+                displayName = "Suspended Owner",
+                status = BusinessUserStatus.SUSPENDED,
+            ),
+        )
+
+        mockMvc.post("/api/business/auth/login") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"email": "suspended@example.com", "password": "SuspendedPassword123!"}"""
+            header(TraceContext.TRACE_ID_HEADER, "auth-trace-3")
+        }.andExpect {
+            status { isForbidden() }
+            jsonPath("$.code") { value("ACCESS_DENIED") }
+            jsonPath("$.message") { value("접근 권한이 없습니다.") }
+            jsonPath("$.traceId") { value("auth-trace-3") }
+        }
+    }
+
+    @Test
+    fun loginIssuesHttpOnlyCookieAndCurrentUserCanBeRead() {
+        val sessionCookie = loginAndExtractSessionCookie()
+
+        mockMvc.get("/api/business/me") {
+            cookie(sessionCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.id") { exists() }
+            jsonPath("$.email") { value("owner@example.com") }
+            jsonPath("$.displayName") { value("Initial Owner") }
+            jsonPath("$.role") { value("OWNER") }
+            jsonPath("$.status") { value("ACTIVE") }
+            jsonPath("$.restaurant.id") { value(org.hamcrest.Matchers.nullValue()) }
+            jsonPath("$.restaurant.status") { value("NOT_LINKED") }
+        }
+    }
+
+    @Test
+    fun logoutRevokesSessionCookie() {
+        val sessionCookie = loginAndExtractSessionCookie()
+
+        mockMvc.post("/api/business/auth/logout") {
+            cookie(sessionCookie)
+        }.andExpect {
+            status { isNoContent() }
+            header { string(HttpHeaders.SET_COOKIE, org.hamcrest.Matchers.containsString("Max-Age=0")) }
+        }
+
+        mockMvc.get("/api/business/me") {
+            cookie(sessionCookie)
+        }.andExpect {
+            status { isUnauthorized() }
+            jsonPath("$.code") { value("AUTHENTICATION_REQUIRED") }
+        }
+    }
+
     companion object {
         @Container
         @JvmField
@@ -158,6 +266,11 @@ class RestaurantApiApplicationTests {
             registry.add("spring.datasource.url") { mysqlJdbcUrl() }
             registry.add("spring.datasource.username") { mysql.username }
             registry.add("spring.datasource.password") { mysql.password }
+            registry.add("app.auth.initial-owner.enabled") { "true" }
+            registry.add("app.auth.initial-owner.email") { "owner@example.com" }
+            registry.add("app.auth.initial-owner.password") { "CorrectPassword123!" }
+            registry.add("app.auth.initial-owner.display-name") { "Initial Owner" }
+            registry.add("app.auth.session.cookie-secure") { "true" }
         }
 
         private fun mysqlJdbcUrl(): String {
@@ -190,4 +303,24 @@ class RestaurantApiApplicationTests {
         @field:NotBlank
         val name: String,
     )
+
+    private fun loginAndExtractSessionCookie(): Cookie {
+        val result = mockMvc.post("/api/business/auth/login") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"email": "owner@example.com", "password": "CorrectPassword123!"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.user.email") { value("owner@example.com") }
+            header { string(HttpHeaders.SET_COOKIE, org.hamcrest.Matchers.containsString("HttpOnly")) }
+            header { string(HttpHeaders.SET_COOKIE, org.hamcrest.Matchers.containsString("Secure")) }
+            header { string(HttpHeaders.SET_COOKIE, org.hamcrest.Matchers.containsString("SameSite=Lax")) }
+        }.andReturn()
+
+        val setCookie = result.response.getHeader(HttpHeaders.SET_COOKIE)
+            ?: error("Set-Cookie header is missing.")
+        val token = setCookie
+            .substringAfter("BUSINESS_SESSION=")
+            .substringBefore(";")
+        return Cookie("BUSINESS_SESSION", token)
+    }
 }
