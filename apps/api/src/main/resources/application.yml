@@ -56,3 +56,7 @@ app:
       email: ${INITIAL_OWNER_EMAIL:owner@example.com}
       password: ${INITIAL_OWNER_PASSWORD:}
       display-name: ${INITIAL_OWNER_DISPLAY_NAME:Initial Owner}
+  file-storage:
+    local:
+      root-path: ${LOCAL_FILE_STORAGE_ROOT_PATH:/tmp/restaurant-service-files}
+      public-base-url: ${LOCAL_FILE_STORAGE_PUBLIC_BASE_URL:}
