@@ -3,9 +3,12 @@ package com.example.restaurant
 import com.example.restaurant.auth.BusinessUserEntity
 import com.example.restaurant.auth.BusinessUserRepository
 import com.example.restaurant.auth.BusinessUserStatus
+import com.example.restaurant.auth.ReservationLookupTokenRepository
+import com.example.restaurant.auth.ReservationLookupTokenService
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
 import com.example.restaurant.common.trace.TraceContext
+import com.jayway.jsonpath.JsonPath
 import jakarta.servlet.http.Cookie
 import jakarta.validation.Valid
 import jakarta.validation.constraints.NotBlank
@@ -51,6 +54,12 @@ class RestaurantApiApplicationTests {
 
     @Autowired
     private lateinit var passwordEncoder: PasswordEncoder
+
+    @Autowired
+    private lateinit var reservationLookupTokenRepository: ReservationLookupTokenRepository
+
+    @Autowired
+    private lateinit var reservationLookupTokenService: ReservationLookupTokenService
 
     @Test
     fun contextLoads() {
@@ -172,6 +181,18 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun adminApiReturnsAccessDeniedUntilAdminAuthIsImplemented() {
+        mockMvc.get("/api/admin/restaurants") {
+            header(TraceContext.TRACE_ID_HEADER, "admin-trace-1")
+        }.andExpect {
+            status { isForbidden() }
+            jsonPath("$.code") { value("ACCESS_DENIED") }
+            jsonPath("$.message") { value("접근 권한이 없습니다.") }
+            jsonPath("$.traceId") { value("admin-trace-1") }
+        }
+    }
+
+    @Test
     fun invalidLoginReturnsInvalidCredentials() {
         mockMvc.post("/api/business/auth/login") {
             contentType = MediaType.APPLICATION_JSON
@@ -243,6 +264,44 @@ class RestaurantApiApplicationTests {
         }.andExpect {
             status { isUnauthorized() }
             jsonPath("$.code") { value("AUTHENTICATION_REQUIRED") }
+        }
+    }
+
+    @Test
+    fun publicReservationLookupTokenCanBeIssuedWithoutBusinessSession() {
+        val result = mockMvc.post("/api/public/reservation-lookup-tokens") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reservationNumber": " r-20260515-1 ", "phoneNumber": "010-1234-5678"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.lookupToken") { isNotEmpty() }
+            jsonPath("$.expiresAt") { isNotEmpty() }
+        }.andReturn()
+
+        val lookupToken = JsonPath.read<String>(result.response.contentAsString, "$.lookupToken")
+        val savedToken = reservationLookupTokenRepository.findAll()
+            .single { it.reservationNumber == "R-20260515-1" }
+
+        assertThat(savedToken.tokenHash).hasSize(64)
+        assertThat(savedToken.tokenHash).isNotEqualTo(lookupToken)
+        assertThat(savedToken.phoneNumberHash).hasSize(64)
+        assertThat(savedToken.phoneNumberHash).isNotEqualTo("010-1234-5678")
+        assertThat(reservationLookupTokenService.hasLookupAccess("r-20260515-1", lookupToken)).isTrue()
+        assertThat(reservationLookupTokenService.hasLookupAccess("r-20260515-2", lookupToken)).isFalse()
+        assertThat(reservationLookupTokenService.hasLookupAccess("r-20260515-1", "wrong-token")).isFalse()
+    }
+
+    @Test
+    fun publicReservationLookupTokenRejectsInvalidPhoneNumber() {
+        mockMvc.post("/api/public/reservation-lookup-tokens") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reservationNumber": "r-20260515-2", "phoneNumber": "no-digits"}"""
+            header(TraceContext.TRACE_ID_HEADER, "lookup-trace-1")
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("BAD_REQUEST") }
+            jsonPath("$.message") { value("전화번호가 유효하지 않습니다.") }
+            jsonPath("$.traceId") { value("lookup-trace-1") }
         }
     }
 

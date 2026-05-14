@@ -5,12 +5,17 @@ import org.springframework.boot.context.properties.ConfigurationProperties
 @ConfigurationProperties(prefix = "app.auth")
 data class BusinessAuthProperties(
     val session: Session = Session(),
+    val reservationLookup: ReservationLookup = ReservationLookup(),
     val initialOwner: InitialOwner = InitialOwner(),
 ) {
     data class Session(
         val cookieName: String = "BUSINESS_SESSION",
         val ttlSeconds: Long = 28_800,
         val cookieSecure: Boolean = true,
+    )
+
+    data class ReservationLookup(
+        val ttlSeconds: Long = 86_400,
     )
 
     data class InitialOwner(
