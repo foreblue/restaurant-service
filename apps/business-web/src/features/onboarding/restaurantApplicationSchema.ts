@@ -12,6 +12,8 @@ export const restaurantApplicationSchema = z.object({
   addressLine2: z.string().trim().max(255, "상세 주소는 255자 이내로 입력해 주세요.").optional(),
   postalCode: z.string().trim().max(20, "우편번호는 20자 이내로 입력해 주세요.").optional(),
   cuisineTypesCsv: z.string().trim().optional(),
+  coverImageFileId: z.number().nullable().optional(),
+  coverImageFilename: z.string().optional(),
   businessRegistrationNo: z
     .string()
     .trim()
@@ -19,6 +21,8 @@ export const restaurantApplicationSchema = z.object({
   businessName: z.string().trim().min(1, "상호명을 입력해 주세요."),
   representativeName: z.string().trim().min(1, "대표자명을 입력해 주세요."),
   businessAddress: z.string().trim().min(1, "사업장 주소를 입력해 주세요."),
+  businessLicenseFileId: z.number().nullable().optional(),
+  businessLicenseFilename: z.string().optional(),
   managerName: z.string().trim().min(1, "담당자 이름을 입력해 주세요."),
   managerPhone: z.string().trim().min(1, "담당자 연락처를 입력해 주세요."),
   managerEmail: z.email("담당자 이메일을 올바르게 입력해 주세요."),
@@ -49,5 +53,20 @@ export const onboardingSteps = [
     id: "manager",
     title: "담당자 연락처",
     fields: ["managerName", "managerPhone", "managerEmail"],
+  },
+  {
+    id: "documents",
+    title: "서류 업로드",
+    fields: [
+      "businessLicenseFileId",
+      "businessLicenseFilename",
+      "coverImageFileId",
+      "coverImageFilename",
+    ],
+  },
+  {
+    id: "review",
+    title: "제출 확인",
+    fields: [],
   },
 ] as const;

@@ -37,14 +37,30 @@ export interface RestaurantApplicationSaveRequest {
   addressLine2?: string | null;
   postalCode?: string | null;
   cuisineTypes?: string[] | null;
+  coverImageFileId?: number | null;
   businessRegistrationNo?: string | null;
   businessName?: string | null;
   representativeName?: string | null;
   businessAddress?: string | null;
+  businessLicenseFileId?: number | null;
   managerName?: string | null;
   managerPhone?: string | null;
   managerEmail?: string | null;
   contactVerified?: boolean | null;
+}
+
+export type BusinessFilePurpose = "business_license" | "restaurant_image";
+
+export interface BusinessFileUploadResponse {
+  id: number;
+  purpose: BusinessFilePurpose;
+  visibility: "PRIVATE" | "PUBLIC";
+  originalFilename: string;
+  contentType: string;
+  byteSize: number;
+  checksumSha256: string | null;
+  publicUrl: string | null;
+  createdAt: string | null;
 }
 
 export interface RestaurantApplicationResponse {
@@ -119,6 +135,8 @@ export interface BusinessApiClient {
     applicationId: number,
     request: RestaurantApplicationSaveRequest,
   ): Promise<RestaurantApplicationResponse>;
+  uploadBusinessFile(purpose: BusinessFilePurpose, file: File): Promise<BusinessFileUploadResponse>;
+  submitRestaurantApplication(applicationId: number): Promise<RestaurantApplicationResponse>;
 }
 
 export function createBusinessQueryClient() {
@@ -198,13 +216,35 @@ class HttpBusinessApiClient implements BusinessApiClient {
     );
   }
 
+  uploadBusinessFile(purpose: BusinessFilePurpose, file: File) {
+    const formData = new FormData();
+    formData.append("purpose", purpose);
+    formData.append("file", file);
+
+    return this.request<BusinessFileUploadResponse>("/api/business/files", {
+      method: "POST",
+      body: formData,
+    });
+  }
+
+  submitRestaurantApplication(applicationId: number) {
+    return this.request<RestaurantApplicationResponse>(
+      `/api/business/restaurant-applications/${applicationId}/submit`,
+      {
+        method: "POST",
+      },
+    );
+  }
+
   private async request<T>(path: string, init: { method?: string; body?: unknown } = {}) {
     const requestInit: RequestInit = {
       method: init.method ?? "GET",
       credentials: "include",
     };
 
-    if (init.body !== undefined) {
+    if (typeof FormData !== "undefined" && init.body instanceof FormData) {
+      requestInit.body = init.body;
+    } else if (init.body !== undefined) {
       requestInit.headers = { "Content-Type": "application/json" };
       requestInit.body = JSON.stringify(init.body);
     }
@@ -239,6 +279,7 @@ class MockBusinessApiClient implements BusinessApiClient {
   private readonly applicationStorageKey = "restaurant-business-web.mock-application";
   private memoryUser: BusinessUser | null = null;
   private memoryApplication: RestaurantApplicationResponse | null = null;
+  private nextFileId = 3001;
 
   async getCurrentUser() {
     const user = this.readUser();
@@ -320,6 +361,54 @@ class MockBusinessApiClient implements BusinessApiClient {
     });
     this.writeApplication(application);
     return application;
+  }
+
+  async uploadBusinessFile(purpose: BusinessFilePurpose, file: File) {
+    return {
+      id: this.nextFileId++,
+      purpose,
+      visibility: purpose === "restaurant_image" ? "PUBLIC" : "PRIVATE",
+      originalFilename: file.name,
+      contentType: file.type || "application/octet-stream",
+      byteSize: file.size,
+      checksumSha256: null,
+      publicUrl: purpose === "restaurant_image" ? `mock://business-files/${file.name}` : null,
+      createdAt: new Date().toISOString(),
+    } satisfies BusinessFileUploadResponse;
+  }
+
+  async submitRestaurantApplication(applicationId: number) {
+    const application = this.readApplication();
+
+    if (!application || application.id !== applicationId) {
+      throw new ApiError("입점 신청을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    const missing = submissionMissingFields(application);
+
+    if (missing.length > 0) {
+      throw new ApiError(
+        `승인 요청 필수 정보가 부족합니다: ${missing.join(", ")}`,
+        400,
+        "VALIDATION_ERROR",
+      );
+    }
+
+    const submitted: RestaurantApplicationResponse = {
+      ...application,
+      status: "SUBMITTED",
+      contactVerified: true,
+      submittedAt: new Date().toISOString(),
+      reviewedAt: null,
+      reviewNote: null,
+      rejectionReason: null,
+      restaurant: {
+        ...application.restaurant,
+        status: "APPROVAL_REQUESTED",
+      },
+    };
+    this.writeApplication(submitted);
+    return submitted;
   }
 
   private readUser() {
@@ -428,14 +517,14 @@ function toMockApplication(
       addressLine2: request.addressLine2 ?? null,
       postalCode: request.postalCode ?? null,
       cuisineTypes: request.cuisineTypes ?? [],
-      coverImageFileId: null,
+      coverImageFileId: request.coverImageFileId ?? null,
       timezone: "Asia/Seoul",
     },
     businessRegistrationNo: request.businessRegistrationNo ?? null,
     businessName: request.businessName ?? null,
     representativeName: request.representativeName ?? null,
     businessAddress: request.businessAddress ?? null,
-    businessLicenseFileId: null,
+    businessLicenseFileId: request.businessLicenseFileId ?? null,
     managerName: request.managerName ?? null,
     managerPhone: request.managerPhone ?? null,
     managerEmail: request.managerEmail ?? null,
@@ -462,13 +551,34 @@ function fromApplication(
     addressLine2: application.restaurant.addressLine2,
     postalCode: application.restaurant.postalCode,
     cuisineTypes: application.restaurant.cuisineTypes,
+    coverImageFileId: application.restaurant.coverImageFileId,
     businessRegistrationNo: application.businessRegistrationNo,
     businessName: application.businessName,
     representativeName: application.representativeName,
     businessAddress: application.businessAddress,
+    businessLicenseFileId: application.businessLicenseFileId,
     managerName: application.managerName,
     managerPhone: application.managerPhone,
     managerEmail: application.managerEmail,
     contactVerified: application.contactVerified,
   };
+}
+
+function submissionMissingFields(application: RestaurantApplicationResponse) {
+  const missing: string[] = [];
+
+  if (!application.restaurant.name?.trim()) missing.push("restaurantName");
+  if (!application.restaurant.phone?.trim()) missing.push("restaurantPhone");
+  if (!application.restaurant.addressLine1?.trim()) missing.push("addressLine1");
+  if (application.restaurant.cuisineTypes.length === 0) missing.push("cuisineTypes");
+  if (!application.businessRegistrationNo?.trim()) missing.push("businessRegistrationNo");
+  if (!application.businessName?.trim()) missing.push("businessName");
+  if (!application.representativeName?.trim()) missing.push("representativeName");
+  if (!application.businessAddress?.trim()) missing.push("businessAddress");
+  if (!application.businessLicenseFileId) missing.push("businessLicenseFileId");
+  if (!application.managerName?.trim()) missing.push("managerName");
+  if (!application.managerPhone?.trim()) missing.push("managerPhone");
+  if (!application.contactVerified) missing.push("contactVerified");
+
+  return missing;
 }

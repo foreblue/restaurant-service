@@ -1,7 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useBusinessApiClient } from "@/shared/api/useBusinessApiClient";
-import { type RestaurantApplicationSaveRequest } from "@/shared/api/businessApiClient";
+import {
+  type BusinessFilePurpose,
+  type RestaurantApplicationSaveRequest,
+} from "@/shared/api/businessApiClient";
 
 export const restaurantApplicationQueryKey = ["business", "restaurant-application"] as const;
 
@@ -39,6 +42,27 @@ export function useUpdateRestaurantApplicationMutation() {
       applicationId: number;
       request: RestaurantApplicationSaveRequest;
     }) => apiClient.updateRestaurantApplication(applicationId, request),
+    onSuccess: (application) => {
+      queryClient.setQueryData(restaurantApplicationQueryKey, application);
+    },
+  });
+}
+
+export function useUploadBusinessFileMutation() {
+  const apiClient = useBusinessApiClient();
+
+  return useMutation({
+    mutationFn: ({ purpose, file }: { purpose: BusinessFilePurpose; file: File }) =>
+      apiClient.uploadBusinessFile(purpose, file),
+  });
+}
+
+export function useSubmitRestaurantApplicationMutation() {
+  const apiClient = useBusinessApiClient();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (applicationId: number) => apiClient.submitRestaurantApplication(applicationId),
     onSuccess: (application) => {
       queryClient.setQueryData(restaurantApplicationQueryKey, application);
     },
