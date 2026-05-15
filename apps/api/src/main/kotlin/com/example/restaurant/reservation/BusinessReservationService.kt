@@ -1,6 +1,7 @@
 package com.example.restaurant.reservation
 
 import com.example.restaurant.audit.AuditLogService
+import com.example.restaurant.audit.AuditLogRepository
 import com.example.restaurant.auth.BusinessUserEntity
 import com.example.restaurant.auth.BusinessUserRepository
 import com.example.restaurant.auth.BusinessPrincipal
@@ -31,6 +32,7 @@ import java.util.UUID
 private const val MAX_RESERVATION_QUERY_DAYS = 93L
 private const val MAX_MANUAL_CUSTOMER_NAME_LENGTH = 80
 private const val MAX_MANUAL_CUSTOMER_REQUEST_LENGTH = 500
+private const val MAX_OWNER_NOTE_LENGTH = 1000
 private const val BUSINESS_RESERVATION_PAYMENT_STATUS = "NOT_REQUIRED"
 
 @Service
@@ -43,6 +45,7 @@ class BusinessReservationService(
     private val customerRepository: CustomerRepository,
     private val reservationRepository: ReservationRepository,
     private val auditLogService: AuditLogService,
+    private val auditLogRepository: AuditLogRepository,
     private val clock: Clock,
 ) {
     private val objectMapper = jacksonObjectMapper()
@@ -248,6 +251,24 @@ class BusinessReservationService(
         return reservation.toDetail()
     }
 
+    @Transactional
+    fun updateOperationNote(
+        principal: BusinessPrincipal,
+        reservationId: Long,
+        request: BusinessReservationOperationNoteRequest,
+        metadata: BusinessReservationRequestMetadata,
+    ): BusinessReservationDetailResponse {
+        val owner = owner(principal)
+        val restaurant = ownedRestaurant(principal)
+        val reservation = ownedReservationForUpdate(restaurant.id, reservationId)
+        val normalizedOwnerNote = request.normalizedOwnerNote()
+        val before = reservation.auditSnapshot()
+        reservation.ownerNote = normalizedOwnerNote
+        auditReservationChange(owner, "RESERVATION_OWNER_NOTE_UPDATED", reservation, before, metadata)
+
+        return reservation.toDetail()
+    }
+
     @Transactional(readOnly = true)
     fun list(
         principal: BusinessPrincipal,
@@ -411,6 +432,14 @@ class BusinessReservationService(
             throw ApiException(ErrorCode.VALIDATION_ERROR, "취소 사유는 255자 이하여야 합니다.")
         }
         return reason
+    }
+
+    private fun BusinessReservationOperationNoteRequest.normalizedOwnerNote(): String? {
+        val normalized = ownerNote?.trim()?.takeIf { it.isNotBlank() }
+        if ((normalized?.length ?: 0) > MAX_OWNER_NOTE_LENGTH) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "운영 메모는 1000자 이하여야 합니다.")
+        }
+        return normalized
     }
 
     private fun BusinessReservationListQuery.toCriteria(
@@ -608,7 +637,7 @@ class BusinessReservationService(
                 phoneMasked = customer.phoneNumber.maskedPhone(),
             ),
             hasCustomerRequest = !customerRequest.isNullOrBlank(),
-            hasOwnerNote = false,
+            hasOwnerNote = !ownerNote.isNullOrBlank(),
             paymentStatus = BUSINESS_RESERVATION_PAYMENT_STATUS,
             paymentActionRequired = false,
         )
@@ -641,14 +670,16 @@ class BusinessReservationService(
                 noShowCount = reservationRepository.countByCustomerIdAndStatus(customer.id, ReservationStatus.NO_SHOW),
             ),
             customerRequest = customerRequest,
-            ownerNote = null,
+            ownerNote = ownerNote,
             paymentStatus = BUSINESS_RESERVATION_PAYMENT_STATUS,
             paymentActionRequired = false,
             cancelledAt = cancelledAt,
             cancelReason = cancelReason,
             completedAt = completedAt,
             noShowAt = noShowAt,
-            auditLogs = emptyList(),
+            auditLogs = auditLogRepository
+                .findByTargetTypeAndTargetIdOrderByCreatedAtAscIdAsc("reservation", id)
+                .map { BusinessReservationAuditLogResponse(id = it.id, action = it.action, createdAt = it.createdAt) },
         )
     }
 
@@ -730,6 +761,7 @@ class BusinessReservationService(
             "partySize" to partySize,
             "status" to status.name,
             "source" to source.name,
+            "ownerNote" to ownerNote,
             "cancelledAt" to cancelledAt?.toString(),
             "cancelReason" to cancelReason,
             "completedAt" to completedAt?.toString(),
@@ -783,6 +815,10 @@ data class BusinessReservationCancelRequest(
 data class BusinessReservationNoShowRequest(
     val reason: String? = null,
     val force: Boolean? = null,
+)
+
+data class BusinessReservationOperationNoteRequest(
+    val ownerNote: String? = null,
 )
 
 data class BusinessReservationListQuery(
