@@ -69,6 +69,8 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RestController
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -1369,6 +1371,147 @@ class RestaurantApiApplicationTests {
             status { isBadRequest() }
             jsonPath("$.code") { value("VALIDATION_ERROR") }
             jsonPath("$.message") { value("단체 예약 상품은 MVP 범위에서 제외됩니다.") }
+        }
+    }
+
+    @Test
+    fun publicAvailabilityUsesHoursHolidaysProductPolicyAndCapacity() {
+        val owner = createBusinessUser("availability-owner@example.com")
+        val sessionCookie = loginAndExtractSessionCookie(owner.email)
+        val restaurant = createApprovedRestaurantForSettings(owner, "Availability Table", "availability-table")
+        val targetDate = LocalDate.now(ZoneId.of("Asia/Seoul")).plusDays(3)
+        val targetDay = targetDate.dayOfWeek.name
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/business-hours") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "hours": [
+                {"dayOfWeek": "$targetDay", "opensAt": "11:00:00", "closesAt": "13:00:00"}
+              ]
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+        }
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/holiday-rules") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "rules": [
+                {
+                  "type": "TEMPORARY_TIME",
+                  "date": "$targetDate",
+                  "startTime": "11:30:00",
+                  "endTime": "12:30:00",
+                  "reason": "브레이크"
+                }
+              ]
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+        }
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/reservation-page") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"slug": "availability-table", "status": "PUBLIC"}"""
+        }.andExpect {
+            status { isOk() }
+        }
+
+        val productResult = mockMvc.post("/api/business/reservation-products") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "가능 시간 코스",
+              "priceAmount": 70000,
+              "visible": true,
+              "minPartySize": 1,
+              "maxPartySize": 4,
+              "availableDays": ["$targetDay"],
+              "availableStartTime": "11:00:00",
+              "availableEndTime": "13:00:00",
+              "slotCapacity": 4
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val productId = JsonPath.read<Int>(productResult.response.contentAsString, "$.id").toLong()
+
+        mockMvc.get("/api/public/restaurants/${restaurant.id}/availability/dates") {
+            param("productId", productId.toString())
+            param("from", targetDate.toString())
+            param("to", targetDate.toString())
+            param("partySize", "2")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.dates.length()") { value(1) }
+            jsonPath("$.dates[0].date") { value(targetDate.toString()) }
+            jsonPath("$.dates[0].available") { value(true) }
+        }
+
+        mockMvc.get("/api/public/restaurants/${restaurant.id}/availability/times") {
+            param("productId", productId.toString())
+            param("date", targetDate.toString())
+            param("partySize", "2")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.times.length()") { value(2) }
+            jsonPath("$.times[0].startTime") { value("11:00:00") }
+            jsonPath("$.times[0].endTime") { value("11:30:00") }
+            jsonPath("$.times[0].remainingCapacity") { value(4) }
+            jsonPath("$.times[1].startTime") { value("12:30:00") }
+            jsonPath("$.times[1].endTime") { value("13:00:00") }
+        }
+
+        mockMvc.get("/api/public/restaurants/${restaurant.id}/availability/dates") {
+            param("productId", productId.toString())
+            param("from", targetDate.toString())
+            param("to", targetDate.toString())
+            param("partySize", "5")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.dates.length()") { value(0) }
+        }
+
+        mockMvc.get("/api/public/restaurants/${restaurant.id}/availability/times") {
+            param("productId", productId.toString())
+            param("date", targetDate.plusDays(1).toString())
+            param("partySize", "2")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.times.length()") { value(0) }
+        }
+    }
+
+    @Test
+    fun publicAvailabilityHidesPrivateOrHiddenProducts() {
+        val owner = createBusinessUser("availability-hidden-owner@example.com")
+        val sessionCookie = loginAndExtractSessionCookie(owner.email)
+        val restaurant = createApprovedRestaurantForSettings(owner, "Hidden Availability Table", "hidden-availability")
+
+        val productResult = mockMvc.post("/api/business/reservation-products") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"name": "숨김 상품", "visible": false, "slotCapacity": 1}"""
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val productId = JsonPath.read<Int>(productResult.response.contentAsString, "$.id").toLong()
+
+        mockMvc.get("/api/public/restaurants/${restaurant.id}/availability/times") {
+            param("productId", productId.toString())
+            param("date", LocalDate.now(ZoneId.of("Asia/Seoul")).plusDays(1).toString())
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
         }
     }
 
