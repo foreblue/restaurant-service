@@ -496,6 +496,32 @@ export interface BusinessTableSaveRequest {
   combinationPolicy?: BusinessTableCombinationPolicy | null;
 }
 
+export interface ReservationProductSeatRulesRequest {
+  allowedSeatTypes?: BusinessSeatType[] | null;
+  allowedTableIds?: number[] | null;
+  defaultDurationMinutes?: number | null;
+  slotIntervalMinutes?: number | null;
+}
+
+export interface ReservationProductSeatRulesResponse {
+  productId: number;
+  allowedSeatTypes: BusinessSeatType[];
+  allowedSeatTypeLabels: string[];
+  allowedTableIds: number[];
+  allowedTables: Array<{
+    id: number;
+    name: string;
+    seatTypeLabel: string;
+    maxPartySize: number;
+    combinationPolicyLabel: string;
+  }>;
+  defaultDurationMinutes: number;
+  slotIntervalMinutes: number;
+  tableCombinationSummary: string;
+  summary: string;
+  updatedAt: string;
+}
+
 export interface BusinessAuditLogListQuery {
   targetType?: string | null;
   targetId?: number | null;
@@ -720,6 +746,10 @@ export interface BusinessApiClient {
     tableId: number,
     request: BusinessTableSaveRequest,
   ): Promise<BusinessTableResponse>;
+  saveReservationProductSeatRules(
+    productId: number,
+    request: ReservationProductSeatRulesRequest,
+  ): Promise<ReservationProductSeatRulesResponse>;
   listBusinessAuditLogs(query: BusinessAuditLogListQuery): Promise<BusinessAuditLogListResponse>;
   listBusinessPayments(query: BusinessPaymentListQuery): Promise<BusinessPaymentListResponse>;
   listBusinessRefunds(query: BusinessRefundListQuery): Promise<BusinessRefundListResponse>;
@@ -1017,6 +1047,16 @@ class HttpBusinessApiClient implements BusinessApiClient {
     });
   }
 
+  saveReservationProductSeatRules(productId: number, request: ReservationProductSeatRulesRequest) {
+    return this.request<ReservationProductSeatRulesResponse>(
+      `/api/business/reservation-products/${productId}/seat-rules`,
+      {
+        method: "POST",
+        body: request,
+      },
+    );
+  }
+
   listBusinessAuditLogs(query: BusinessAuditLogListQuery) {
     return this.request<BusinessAuditLogListResponse>(
       `/api/business/audit-logs${queryString(query)}`,
@@ -1076,6 +1116,7 @@ class MockBusinessApiClient implements BusinessApiClient {
   private readonly reservationProductsStorageKey =
     "restaurant-business-web.mock-reservation-products";
   private readonly businessTablesStorageKey = "restaurant-business-web.mock-business-tables";
+  private readonly productSeatRulesStorageKey = "restaurant-business-web.mock-product-seat-rules";
   private readonly manualReservationsStorageKey =
     "restaurant-business-web.mock-manual-reservations";
   private readonly reservationOverridesStorageKey =
@@ -1086,6 +1127,7 @@ class MockBusinessApiClient implements BusinessApiClient {
   private memoryRestaurant: RestaurantSettingsResponse | null = null;
   private memoryReservationProducts: ReservationProductResponse[] | null = null;
   private memoryBusinessTables: BusinessTableResponse[] | null = null;
+  private memoryProductSeatRules: Record<string, ReservationProductSeatRulesResponse> | null = null;
   private memoryManualReservations: BusinessReservationListItemResponse[] | null = null;
   private memoryReservationOverrides: BusinessReservationListItemResponse[] | null = null;
   private memoryReservationNotes: Record<string, string | null> | null = null;
@@ -1713,6 +1755,31 @@ class MockBusinessApiClient implements BusinessApiClient {
     return table;
   }
 
+  async saveReservationProductSeatRules(
+    productId: number,
+    request: ReservationProductSeatRulesRequest,
+  ) {
+    const product = this.readReservationProducts().find(
+      (item) => item.id === productId && item.status === "ACTIVE",
+    );
+
+    if (!product) {
+      throw new ApiError("예약 상품을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    const rules = toReservationProductSeatRulesResponse(
+      product,
+      normalizeReservationProductSeatRulesRequest(request, this.readBusinessTables()),
+    );
+
+    this.writeProductSeatRules({
+      ...this.readProductSeatRules(),
+      [String(productId)]: rules,
+    });
+
+    return rules;
+  }
+
   async listBusinessAuditLogs(query: BusinessAuditLogListQuery) {
     const targetType = query.targetType ?? null;
     const targetId = query.targetId ?? null;
@@ -2092,6 +2159,37 @@ class MockBusinessApiClient implements BusinessApiClient {
       storage.setItem(this.businessTablesStorageKey, JSON.stringify(tables));
     } else {
       this.memoryBusinessTables = tables;
+    }
+  }
+
+  private readProductSeatRules() {
+    const storage = getBrowserStorage();
+
+    if (!storage) {
+      return this.memoryProductSeatRules ?? {};
+    }
+
+    const raw = storage.getItem(this.productSeatRulesStorageKey);
+
+    if (!raw) {
+      return {};
+    }
+
+    try {
+      return JSON.parse(raw) as Record<string, ReservationProductSeatRulesResponse>;
+    } catch {
+      storage.removeItem(this.productSeatRulesStorageKey);
+      return {};
+    }
+  }
+
+  private writeProductSeatRules(rules: Record<string, ReservationProductSeatRulesResponse>) {
+    const storage = getBrowserStorage();
+
+    if (storage) {
+      storage.setItem(this.productSeatRulesStorageKey, JSON.stringify(rules));
+    } else {
+      this.memoryProductSeatRules = rules;
     }
   }
 }
@@ -2496,6 +2594,122 @@ function normalizeBusinessTableRequest(
     isActive: request.isActive ?? current?.isActive ?? true,
     combinationPolicy,
   };
+}
+
+function normalizeReservationProductSeatRulesRequest(
+  request: ReservationProductSeatRulesRequest,
+  tables: BusinessTableResponse[],
+) {
+  const activeTables = tables.filter((table) => table.isActive);
+  const allowedSeatTypes = Array.from(new Set(request.allowedSeatTypes ?? []));
+  const defaultDurationMinutes = request.defaultDurationMinutes ?? 90;
+  const slotIntervalMinutes = request.slotIntervalMinutes ?? 30;
+  const requestedTableIds = Array.from(new Set(request.allowedTableIds ?? []));
+
+  if (allowedSeatTypes.length === 0) {
+    throw new ApiError("허용 좌석 유형을 하나 이상 선택해 주세요.", 400, "VALIDATION_ERROR");
+  }
+  if (allowedSeatTypes.some((seatType) => !isBusinessSeatType(seatType))) {
+    throw new ApiError("허용 좌석 유형을 다시 선택해 주세요.", 400, "VALIDATION_ERROR");
+  }
+  if (activeTables.length === 0) {
+    throw new ApiError("사용 중인 테이블이 없습니다.", 400, "VALIDATION_ERROR");
+  }
+  if (
+    !Number.isInteger(defaultDurationMinutes) ||
+    defaultDurationMinutes < 30 ||
+    defaultDurationMinutes > 360
+  ) {
+    throw new ApiError(
+      "기본 이용 시간은 30분부터 360분까지 입력해 주세요.",
+      400,
+      "VALIDATION_ERROR",
+    );
+  }
+  if (![15, 30, 60].includes(slotIntervalMinutes)) {
+    throw new ApiError("슬롯 간격은 15분, 30분, 60분 중 하나여야 합니다.", 400, "VALIDATION_ERROR");
+  }
+  if (defaultDurationMinutes % slotIntervalMinutes !== 0) {
+    throw new ApiError("기본 이용 시간은 슬롯 간격의 배수여야 합니다.", 400, "VALIDATION_ERROR");
+  }
+
+  const tableIds = requestedTableIds.length
+    ? requestedTableIds
+    : activeTables
+        .filter((table) => allowedSeatTypes.includes(table.seatType))
+        .map((table) => table.id);
+  const allowedTables = tableIds.map((tableId) =>
+    activeTables.find((table) => table.id === tableId),
+  );
+
+  if (allowedTables.some((table) => !table)) {
+    throw new ApiError("연결할 테이블을 다시 선택해 주세요.", 400, "VALIDATION_ERROR");
+  }
+
+  const selectedTables = allowedTables.filter(Boolean) as BusinessTableResponse[];
+
+  if (selectedTables.length === 0) {
+    throw new ApiError("연결할 테이블을 하나 이상 선택해 주세요.", 400, "VALIDATION_ERROR");
+  }
+  if (selectedTables.some((table) => !allowedSeatTypes.includes(table.seatType))) {
+    throw new ApiError(
+      "연결 테이블의 좌석 유형이 허용 유형에 포함되어야 합니다.",
+      400,
+      "VALIDATION_ERROR",
+    );
+  }
+
+  return {
+    allowedSeatTypes,
+    allowedTables: selectedTables,
+    defaultDurationMinutes,
+    slotIntervalMinutes,
+  };
+}
+
+function toReservationProductSeatRulesResponse(
+  product: ReservationProductResponse,
+  rules: ReturnType<typeof normalizeReservationProductSeatRulesRequest>,
+): ReservationProductSeatRulesResponse {
+  const maxSingleTableSize = rules.allowedTables.reduce(
+    (maxPartySize, table) => Math.max(maxPartySize, table.maxPartySize),
+    0,
+  );
+  const seatTypeLabels = rules.allowedSeatTypes.map(businessSeatTypeLabel);
+  const capacitySummary =
+    product.maxPartySize > maxSingleTableSize
+      ? `상품 최대 ${product.maxPartySize}명은 단일 테이블 최대 ${maxSingleTableSize}명을 초과하므로 조합 정책 확인이 필요합니다.`
+      : `상품 인원 ${product.minPartySize}-${product.maxPartySize}명을 단일 테이블로 수용할 수 있습니다.`;
+  const tableCombinationSummary = productSeatRulesCombinationSummary(rules.allowedTables);
+
+  return {
+    productId: product.id,
+    allowedSeatTypes: rules.allowedSeatTypes,
+    allowedSeatTypeLabels: seatTypeLabels,
+    allowedTableIds: rules.allowedTables.map((table) => table.id),
+    allowedTables: rules.allowedTables.map((table) => ({
+      id: table.id,
+      name: table.name,
+      seatTypeLabel: table.seatTypeLabel,
+      maxPartySize: table.maxPartySize,
+      combinationPolicyLabel: table.combinationPolicyLabel,
+    })),
+    defaultDurationMinutes: rules.defaultDurationMinutes,
+    slotIntervalMinutes: rules.slotIntervalMinutes,
+    tableCombinationSummary,
+    summary: `${product.name}: ${seatTypeLabels.join(", ")} 좌석, 기본 ${rules.defaultDurationMinutes}분, ${rules.slotIntervalMinutes}분 간격. ${capacitySummary}`,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function productSeatRulesCombinationSummary(tables: BusinessTableResponse[]) {
+  const policyLabels = Array.from(new Set(tables.map((table) => table.combinationPolicyLabel)));
+  const maxSingleTableSize = tables.reduce(
+    (maxPartySize, table) => Math.max(maxPartySize, table.maxPartySize),
+    0,
+  );
+
+  return `테이블 조합 가능 범위: ${policyLabels.join(", ")} · 단일 테이블 최대 ${maxSingleTableSize}명`;
 }
 
 function nextBusinessTableId(tables: BusinessTableResponse[]) {

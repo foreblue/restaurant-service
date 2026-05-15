@@ -1,5 +1,5 @@
 import { type ColumnDef } from "@tanstack/react-table";
-import { Armchair, Pencil, Plus, Power } from "lucide-react";
+import { Armchair, Link2, Pencil, Plus, Power, Save } from "lucide-react";
 import { useState } from "react";
 
 import { DataTable } from "@/components/table/DataTable";
@@ -7,12 +7,17 @@ import { Alert, Button, Checkbox, Field, Input, Select } from "@/components/ui";
 import {
   useBusinessTablesQuery,
   useCreateBusinessTableMutation,
+  useSaveReservationProductSeatRulesMutation,
   useUpdateBusinessTableMutation,
 } from "@/features/inventory/seatTableQueries";
+import { useReservationProductsQuery } from "@/features/products/reservationProductsQueries";
 import {
   type BusinessSeatType,
   type BusinessTableCombinationPolicy,
   type BusinessTableResponse,
+  type ReservationProductResponse,
+  type ReservationProductSeatRulesRequest,
+  type ReservationProductSeatRulesResponse,
 } from "@/shared/api/businessApiClient";
 
 interface TableFormValues {
@@ -24,6 +29,14 @@ interface TableFormValues {
   isActive: boolean;
 }
 
+interface SeatRulesFormValues {
+  productId: string;
+  allowedSeatTypes: BusinessSeatType[];
+  allowedTableIds: number[];
+  defaultDurationMinutes: string;
+  slotIntervalMinutes: string;
+}
+
 const emptyTableFormValues: TableFormValues = {
   name: "",
   seatType: "HALL",
@@ -33,28 +46,59 @@ const emptyTableFormValues: TableFormValues = {
   isActive: true,
 };
 
-const seatTypeOptions = [
+const emptySeatRulesFormValues: SeatRulesFormValues = {
+  productId: "",
+  allowedSeatTypes: [],
+  allowedTableIds: [],
+  defaultDurationMinutes: "90",
+  slotIntervalMinutes: "30",
+};
+
+const seatTypeOptions: Array<{ label: string; value: BusinessSeatType }> = [
   { label: "홀", value: "HALL" },
   { label: "룸", value: "ROOM" },
   { label: "바", value: "BAR" },
   { label: "테라스", value: "TERRACE" },
 ];
 
-const combinationOptions = [
+const combinationOptions: Array<{ label: string; value: BusinessTableCombinationPolicy }> = [
   { label: "단독 사용", value: "NONE" },
   { label: "인접 테이블 조합", value: "ADJACENT" },
   { label: "같은 좌석 유형 조합", value: "SAME_TYPE" },
 ];
 
+const slotIntervalOptions = [
+  { label: "15분", value: "15" },
+  { label: "30분", value: "30" },
+  { label: "60분", value: "60" },
+];
+
 export function SeatTablesPage() {
   const tablesQuery = useBusinessTablesQuery();
+  const productsQuery = useReservationProductsQuery();
   const createTable = useCreateBusinessTableMutation();
   const updateTable = useUpdateBusinessTableMutation();
+  const saveSeatRules = useSaveReservationProductSeatRulesMutation();
   const [formOpen, setFormOpen] = useState(false);
   const [editingTable, setEditingTable] = useState<BusinessTableResponse | null>(null);
   const [formValues, setFormValues] = useState<TableFormValues>(emptyTableFormValues);
   const [formError, setFormError] = useState<string | null>(null);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
+  const [seatRulesForm, setSeatRulesForm] = useState<SeatRulesFormValues>(emptySeatRulesFormValues);
+  const [seatRulesError, setSeatRulesError] = useState<string | null>(null);
+  const [seatRulesResult, setSeatRulesResult] = useState<string | null>(null);
+  const [savedSeatRules, setSavedSeatRules] = useState<ReservationProductSeatRulesResponse | null>(
+    null,
+  );
+  const products = productsQuery.data ?? [];
+  const activeTables = (tablesQuery.data?.items ?? []).filter((table) => table.isActive);
+  const selectedProduct =
+    products.find((product) => product.id === Number(seatRulesForm.productId)) ?? null;
+  const selectedTables = activeTables.filter((table) =>
+    seatRulesForm.allowedTableIds.includes(table.id),
+  );
+  const seatRulesApiError = saveSeatRules.error;
+  const seatRulesLoadError = productsQuery.error ?? tablesQuery.error;
   const columns: Array<ColumnDef<BusinessTableResponse>> = [
     {
       accessorKey: "name",
@@ -154,6 +198,86 @@ export function SeatTablesPage() {
     setFormValues((current) => ({ ...current, ...patch }));
   }
 
+  function selectSeatRulesProduct(productId: string) {
+    setSeatRulesError(null);
+    setSeatRulesResult(null);
+    setSavedSeatRules(null);
+    saveSeatRules.reset();
+
+    if (!productId) {
+      setSeatRulesForm(emptySeatRulesFormValues);
+      return;
+    }
+
+    setSeatRulesForm({
+      ...emptySeatRulesFormValues,
+      productId,
+      allowedSeatTypes: activeSeatTypes(activeTables),
+      allowedTableIds: activeTables.map((table) => table.id),
+    });
+  }
+
+  function updateSeatRulesForm(patch: Partial<SeatRulesFormValues>) {
+    setSeatRulesError(null);
+    setSeatRulesResult(null);
+    saveSeatRules.reset();
+    setSeatRulesForm((current) => ({ ...current, ...patch }));
+  }
+
+  function toggleSeatType(seatType: BusinessSeatType, checked: boolean) {
+    setSeatRulesError(null);
+    setSeatRulesResult(null);
+    saveSeatRules.reset();
+    setSeatRulesForm((current) => {
+      const allowedSeatTypes = checked
+        ? sortSeatTypes([...current.allowedSeatTypes, seatType])
+        : current.allowedSeatTypes.filter((item) => item !== seatType);
+      const tableIdsForType = activeTables
+        .filter((table) => table.seatType === seatType)
+        .map((table) => table.id);
+      const allowedTableIds = checked
+        ? Array.from(new Set([...current.allowedTableIds, ...tableIdsForType]))
+        : current.allowedTableIds.filter((tableId) => !tableIdsForType.includes(tableId));
+
+      return {
+        ...current,
+        allowedSeatTypes,
+        allowedTableIds,
+      };
+    });
+  }
+
+  function toggleSeatRulesTable(table: BusinessTableResponse, checked: boolean) {
+    setSeatRulesError(null);
+    setSeatRulesResult(null);
+    saveSeatRules.reset();
+    setSeatRulesForm((current) => {
+      const allowedTableIds = checked
+        ? Array.from(new Set([...current.allowedTableIds, table.id]))
+        : current.allowedTableIds.filter((tableId) => tableId !== table.id);
+      const allowedSeatTypes = checked
+        ? sortSeatTypes([...current.allowedSeatTypes, table.seatType])
+        : current.allowedSeatTypes;
+
+      return {
+        ...current,
+        allowedSeatTypes,
+        allowedTableIds,
+      };
+    });
+  }
+
+  function selectAllActiveTables() {
+    setSeatRulesError(null);
+    setSeatRulesResult(null);
+    saveSeatRules.reset();
+    setSeatRulesForm((current) => ({
+      ...current,
+      allowedSeatTypes: activeSeatTypes(activeTables),
+      allowedTableIds: activeTables.map((table) => table.id),
+    }));
+  }
+
   async function saveTable() {
     const request = toTableSaveRequest(formValues);
 
@@ -176,6 +300,26 @@ export function SeatTablesPage() {
       setFormOpen(false);
       setEditingTable(null);
       setFormValues(emptyTableFormValues);
+    } catch {
+      // Mutation state renders the API error.
+    }
+  }
+
+  async function saveSeatRulesConfiguration() {
+    const payload = toSeatRulesSavePayload(seatRulesForm, activeTables);
+
+    setSeatRulesError(null);
+    setSeatRulesResult(null);
+
+    if (typeof payload === "string") {
+      setSeatRulesError(payload);
+      return;
+    }
+
+    try {
+      const rules = await saveSeatRules.mutateAsync(payload);
+      setSavedSeatRules(rules);
+      setSeatRulesResult("좌석 연결 설정이 저장되었습니다.");
     } catch {
       // Mutation state renders the API error.
     }
@@ -230,6 +374,187 @@ export function SeatTablesPage() {
       </section>
 
       {resultMessage ? <Alert variant="success">{resultMessage}</Alert> : null}
+
+      <section className="grid gap-4 rounded-lg border border-border bg-card p-4 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Link2 aria-hidden className="size-4" />
+              상품 좌석 규칙
+            </p>
+            <h2 className="mt-1 text-base font-semibold">상품별 좌석 연결</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              예약 상품에 허용 좌석 유형과 테이블, 기본 이용 시간을 연결합니다.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={selectAllActiveTables}
+            disabled={!seatRulesForm.productId || activeTables.length === 0}
+          >
+            활성 테이블 전체 선택
+          </Button>
+        </div>
+
+        {productsQuery.isPending || tablesQuery.isPending ? (
+          <Panel title="상품과 테이블을 불러오는 중입니다." />
+        ) : seatRulesLoadError ? (
+          <Alert variant="danger">{errorMessage(seatRulesLoadError)}</Alert>
+        ) : products.length === 0 ? (
+          <Alert>예약 상품을 먼저 등록하면 상품별 좌석 연결을 설정할 수 있습니다.</Alert>
+        ) : activeTables.length === 0 ? (
+          <Alert>사용 중인 테이블을 먼저 등록해야 좌석 연결을 저장할 수 있습니다.</Alert>
+        ) : (
+          <>
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+              <div className="grid gap-4">
+                <div className="grid gap-4 md:grid-cols-3">
+                  <Field id="seat-rules-product" label="예약 상품">
+                    <Select
+                      id="seat-rules-product"
+                      options={products.map((product) => ({
+                        label: product.name,
+                        value: String(product.id),
+                      }))}
+                      placeholder="상품 선택"
+                      value={seatRulesForm.productId}
+                      onChange={(event) => selectSeatRulesProduct(event.target.value)}
+                    />
+                  </Field>
+                  <Field id="seat-rules-duration" label="기본 이용 시간">
+                    <Input
+                      id="seat-rules-duration"
+                      inputMode="numeric"
+                      value={seatRulesForm.defaultDurationMinutes}
+                      onChange={(event) =>
+                        updateSeatRulesForm({ defaultDurationMinutes: event.target.value })
+                      }
+                    />
+                  </Field>
+                  <Field id="seat-rules-slot-interval" label="슬롯 간격">
+                    <Select
+                      id="seat-rules-slot-interval"
+                      options={slotIntervalOptions}
+                      value={seatRulesForm.slotIntervalMinutes}
+                      onChange={(event) =>
+                        updateSeatRulesForm({ slotIntervalMinutes: event.target.value })
+                      }
+                    />
+                  </Field>
+                </div>
+
+                {selectedProduct ? (
+                  <p className="text-sm text-muted-foreground">
+                    {formatProductCapacity(selectedProduct)}
+                  </p>
+                ) : null}
+
+                <div className="grid gap-2">
+                  <p className="text-sm font-medium">좌석 유형별 허용 여부</p>
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                    {seatTypeOptions.map((option) => {
+                      const tableCount = activeTables.filter(
+                        (table) => table.seatType === option.value,
+                      ).length;
+
+                      return (
+                        <Checkbox
+                          checked={seatRulesForm.allowedSeatTypes.includes(option.value)}
+                          disabled={tableCount === 0}
+                          id={`seat-type-${option.value}`}
+                          key={option.value}
+                          label={`${option.label} 허용 (${tableCount}개)`}
+                          onChange={(event) => toggleSeatType(option.value, event.target.checked)}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <Alert>
+                  저장된 좌석 유형, 연결 테이블, 기본 이용 시간과 슬롯 간격은 고객 예약 가능 시간
+                  후보 계산에 전달됩니다. 대관/대형 단체 정책은 이 화면에 포함하지 않습니다.
+                </Alert>
+              </div>
+
+              <div className="grid gap-3">
+                <p className="text-sm font-medium">연결 테이블</p>
+                <div className="grid gap-2">
+                  {activeTables.map((table) => {
+                    const seatTypeAllowed = seatRulesForm.allowedSeatTypes.includes(table.seatType);
+
+                    return (
+                      <label
+                        className="flex min-h-16 items-start gap-3 rounded-md border border-border px-3 py-2 text-sm"
+                        htmlFor={`seat-rules-table-${table.id}`}
+                        key={table.id}
+                      >
+                        <input
+                          checked={seatRulesForm.allowedTableIds.includes(table.id)}
+                          className="mt-1 size-4 rounded border-input text-primary outline-none focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={!seatTypeAllowed}
+                          id={`seat-rules-table-${table.id}`}
+                          type="checkbox"
+                          onChange={(event) => toggleSeatRulesTable(table, event.target.checked)}
+                        />
+                        <span>
+                          <span className="block font-medium">{table.name}</span>
+                          <span className="block text-muted-foreground">
+                            {table.seatTypeLabel} · {table.minPartySize}-{table.maxPartySize}명 ·{" "}
+                            {table.combinationPolicyLabel}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-3 border-t border-border pt-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-1 rounded-md bg-muted px-3 py-2">
+                  <p className="text-sm font-medium">테이블 조합 가능 범위</p>
+                  <p className="text-sm text-muted-foreground">
+                    {formatSeatRulesCombinationPreview(selectedTables)}
+                  </p>
+                </div>
+                <div className="grid gap-1 rounded-md bg-muted px-3 py-2">
+                  <p className="text-sm font-medium">설정 요약</p>
+                  {savedSeatRules ? (
+                    <div className="grid gap-1 text-sm text-muted-foreground">
+                      <p>{savedSeatRules.summary}</p>
+                      <p>{savedSeatRules.tableCombinationSummary}</p>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      저장 후 상품별 좌석 연결 요약이 표시됩니다.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {seatRulesError ? <Alert variant="danger">{seatRulesError}</Alert> : null}
+              {seatRulesApiError ? (
+                <Alert variant="danger">{errorMessage(seatRulesApiError)}</Alert>
+              ) : null}
+              {seatRulesResult ? <Alert variant="success">{seatRulesResult}</Alert> : null}
+
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  isLoading={saveSeatRules.isPending}
+                  onClick={saveSeatRulesConfiguration}
+                >
+                  <Save aria-hidden className="size-4" />
+                  좌석 연결 저장
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+      </section>
 
       {formOpen ? (
         <section className="grid gap-4 rounded-lg border border-border bg-card p-4 shadow-sm">
@@ -376,6 +701,99 @@ function toTableSaveRequest(values: TableFormValues) {
     combinationPolicy: values.combinationPolicy,
     isActive: values.isActive,
   };
+}
+
+function toSeatRulesSavePayload(
+  values: SeatRulesFormValues,
+  activeTables: BusinessTableResponse[],
+) {
+  const productId = Number(values.productId);
+  const defaultDurationMinutes = Number(values.defaultDurationMinutes);
+  const slotIntervalMinutes = Number(values.slotIntervalMinutes);
+  const selectedTables = activeTables.filter((table) => values.allowedTableIds.includes(table.id));
+
+  if (!Number.isInteger(productId) || productId < 1) {
+    return "예약 상품을 선택해 주세요.";
+  }
+  if (values.allowedSeatTypes.length === 0) {
+    return "허용 좌석 유형을 하나 이상 선택해 주세요.";
+  }
+  if (selectedTables.length === 0) {
+    return "연결할 테이블을 하나 이상 선택해 주세요.";
+  }
+  if (
+    !Number.isInteger(defaultDurationMinutes) ||
+    defaultDurationMinutes < 30 ||
+    defaultDurationMinutes > 360
+  ) {
+    return "기본 이용 시간은 30분부터 360분까지 입력해 주세요.";
+  }
+  if (![15, 30, 60].includes(slotIntervalMinutes)) {
+    return "슬롯 간격은 15분, 30분, 60분 중 하나여야 합니다.";
+  }
+  if (defaultDurationMinutes % slotIntervalMinutes !== 0) {
+    return "기본 이용 시간은 슬롯 간격의 배수여야 합니다.";
+  }
+
+  const missingTableSeatTypes = values.allowedSeatTypes.filter((seatType) =>
+    selectedTables.every((table) => table.seatType !== seatType),
+  );
+
+  if (missingTableSeatTypes.length > 0) {
+    return `${missingTableSeatTypes.map(seatTypeLabel).join(", ")} 좌석 유형에 연결할 테이블을 선택해 주세요.`;
+  }
+  if (selectedTables.some((table) => !values.allowedSeatTypes.includes(table.seatType))) {
+    return "연결 테이블의 좌석 유형이 허용 유형에 포함되어야 합니다.";
+  }
+
+  const request: ReservationProductSeatRulesRequest = {
+    allowedSeatTypes: values.allowedSeatTypes,
+    allowedTableIds: selectedTables.map((table) => table.id),
+    defaultDurationMinutes,
+    slotIntervalMinutes,
+  };
+
+  return { productId, request };
+}
+
+function activeSeatTypes(tables: BusinessTableResponse[]) {
+  return seatTypeOptions
+    .filter((option) => tables.some((table) => table.seatType === option.value))
+    .map((option) => option.value);
+}
+
+function sortSeatTypes(seatTypes: BusinessSeatType[]) {
+  return seatTypeOptions
+    .map((option) => option.value)
+    .filter((seatType) => seatTypes.includes(seatType));
+}
+
+function seatTypeLabel(seatType: BusinessSeatType) {
+  return seatTypeOptions.find((option) => option.value === seatType)?.label ?? seatType;
+}
+
+function formatProductCapacity(product: ReservationProductResponse) {
+  const availableTime =
+    product.availableStartTime && product.availableEndTime
+      ? `${product.availableStartTime}-${product.availableEndTime}`
+      : "영업시간 내";
+
+  return `상품 인원 ${product.minPartySize}-${product.maxPartySize}명 · ${availableTime} · 슬롯 재고 ${product.slotCapacity}`;
+}
+
+function formatSeatRulesCombinationPreview(tables: BusinessTableResponse[]) {
+  if (tables.length === 0) {
+    return "연결할 테이블을 선택하면 조합 가능 범위가 표시됩니다.";
+  }
+
+  const policyLabels = Array.from(new Set(tables.map((table) => table.combinationPolicyLabel)));
+  const maxSingleTableSize = tables.reduce(
+    (maxPartySize, table) => Math.max(maxPartySize, table.maxPartySize),
+    0,
+  );
+  const totalCapacity = tables.reduce((sum, table) => sum + table.maxPartySize, 0);
+
+  return `테이블 조합 가능 범위: ${policyLabels.join(", ")} · 단일 테이블 최대 ${maxSingleTableSize}명 · 연결 수용 합계 ${totalCapacity}명`;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

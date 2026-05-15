@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import {
   type BusinessApiClient,
@@ -306,6 +306,26 @@ describe("App routing", () => {
           refundRate: 0,
           feeAmount: 0,
         },
+        updatedAt: "2026-05-15T00:00:00.000Z",
+      }),
+      saveReservationProductSeatRules: async () => ({
+        productId: mockReservationProduct.id,
+        allowedSeatTypes: ["HALL"],
+        allowedSeatTypeLabels: ["홀"],
+        allowedTableIds: [4001],
+        allowedTables: [
+          {
+            id: 4001,
+            name: "홀 A1",
+            seatTypeLabel: "홀",
+            maxPartySize: 2,
+            combinationPolicyLabel: "단독 사용",
+          },
+        ],
+        defaultDurationMinutes: 90,
+        slotIntervalMinutes: 30,
+        tableCombinationSummary: "테이블 조합 가능 범위: 단독 사용 · 단일 테이블 최대 2명",
+        summary: "디너 코스: 홀 좌석, 기본 90분, 30분 간격.",
         updatedAt: "2026-05-15T00:00:00.000Z",
       }),
       listBusinessReservations: async () => ({
@@ -731,6 +751,87 @@ describe("App routing", () => {
 
     expect(await screen.findByText("상품이 삭제되었습니다.")).toBeInTheDocument();
     expect(await screen.findByText("등록된 예약 상품이 없습니다.")).toBeInTheDocument();
+  });
+
+  it("connects reservation products to seat rules with the mock adapter", async () => {
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText("이메일"), {
+      target: { value: "owner@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("비밀번호"), {
+      target: { value: "password123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "로그인" }));
+
+    await screen.findByRole("heading", { name: "운영 현황" });
+    fireEvent.click(screen.getByRole("link", { name: "예약 상품" }));
+
+    expect(await screen.findByRole("heading", { name: "예약 상품" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "상품 추가" }));
+    fireEvent.change(screen.getByLabelText("상품명"), {
+      target: { value: "디너 코스" },
+    });
+    fireEvent.change(screen.getByLabelText("가격"), {
+      target: { value: "80000" },
+    });
+    fireEvent.change(screen.getByLabelText("상품 설명"), {
+      target: { value: "계절 메뉴 코스" },
+    });
+    fireEvent.change(screen.getByLabelText("최소 인원"), {
+      target: { value: "1" },
+    });
+    fireEvent.change(screen.getByLabelText("최대 인원"), {
+      target: { value: "4" },
+    });
+    fireEvent.change(screen.getByLabelText("예약 가능 시작"), {
+      target: { value: "18:00" },
+    });
+    fireEvent.change(screen.getByLabelText("예약 가능 종료"), {
+      target: { value: "21:00" },
+    });
+    fireEvent.change(screen.getByLabelText("슬롯 재고"), {
+      target: { value: "8" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "상품 저장" }));
+
+    expect(await screen.findByText("상품이 생성되었습니다.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("link", { name: "좌석/재고" }));
+
+    expect(await screen.findByRole("heading", { name: "상품별 좌석 연결" })).toBeInTheDocument();
+    const productSelect = (await screen.findByLabelText("예약 상품")) as HTMLSelectElement;
+    const productOption = Array.from(productSelect.options).find(
+      (option) => option.textContent === "디너 코스",
+    );
+
+    fireEvent.change(productSelect, {
+      target: { value: productOption?.value ?? "" },
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("홀 허용 (2개)")).toBeChecked());
+    expect(screen.getByLabelText("룸 허용 (1개)")).toBeChecked();
+    expect(screen.getByText("테이블 조합 가능 범위")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("기본 이용 시간"), {
+      target: { value: "95" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "좌석 연결 저장" }));
+
+    expect(
+      await screen.findByText("기본 이용 시간은 슬롯 간격의 배수여야 합니다."),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("기본 이용 시간"), {
+      target: { value: "120" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "좌석 연결 저장" }));
+
+    expect(await screen.findByText("좌석 연결 설정이 저장되었습니다.")).toBeInTheDocument();
+    expect(
+      await screen.findByText(/디너 코스: 홀, 룸 좌석, 기본 120분, 30분 간격/),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText(/테이블 조합 가능 범위:/).length).toBeGreaterThan(0);
   });
 
   it("shows reservation list calendar and filters with the mock adapter", async () => {
