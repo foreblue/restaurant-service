@@ -7,14 +7,18 @@ import com.example.restaurant.availability.AvailabilityService
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
 import com.example.restaurant.notification.NotificationService
+import com.example.restaurant.payment.CancellationPolicyEntity
+import com.example.restaurant.payment.CancellationPolicyRepository
 import com.example.restaurant.payment.ReservationPaymentPolicyResolver
 import com.example.restaurant.refund.RefundOperationResponse
 import com.example.restaurant.refund.RefundService
+import com.example.restaurant.reservationproduct.ReservationProductEntity
 import com.example.restaurant.reservationproduct.ReservationProductRepository
 import com.example.restaurant.reservationproduct.ReservationProductStatus
 import com.example.restaurant.restaurant.ReservationPageRepository
 import com.example.restaurant.restaurant.ReservationPageStatus
 import com.example.restaurant.restaurant.RestaurantStatus
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Isolation
 import org.springframework.transaction.annotation.Transactional
@@ -44,10 +48,12 @@ class PublicReservationService(
     private val lookupTokenService: ReservationLookupTokenService,
     private val notificationService: NotificationService,
     private val paymentPolicyResolver: ReservationPaymentPolicyResolver,
+    private val cancellationPolicyRepository: CancellationPolicyRepository,
     private val refundService: RefundService,
     private val clock: Clock,
 ) {
     private val secureRandom = SecureRandom()
+    private val objectMapper = jacksonObjectMapper()
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     fun create(
@@ -130,6 +136,7 @@ class PublicReservationService(
                 paymentStatus = paymentPolicy.initialStatus,
                 paymentDueAt = paymentPolicy.requiresGateway.takeIf { it }
                     ?.let { Instant.now(clock).plus(15, ChronoUnit.MINUTES) },
+                cancellationPolicySnapshotJson = product.activeCancellationPolicySnapshot(),
                 idempotencyKey = normalized.idempotencyKey,
                 idempotencyRequestHash = normalized.requestHash,
             ),
@@ -328,6 +335,24 @@ class PublicReservationService(
 
     private fun ReservationEntity.cancelDeadline(): Instant =
         ZonedDateTime.of(visitDate, startTime, ZoneId.of(restaurant.timezone)).toInstant()
+
+    private fun ReservationProductEntity.activeCancellationPolicySnapshot(): String? {
+        val policy = cancellationPolicyRepository
+            .findByReservationProductIdAndActiveOrderByEffectiveFromDesc(id, true)
+            .firstOrNull()
+            ?: return null
+        return objectMapper.writeValueAsString(policy.snapshot())
+    }
+
+    private fun CancellationPolicyEntity.snapshot(): Map<String, Any?> =
+        mapOf(
+            "policyId" to id,
+            "policyName" to name,
+            "rules" to objectMapper.readTree(rulesJson),
+            "noShowRule" to noShowRuleJson?.let { objectMapper.readTree(it) },
+            "restaurantCancelRefundRate" to restaurantCancelRefundRate,
+            "effectiveFrom" to effectiveFrom.toString(),
+        )
 
     private fun PublicReservationCancelRequest?.normalizedCancelReason(): String? {
         val normalized = this?.reason?.trim()?.takeIf { it.isNotBlank() }

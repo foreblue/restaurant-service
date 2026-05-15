@@ -48,6 +48,33 @@ class BusinessReservationProductController(
             metadata = servletRequest.toMetadata(),
         )
 
+    @PutMapping("/{productId}/payment-policy")
+    fun updatePaymentPolicy(
+        servletRequest: HttpServletRequest,
+        @PathVariable productId: Long,
+        @Valid @RequestBody request: ReservationProductPaymentPolicyRequest,
+    ): ReservationProductPaymentPolicyResponse =
+        reservationProductService.updatePaymentPolicy(
+            principal = BusinessAuthContext.principal(servletRequest),
+            productId = productId,
+            request = request,
+            metadata = servletRequest.toMetadata(),
+        )
+
+    @PostMapping("/{productId}/cancellation-policy")
+    @ResponseStatus(HttpStatus.CREATED)
+    fun upsertCancellationPolicy(
+        servletRequest: HttpServletRequest,
+        @PathVariable productId: Long,
+        @Valid @RequestBody request: ReservationProductCancellationPolicyRequest,
+    ): ReservationProductCancellationPolicyResponse =
+        reservationProductService.upsertCancellationPolicy(
+            principal = BusinessAuthContext.principal(servletRequest),
+            productId = productId,
+            request = request,
+            metadata = servletRequest.toMetadata(),
+        )
+
     @DeleteMapping("/{productId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     fun delete(

@@ -2265,6 +2265,130 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun businessOwnerCanConfigureReservationProductPaymentAndCancellationPolicy() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "product-policy-owner@example.com",
+            restaurantName = "Product Policy Table",
+            slug = "product-policy",
+        )
+        val sessionCookie = loginAndExtractSessionCookie(fixture.restaurant.owner.email)
+        val productId = fixture.productId
+
+        mockMvc.put("/api/business/reservation-products/$productId/payment-policy") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"paymentPolicyType": "DEPOSIT", "paymentAmount": 30000}"""
+            header("X-Forwarded-For", "203.0.113.41")
+            header("User-Agent", "product-policy-test")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.productId") { value(productId.toInt()) }
+            jsonPath("$.paymentPolicyType") { value("DEPOSIT") }
+            jsonPath("$.paymentAmount") { value(30000) }
+        }
+
+        mockMvc.put("/api/business/reservation-products/$productId/payment-policy") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"paymentPolicyType": "PREPAID", "paymentAmount": 10000}"""
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("VALIDATION_ERROR") }
+        }
+
+        listOf("PREPAID", "CARD_GUARANTEE", "PAY_ON_SITE", "FREE").forEach { policyType ->
+            mockMvc.put("/api/business/reservation-products/$productId/payment-policy") {
+                cookie(sessionCookie)
+                contentType = MediaType.APPLICATION_JSON
+                content = """{"paymentPolicyType": "$policyType"}"""
+            }.andExpect {
+                status { isOk() }
+                jsonPath("$.paymentPolicyType") { value(policyType) }
+            }
+        }
+
+        mockMvc.put("/api/business/reservation-products/$productId/payment-policy") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"paymentPolicyType": "DEPOSIT", "paymentAmount": 25000}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.paymentPolicyType") { value("DEPOSIT") }
+            jsonPath("$.paymentAmount") { value(25000) }
+        }
+
+        val firstPolicyResult = mockMvc.post("/api/business/reservation-products/$productId/cancellation-policy") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "기본 취소 정책",
+              "rules": [
+                {"beforeVisitHours": 24, "refundRate": 50},
+                {"beforeVisitHours": 48, "refundRate": 100},
+                {"beforeVisitHours": 0, "refundRate": 0}
+              ],
+              "noShowRule": {"refundRate": 0, "feeAmount": 30000},
+              "restaurantCancelRefundRate": 100
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.active") { value(true) }
+            jsonPath("$.rules[0].beforeVisitHours") { value(48) }
+            jsonPath("$.noShowRule.feeAmount") { value(30000) }
+        }.andReturn()
+        val firstPolicyId = JsonPath.read<Int>(firstPolicyResult.response.contentAsString, "$.policyId").toLong()
+
+        val activePolicyResult = mockMvc.post("/api/business/reservation-products/$productId/cancellation-policy") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "완화 취소 정책",
+              "rules": [
+                {"beforeVisitHours": 12, "refundRate": 70},
+                {"beforeVisitHours": 0, "refundRate": 0}
+              ],
+              "restaurantCancelRefundRate": 100
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.active") { value(true) }
+            jsonPath("$.rules[0].id") { value("rule_12h_70") }
+        }.andReturn()
+        val activePolicyId = JsonPath.read<Int>(activePolicyResult.response.contentAsString, "$.policyId").toLong()
+        assertThat(cancellationPolicyRepository.findById(firstPolicyId).orElseThrow().active).isFalse()
+        assertThat(
+            cancellationPolicyRepository
+                .findByReservationProductIdAndActiveOrderByEffectiveFromDesc(productId, true)
+                .map { it.id },
+        ).containsExactly(activePolicyId)
+
+        val created = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "product-policy-reservation-1",
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "정책예약",
+            customerPhone = "010-8181-0001",
+        )
+        val reservation = reservationRepository.findById(created.id).orElseThrow()
+        assertThat(reservation.paymentRequired).isTrue()
+        assertThat(reservation.paymentMode).isEqualTo(ReservationPaymentMode.DEPOSIT)
+        assertThat(JsonPath.read<Int>(reservation.cancellationPolicySnapshotJson, "$.policyId").toLong())
+            .isEqualTo(activePolicyId)
+        assertThat(JsonPath.read<Int>(reservation.cancellationPolicySnapshotJson, "$.rules[0].beforeVisitHours"))
+            .isEqualTo(12)
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("reservation_product", productId).map { it.action })
+            .contains(
+                "RESERVATION_PRODUCT_PAYMENT_POLICY_UPDATED",
+                "RESERVATION_PRODUCT_CANCELLATION_POLICY_UPDATED",
+            )
+    }
+
+    @Test
     fun publicAvailabilityUsesHoursHolidaysProductPolicyAndCapacity() {
         val owner = createBusinessUser("availability-owner@example.com")
         val sessionCookie = loginAndExtractSessionCookie(owner.email)
