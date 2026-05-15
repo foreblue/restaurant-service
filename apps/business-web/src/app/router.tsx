@@ -4,6 +4,7 @@ import { LoginPage } from "@/features/auth/LoginPage";
 import { PasswordResetRequestPage } from "@/features/auth/PasswordResetRequestPage";
 import { DashboardPage } from "@/features/dashboard/DashboardPage";
 import { RestaurantApplicationPage } from "@/features/onboarding/RestaurantApplicationPage";
+import { ReservationProductsPage } from "@/features/products/ReservationProductsPage";
 import { StoreSettingsPage } from "@/features/store/StoreSettingsPage";
 import { AppShell } from "@/layout/AppShell";
 import { NotFoundPage } from "@/pages/NotFoundPage";
@@ -41,6 +42,10 @@ export function createBusinessRouter() {
             {
               path: "reservations",
               element: <PlaceholderPage title="예약 운영" status="일별 예약과 캘린더" />,
+            },
+            {
+              path: "products",
+              element: <ReservationProductsPage />,
             },
             {
               path: "store",
