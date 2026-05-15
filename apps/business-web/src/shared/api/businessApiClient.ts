@@ -263,6 +263,106 @@ export interface ReservationProductResponse {
   updatedAt: string | null;
 }
 
+export type BusinessReservationStatus =
+  | "PENDING"
+  | "CONFIRMED"
+  | "MODIFIED"
+  | "CANCELLED_BY_CUSTOMER"
+  | "CANCELLED_BY_RESTAURANT"
+  | "COMPLETED"
+  | "NO_SHOW";
+
+export type BusinessReservationSource =
+  | "ONLINE"
+  | "MANUAL_PHONE"
+  | "MANUAL_WALK_IN"
+  | "OWNER_ADJUSTED";
+
+export interface BusinessReservationListQuery {
+  date?: string | null;
+  from?: string | null;
+  to?: string | null;
+  status?: BusinessReservationStatus | null;
+  productId?: number | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  query?: string | null;
+  includeCancelled?: boolean | null;
+}
+
+export interface BusinessReservationCalendarQuery {
+  from?: string | null;
+  to?: string | null;
+  status?: BusinessReservationStatus | null;
+  productId?: number | null;
+  startTime?: string | null;
+  endTime?: string | null;
+}
+
+export interface BusinessReservationSummaryResponse {
+  totalReservations: number;
+  totalPartySize: number;
+  confirmedCount: number;
+  modifiedCount: number;
+  completedCount: number;
+  cancelledCount: number;
+  noShowCount: number;
+}
+
+export interface BusinessReservationCustomerSummaryResponse {
+  id: number;
+  name: string;
+  phoneMasked: string;
+}
+
+export interface BusinessReservationListItemResponse {
+  id: number;
+  reservationNumber: string;
+  status: BusinessReservationStatus;
+  statusLabel: string;
+  statusTone: string;
+  source: BusinessReservationSource;
+  reservedStartAt: string;
+  reservedEndAt: string;
+  visitDate: string;
+  startTime: string;
+  endTime: string;
+  partySize: number;
+  productId: number;
+  productName: string;
+  customer: BusinessReservationCustomerSummaryResponse;
+  hasCustomerRequest: boolean;
+  hasOwnerNote: boolean;
+  paymentStatus: string;
+  paymentActionRequired: boolean;
+}
+
+export interface BusinessReservationListResponse {
+  date: string | null;
+  from: string;
+  to: string;
+  summary: BusinessReservationSummaryResponse;
+  items: BusinessReservationListItemResponse[];
+}
+
+export interface BusinessReservationCalendarDayResponse {
+  date: string;
+  isOpen: boolean;
+  reservationCount: number;
+  partySizeTotal: number;
+  confirmedCount: number;
+  modifiedCount: number;
+  completedCount: number;
+  cancelledCount: number;
+  noShowCount: number;
+}
+
+export interface BusinessReservationCalendarResponse {
+  from: string;
+  to: string;
+  days: BusinessReservationCalendarDayResponse[];
+}
+
 export interface RestaurantSettingsResponse {
   id: number;
   status: "DRAFT" | "APPROVAL_REQUESTED" | "APPROVED" | "REJECTED" | "SUSPENDED";
@@ -358,6 +458,12 @@ export interface BusinessApiClient {
     productId: number,
     request: ReservationProductCancellationPolicyRequest,
   ): Promise<ReservationProductCancellationPolicyResponse>;
+  listBusinessReservations(
+    query: BusinessReservationListQuery,
+  ): Promise<BusinessReservationListResponse>;
+  listBusinessReservationCalendar(
+    query: BusinessReservationCalendarQuery,
+  ): Promise<BusinessReservationCalendarResponse>;
 }
 
 export function createBusinessQueryClient() {
@@ -548,6 +654,18 @@ class HttpBusinessApiClient implements BusinessApiClient {
         method: "POST",
         body: request,
       },
+    );
+  }
+
+  listBusinessReservations(query: BusinessReservationListQuery) {
+    return this.request<BusinessReservationListResponse>(
+      `/api/business/reservations${queryString(query)}`,
+    );
+  }
+
+  listBusinessReservationCalendar(query: BusinessReservationCalendarQuery) {
+    return this.request<BusinessReservationCalendarResponse>(
+      `/api/business/reservations/calendar${queryString(query)}`,
     );
   }
 
@@ -955,6 +1073,57 @@ class MockBusinessApiClient implements BusinessApiClient {
     } satisfies ReservationProductCancellationPolicyResponse;
   }
 
+  async listBusinessReservations(query: BusinessReservationListQuery) {
+    const date = query.date ?? todayDateString();
+    const from = query.from ?? date;
+    const to = query.to ?? date;
+    const items = filterMockBusinessReservations(defaultMockBusinessReservations(), {
+      ...query,
+      date,
+      from,
+      to,
+    });
+
+    return {
+      date,
+      from,
+      to,
+      summary: toBusinessReservationSummary(items),
+      items,
+    } satisfies BusinessReservationListResponse;
+  }
+
+  async listBusinessReservationCalendar(query: BusinessReservationCalendarQuery) {
+    const from = query.from ?? firstDayOfMonth(todayDateString());
+    const to = query.to ?? lastDayOfMonth(from);
+    const filtered = filterMockBusinessReservations(defaultMockBusinessReservations(), {
+      ...query,
+      from,
+      to,
+      includeCancelled: true,
+    });
+
+    return {
+      from,
+      to,
+      days: eachDate(from, to).map((date) => {
+        const items = filtered.filter((reservation) => reservation.visitDate === date);
+
+        return {
+          date,
+          isOpen: true,
+          reservationCount: items.length,
+          partySizeTotal: items.reduce((total, item) => total + item.partySize, 0),
+          confirmedCount: items.filter((item) => item.status === "CONFIRMED").length,
+          modifiedCount: items.filter((item) => item.status === "MODIFIED").length,
+          completedCount: items.filter((item) => item.status === "COMPLETED").length,
+          cancelledCount: items.filter(isCancelledReservation).length,
+          noShowCount: items.filter((item) => item.status === "NO_SHOW").length,
+        };
+      }),
+    } satisfies BusinessReservationCalendarResponse;
+  }
+
   private readUser() {
     const storage = getBrowserStorage();
 
@@ -1068,6 +1237,22 @@ class MockBusinessApiClient implements BusinessApiClient {
       this.memoryReservationProducts = products;
     }
   }
+}
+
+function queryString(query: object) {
+  const searchParams = new URLSearchParams();
+
+  Object.entries(query).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") {
+      return;
+    }
+
+    searchParams.set(key, String(value));
+  });
+
+  const serialized = searchParams.toString();
+
+  return serialized ? `?${serialized}` : "";
 }
 
 async function parseErrorResponse(response: Response): Promise<ApiErrorResponse> {
@@ -1405,4 +1590,341 @@ function validateRefundRate(refundRate: number) {
   if (!Number.isInteger(refundRate) || refundRate < 0 || refundRate > 100) {
     throw new ApiError("환불율은 0부터 100 사이 정수로 입력해 주세요.", 400, "VALIDATION_ERROR");
   }
+}
+
+function defaultMockBusinessReservations(): BusinessReservationListItemResponse[] {
+  const today = todayDateString();
+  const tomorrow = addDays(today, 1);
+  const nextWeek = addDays(today, 7);
+
+  return [
+    toMockBusinessReservation({
+      id: 7001,
+      reservationNumber: "RSV-7001",
+      status: "CONFIRMED",
+      source: "ONLINE",
+      visitDate: today,
+      startTime: "11:30:00",
+      endTime: "13:00:00",
+      partySize: 2,
+      productId: 6001,
+      productName: "디너 코스",
+      customerId: 8001,
+      customerName: "김예약",
+      phoneMasked: "010-****-5678",
+      hasCustomerRequest: true,
+      hasOwnerNote: false,
+      paymentStatus: "NOT_REQUIRED",
+      paymentActionRequired: false,
+    }),
+    toMockBusinessReservation({
+      id: 7002,
+      reservationNumber: "RSV-7002",
+      status: "MODIFIED",
+      source: "MANUAL_PHONE",
+      visitDate: today,
+      startTime: "13:00:00",
+      endTime: "14:30:00",
+      partySize: 4,
+      productId: 6002,
+      productName: "런치 코스",
+      customerId: 8002,
+      customerName: "이수정",
+      phoneMasked: "010-****-9988",
+      hasCustomerRequest: false,
+      hasOwnerNote: true,
+      paymentStatus: "OFFLINE",
+      paymentActionRequired: false,
+    }),
+    toMockBusinessReservation({
+      id: 7003,
+      reservationNumber: "RSV-7003",
+      status: "CANCELLED_BY_CUSTOMER",
+      source: "ONLINE",
+      visitDate: today,
+      startTime: "18:30:00",
+      endTime: "20:00:00",
+      partySize: 3,
+      productId: 6001,
+      productName: "디너 코스",
+      customerId: 8003,
+      customerName: "박취소",
+      phoneMasked: "010-****-0000",
+      hasCustomerRequest: false,
+      hasOwnerNote: false,
+      paymentStatus: "REFUND_PENDING",
+      paymentActionRequired: true,
+    }),
+    toMockBusinessReservation({
+      id: 7004,
+      reservationNumber: "RSV-7004",
+      status: "COMPLETED",
+      source: "MANUAL_WALK_IN",
+      visitDate: tomorrow,
+      startTime: "12:00:00",
+      endTime: "13:30:00",
+      partySize: 2,
+      productId: 6002,
+      productName: "런치 코스",
+      customerId: 8004,
+      customerName: "최방문",
+      phoneMasked: "010-****-1122",
+      hasCustomerRequest: false,
+      hasOwnerNote: true,
+      paymentStatus: "PAID",
+      paymentActionRequired: false,
+    }),
+    toMockBusinessReservation({
+      id: 7005,
+      reservationNumber: "RSV-7005",
+      status: "NO_SHOW",
+      source: "ONLINE",
+      visitDate: nextWeek,
+      startTime: "19:00:00",
+      endTime: "20:30:00",
+      partySize: 2,
+      productId: 6001,
+      productName: "디너 코스",
+      customerId: 8005,
+      customerName: "오민준",
+      phoneMasked: "010-****-4455",
+      hasCustomerRequest: true,
+      hasOwnerNote: true,
+      paymentStatus: "CARD_GUARANTEE",
+      paymentActionRequired: true,
+    }),
+  ];
+}
+
+function toMockBusinessReservation({
+  id,
+  reservationNumber,
+  status,
+  source,
+  visitDate,
+  startTime,
+  endTime,
+  partySize,
+  productId,
+  productName,
+  customerId,
+  customerName,
+  phoneMasked,
+  hasCustomerRequest,
+  hasOwnerNote,
+  paymentStatus,
+  paymentActionRequired,
+}: {
+  id: number;
+  reservationNumber: string;
+  status: BusinessReservationStatus;
+  source: BusinessReservationSource;
+  visitDate: string;
+  startTime: string;
+  endTime: string;
+  partySize: number;
+  productId: number;
+  productName: string;
+  customerId: number;
+  customerName: string;
+  phoneMasked: string;
+  hasCustomerRequest: boolean;
+  hasOwnerNote: boolean;
+  paymentStatus: string;
+  paymentActionRequired: boolean;
+}): BusinessReservationListItemResponse {
+  return {
+    id,
+    reservationNumber,
+    status,
+    statusLabel: businessReservationStatusLabel(status),
+    statusTone: businessReservationStatusTone(status),
+    source,
+    reservedStartAt: toDateTimeIsoString(visitDate, startTime),
+    reservedEndAt: toDateTimeIsoString(visitDate, endTime),
+    visitDate,
+    startTime,
+    endTime,
+    partySize,
+    productId,
+    productName,
+    customer: {
+      id: customerId,
+      name: customerName,
+      phoneMasked,
+    },
+    hasCustomerRequest,
+    hasOwnerNote,
+    paymentStatus,
+    paymentActionRequired,
+  };
+}
+
+function filterMockBusinessReservations(
+  reservations: BusinessReservationListItemResponse[],
+  query: BusinessReservationListQuery,
+) {
+  const from = query.date ?? query.from ?? todayDateString();
+  const to = query.date ?? query.to ?? from;
+  const searchTerm = query.query?.trim().toLowerCase() ?? "";
+  const startTime = normalizeTime(query.startTime);
+  const endTime = normalizeTime(query.endTime);
+
+  return reservations
+    .filter((reservation) => {
+      if (reservation.visitDate < from || reservation.visitDate > to) {
+        return false;
+      }
+      if (!query.includeCancelled && !query.status && isCancelledReservation(reservation)) {
+        return false;
+      }
+      if (query.status && reservation.status !== query.status) {
+        return false;
+      }
+      if (query.productId && reservation.productId !== query.productId) {
+        return false;
+      }
+      if (startTime && reservation.startTime < startTime) {
+        return false;
+      }
+      if (endTime && reservation.startTime >= endTime) {
+        return false;
+      }
+      if (searchTerm && !businessReservationSearchText(reservation).includes(searchTerm)) {
+        return false;
+      }
+
+      return true;
+    })
+    .sort((a, b) => {
+      const timeDiff = a.startTime.localeCompare(b.startTime);
+
+      if (timeDiff !== 0) {
+        return timeDiff;
+      }
+
+      return a.id - b.id;
+    });
+}
+
+function toBusinessReservationSummary(items: BusinessReservationListItemResponse[]) {
+  return {
+    totalReservations: items.length,
+    totalPartySize: items.reduce((total, item) => total + item.partySize, 0),
+    confirmedCount: items.filter((item) => item.status === "CONFIRMED").length,
+    modifiedCount: items.filter((item) => item.status === "MODIFIED").length,
+    completedCount: items.filter((item) => item.status === "COMPLETED").length,
+    cancelledCount: items.filter(isCancelledReservation).length,
+    noShowCount: items.filter((item) => item.status === "NO_SHOW").length,
+  } satisfies BusinessReservationSummaryResponse;
+}
+
+function businessReservationSearchText(reservation: BusinessReservationListItemResponse) {
+  return [
+    reservation.reservationNumber,
+    reservation.customer.name,
+    reservation.customer.phoneMasked,
+    reservation.productName,
+    reservation.statusLabel,
+    reservation.paymentStatus,
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function businessReservationStatusLabel(status: BusinessReservationStatus) {
+  const labels: Record<BusinessReservationStatus, string> = {
+    PENDING: "확인 대기",
+    CONFIRMED: "확정",
+    MODIFIED: "변경",
+    CANCELLED_BY_CUSTOMER: "고객 취소",
+    CANCELLED_BY_RESTAURANT: "매장 취소",
+    COMPLETED: "방문 완료",
+    NO_SHOW: "노쇼",
+  };
+
+  return labels[status];
+}
+
+function businessReservationStatusTone(status: BusinessReservationStatus) {
+  const tones: Record<BusinessReservationStatus, string> = {
+    PENDING: "warning",
+    CONFIRMED: "success",
+    MODIFIED: "info",
+    CANCELLED_BY_CUSTOMER: "muted",
+    CANCELLED_BY_RESTAURANT: "danger",
+    COMPLETED: "success",
+    NO_SHOW: "danger",
+  };
+
+  return tones[status];
+}
+
+function isCancelledReservation(reservation: BusinessReservationListItemResponse) {
+  return (
+    reservation.status === "CANCELLED_BY_CUSTOMER" ||
+    reservation.status === "CANCELLED_BY_RESTAURANT"
+  );
+}
+
+function normalizeTime(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  return value.length === 5 ? `${value}:00` : value;
+}
+
+function todayDateString() {
+  return formatDateString(new Date());
+}
+
+function firstDayOfMonth(value: string) {
+  const date = parseDateString(value);
+
+  return formatDateString(new Date(date.getFullYear(), date.getMonth(), 1));
+}
+
+function lastDayOfMonth(value: string) {
+  const date = parseDateString(value);
+
+  return formatDateString(new Date(date.getFullYear(), date.getMonth() + 1, 0));
+}
+
+function addDays(value: string, days: number) {
+  const date = parseDateString(value);
+  date.setDate(date.getDate() + days);
+
+  return formatDateString(date);
+}
+
+function eachDate(from: string, to: string) {
+  const dates: string[] = [];
+  const current = parseDateString(from);
+  const end = parseDateString(to);
+
+  while (current <= end) {
+    dates.push(formatDateString(current));
+    current.setDate(current.getDate() + 1);
+  }
+
+  return dates;
+}
+
+function parseDateString(value: string) {
+  const [year = 1970, month = 1, day = 1] = value.split("-").map(Number);
+
+  return new Date(year, month - 1, day);
+}
+
+function formatDateString(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function toDateTimeIsoString(date: string, time: string) {
+  return new Date(`${date}T${time}+09:00`).toISOString();
 }
