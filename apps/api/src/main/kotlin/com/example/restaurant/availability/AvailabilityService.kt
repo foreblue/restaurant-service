@@ -2,6 +2,7 @@ package com.example.restaurant.availability
 
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.example.restaurant.inventory.SeatInventoryService
 import com.example.restaurant.reservationproduct.ReservationProductEntity
 import com.example.restaurant.reservationproduct.ReservationProductRepository
 import com.example.restaurant.reservationproduct.ReservationProductStatus
@@ -40,6 +41,7 @@ class AvailabilityService(
     private val businessHourRepository: BusinessHourRepository,
     private val holidayRuleRepository: HolidayRuleRepository,
     private val timeSlotRepository: TimeSlotRepository,
+    private val seatInventoryService: SeatInventoryService,
     private val clock: Clock,
 ) {
     private val objectMapper = jacksonObjectMapper()
@@ -83,6 +85,7 @@ class AvailabilityService(
         productId: Long,
         dateValue: String,
         partySizeValue: Int?,
+        applyInventory: Boolean = true,
     ): AvailabilityTimesResponse {
         val context = publicAvailabilityContext(restaurantId, productId, partySizeValue)
         val date = dateValue.parseDate("date")
@@ -96,7 +99,7 @@ class AvailabilityService(
             restaurantId = restaurantId,
             productId = productId,
             date = date,
-            times = availableTimeSlots(context, date),
+            times = availableTimeSlots(context, date, applyInventory = applyInventory),
         )
     }
 
@@ -106,6 +109,8 @@ class AvailabilityService(
         productId: Long,
         dateValue: String,
         partySizeValue: Int?,
+        excludedReservationId: Long? = null,
+        applyInventory: Boolean = true,
     ): AvailabilityTimesResponse {
         val context = businessAvailabilityContext(restaurantId, productId, partySizeValue)
         val date = dateValue.parseDate("date")
@@ -119,7 +124,7 @@ class AvailabilityService(
             restaurantId = restaurantId,
             productId = productId,
             date = date,
-            times = availableTimeSlots(context, date),
+            times = availableTimeSlots(context, date, excludedReservationId, applyInventory),
         )
     }
 
@@ -194,6 +199,8 @@ class AvailabilityService(
     private fun availableTimeSlots(
         context: AvailabilityContext,
         date: LocalDate,
+        excludedReservationId: Long? = null,
+        applyInventory: Boolean = true,
     ): List<AvailableTimeSlotResponse> {
         if (!context.product.acceptsPartySize(context.partySize)) {
             return emptyList()
@@ -212,16 +219,32 @@ class AvailabilityService(
         if (manualSlots.isNotEmpty()) {
             return manualSlots
                 .filter { it.status == TimeSlotStatus.OPEN }
-                .filter { it.capacity >= context.partySize }
                 .filter { it.inProductTimeRange(context.product) }
                 .filter { !isTemporaryHolidayOverlap(date, it.startTime, it.endTime, context.holidayRules) }
                 .filter { passesCutoff(context.restaurant, date, it.startTime) }
-                .map {
+                .mapNotNull {
+                    val remainingCapacity = if (applyInventory) {
+                        val inventory = seatInventoryService.availability(
+                            product = context.product,
+                            visitDate = date,
+                            startTime = it.startTime,
+                            endTime = it.endTime,
+                            partySize = context.partySize,
+                            baseCapacity = it.capacity,
+                            excludedReservationId = excludedReservationId,
+                        )
+                        if (!inventory.available) {
+                            return@mapNotNull null
+                        }
+                        inventory.remainingCapacity
+                    } else {
+                        it.capacity
+                    }
                     AvailableTimeSlotResponse(
                         timeSlotId = "slot-${it.id}",
                         startTime = it.startTime,
                         endTime = it.endTime,
-                        remainingCapacity = it.capacity,
+                        remainingCapacity = remainingCapacity,
                     )
                 }
         }
@@ -238,7 +261,7 @@ class AvailabilityService(
             val closesAt = hour.closesAt ?: return@flatMap emptyList()
             val windowStart = maxOf(opensAt, context.product.availableStartTime ?: opensAt)
             val windowEnd = minOf(closesAt, context.product.availableEndTime ?: closesAt)
-            buildSlotsForWindow(context, date, windowStart, windowEnd)
+            buildSlotsForWindow(context, date, windowStart, windowEnd, excludedReservationId, applyInventory)
         }
     }
 
@@ -247,8 +270,10 @@ class AvailabilityService(
         date: LocalDate,
         windowStart: LocalTime,
         windowEnd: LocalTime,
+        excludedReservationId: Long?,
+        applyInventory: Boolean,
     ): List<AvailableTimeSlotResponse> {
-        if (!windowStart.isBefore(windowEnd) || context.product.slotCapacity < context.partySize) {
+        if (!windowStart.isBefore(windowEnd)) {
             return emptyList()
         }
         val slots = mutableListOf<AvailableTimeSlotResponse>()
@@ -259,12 +284,32 @@ class AvailabilityService(
                 passesCutoff(context.restaurant, date, current) &&
                 !isTemporaryHolidayOverlap(date, current, endTime, context.holidayRules)
             ) {
-                slots += AvailableTimeSlotResponse(
-                    timeSlotId = "dyn-${context.product.id}-${date}-${current.toSecondOfDay()}",
-                    startTime = current,
-                    endTime = endTime,
-                    remainingCapacity = context.product.slotCapacity,
-                )
+                val remainingCapacity = if (applyInventory) {
+                    val inventory = seatInventoryService.availability(
+                        product = context.product,
+                        visitDate = date,
+                        startTime = current,
+                        endTime = endTime,
+                        partySize = context.partySize,
+                        baseCapacity = context.product.slotCapacity,
+                        excludedReservationId = excludedReservationId,
+                    )
+                    if (!inventory.available) {
+                        null
+                    } else {
+                        inventory.remainingCapacity
+                    }
+                } else {
+                    context.product.slotCapacity
+                }
+                if (remainingCapacity != null) {
+                    slots += AvailableTimeSlotResponse(
+                        timeSlotId = "dyn-${context.product.id}-${date}-${current.toSecondOfDay()}",
+                        startTime = current,
+                        endTime = endTime,
+                        remainingCapacity = remainingCapacity,
+                    )
+                }
             }
             current = current.plus(SLOT_INTERVAL)
         }
@@ -342,7 +387,7 @@ class AvailabilityService(
             .map { DayOfWeek.valueOf(it) }
 
     private fun ReservationProductEntity.acceptsPartySize(partySize: Int): Boolean =
-        partySize in minPartySize..maxPartySize && partySize <= slotCapacity
+        partySize in minPartySize..maxPartySize
 }
 
 private data class AvailabilityContext(

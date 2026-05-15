@@ -71,4 +71,25 @@ interface ReservationRepository : JpaRepository<ReservationEntity, Long> {
         @Param("startTime") startTime: LocalTime,
         @Param("statuses") statuses: Collection<ReservationStatus>,
     ): Long
+
+    @Query(
+        """
+        select coalesce(sum(r.partySize), 0)
+        from ReservationEntity r
+        where r.reservationProduct.id = :productId
+          and r.visitDate = :visitDate
+          and r.status in :statuses
+          and (:excludedReservationId is null or r.id <> :excludedReservationId)
+          and r.startTime < :endTime
+          and :startTime < r.endTime
+        """,
+    )
+    fun sumPartySizeByOverlappingRange(
+        @Param("productId") productId: Long,
+        @Param("visitDate") visitDate: LocalDate,
+        @Param("startTime") startTime: LocalTime,
+        @Param("endTime") endTime: LocalTime,
+        @Param("statuses") statuses: Collection<ReservationStatus>,
+        @Param("excludedReservationId") excludedReservationId: Long?,
+    ): Long
 }

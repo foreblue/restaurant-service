@@ -2922,6 +2922,161 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun seatInventoryPreventsOverlappingTableReservationsAndRestoresAfterCancel() {
+        val owner = createBusinessUser("seat-inventory-owner@example.com")
+        val sessionCookie = loginAndExtractSessionCookie(owner.email)
+        val restaurant = createApprovedRestaurantForSettings(owner, "Seat Inventory Table", "seat-inventory-table")
+        val targetDate = LocalDate.now(ZoneId.of("Asia/Seoul")).plusDays(4)
+        val targetDay = targetDate.dayOfWeek.name
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/business-hours") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "hours": [
+                {"dayOfWeek": "$targetDay", "opensAt": "11:00:00", "closesAt": "15:00:00"}
+              ]
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+        }
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/reservation-page") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"slug": "seat-inventory-table", "status": "PUBLIC"}"""
+        }.andExpect {
+            status { isOk() }
+        }
+
+        val productResult = mockMvc.post("/api/business/reservation-products") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "좌석 재고 코스",
+              "priceAmount": 90000,
+              "visible": true,
+              "minPartySize": 1,
+              "maxPartySize": 4,
+              "availableDays": ["$targetDay"],
+              "availableStartTime": "11:00:00",
+              "availableEndTime": "15:00:00",
+              "slotCapacity": 8
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val productId = JsonPath.read<Int>(productResult.response.contentAsString, "$.id").toLong()
+
+        val tableResult = mockMvc.post("/api/business/tables") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"name":"좌석A","seatType":"HALL","minPartySize":1,"maxPartySize":4}"""
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val tableId = JsonPath.read<Int>(tableResult.response.contentAsString, "$.id").toLong()
+
+        mockMvc.post("/api/business/reservation-products/$productId/seat-rules") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "allowedTableIds": [$tableId],
+              "defaultDurationMinutes": 120,
+              "slotIntervalMinutes": 60,
+              "inventoryPolicy": "TABLE"
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+        }
+
+        mockMvc.post("/api/business/time-slots") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"productId":$productId,"from":"$targetDate","to":"$targetDate"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.slots.length()") { value(3) }
+        }
+
+        val requestBody = """
+        {
+          "restaurantId": ${restaurant.id},
+          "productId": $productId,
+          "visitDate": "$targetDate",
+          "startTime": "11:00:00",
+          "partySize": 2,
+          "customerName": "좌석예약",
+          "customerPhone": "010-2600-0001"
+        }
+        """.trimIndent()
+        val createResult = mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "seat-inventory-reserve-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = requestBody
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.endTime") { value("13:00:00") }
+        }.andReturn()
+        val reservationId = JsonPath.read<Int>(createResult.response.contentAsString, "$.id").toLong()
+        val lookupToken = JsonPath.read<String>(createResult.response.contentAsString, "$.lookupToken")
+
+        assertThat(
+            jdbcTemplate.queryForObject(
+                "select count(*) from reservation_table_assignments where reservation_id = ? and restaurant_table_id = ?",
+                Long::class.java,
+                reservationId,
+                tableId,
+            ),
+        ).isEqualTo(1)
+
+        mockMvc.get("/api/public/restaurants/${restaurant.id}/availability/times") {
+            param("productId", productId.toString())
+            param("date", targetDate.toString())
+            param("partySize", "2")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.times.length()") { value(1) }
+            jsonPath("$.times[0].startTime") { value("13:00:00") }
+        }
+
+        mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "seat-inventory-reserve-overlap")
+            contentType = MediaType.APPLICATION_JSON
+            content = requestBody.replace("seat-inventory-reserve-1", "seat-inventory-reserve-overlap")
+                .replace("010-2600-0001", "010-2600-0002")
+        }.andExpect {
+            status { isConflict() }
+            jsonPath("$.code") { value("CONFLICT") }
+            jsonPath("$.message") { value("예약 가능한 좌석이 없습니다.") }
+        }
+
+        mockMvc.post("/api/public/reservations/$reservationId/cancel") {
+            header("X-Reservation-Lookup-Token", lookupToken)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reason":"일정 변경"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("CANCELLED_BY_CUSTOMER") }
+        }
+
+        mockMvc.get("/api/public/restaurants/${restaurant.id}/availability/times") {
+            param("productId", productId.toString())
+            param("date", targetDate.toString())
+            param("partySize", "2")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.times.length()") { value(3) }
+        }
+    }
+
+    @Test
     fun publicAvailabilityUsesHoursHolidaysProductPolicyAndCapacity() {
         val owner = createBusinessUser("availability-owner@example.com")
         val sessionCookie = loginAndExtractSessionCookie(owner.email)
@@ -4083,6 +4238,119 @@ class RestaurantApiApplicationTests {
         assertThat(JsonPath.read<String>(conflict.body, "$.code")).isEqualTo("CONFLICT")
         assertThat(JsonPath.read<String>(conflict.body, "$.message")).isEqualTo("예약 가능한 재고가 없습니다.")
         assertThat(reservationRepository.countByRestaurantId(fixture.restaurant.id)).isEqualTo(1)
+    }
+
+    @Test
+    fun publicReservationConcurrentRequestsDoNotDoubleBookSameTable() {
+        val owner = createBusinessUser("reservation-concurrent-seat-owner@example.com")
+        val sessionCookie = loginAndExtractSessionCookie(owner.email)
+        val restaurant = createApprovedRestaurantForSettings(
+            owner,
+            "Reservation Concurrent Seat Table",
+            "reservation-concurrent-seat",
+        )
+        val targetDate = LocalDate.now(ZoneId.of("Asia/Seoul")).plusDays(4)
+        val targetDay = targetDate.dayOfWeek.name
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/business-hours") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"hours":[{"dayOfWeek":"$targetDay","opensAt":"11:00:00","closesAt":"13:00:00"}]}"""
+        }.andExpect {
+            status { isOk() }
+        }
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/reservation-page") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"slug":"reservation-concurrent-seat","status":"PUBLIC"}"""
+        }.andExpect {
+            status { isOk() }
+        }
+        val productResult = mockMvc.post("/api/business/reservation-products") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "동시 좌석 코스",
+              "visible": true,
+              "minPartySize": 1,
+              "maxPartySize": 4,
+              "availableDays": ["$targetDay"],
+              "availableStartTime": "11:00:00",
+              "availableEndTime": "13:00:00",
+              "slotCapacity": 8
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val productId = JsonPath.read<Int>(productResult.response.contentAsString, "$.id").toLong()
+        val tableResult = mockMvc.post("/api/business/tables") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"name":"동시좌석A","seatType":"HALL","minPartySize":1,"maxPartySize":4}"""
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val tableId = JsonPath.read<Int>(tableResult.response.contentAsString, "$.id").toLong()
+        mockMvc.post("/api/business/reservation-products/$productId/seat-rules") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"allowedTableIds":[$tableId],"defaultDurationMinutes":120,"slotIntervalMinutes":60,"inventoryPolicy":"TABLE"}"""
+        }.andExpect {
+            status { isOk() }
+        }
+        mockMvc.post("/api/business/time-slots") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"productId":$productId,"from":"$targetDate","to":"$targetDate"}"""
+        }.andExpect {
+            status { isOk() }
+        }
+
+        val attempts = runConcurrentReservationCreates(
+            ReservationCreateCommand(
+                idempotencyKey = "public-reserve-concurrent-seat-1",
+                body = """
+                {
+                  "restaurantId": ${restaurant.id},
+                  "productId": $productId,
+                  "visitDate": "$targetDate",
+                  "startTime": "11:00:00",
+                  "partySize": 2,
+                  "customerName": "동시좌석1",
+                  "customerPhone": "010-2600-1001"
+                }
+                """.trimIndent(),
+            ),
+            ReservationCreateCommand(
+                idempotencyKey = "public-reserve-concurrent-seat-2",
+                body = """
+                {
+                  "restaurantId": ${restaurant.id},
+                  "productId": $productId,
+                  "visitDate": "$targetDate",
+                  "startTime": "11:00:00",
+                  "partySize": 2,
+                  "customerName": "동시좌석2",
+                  "customerPhone": "010-2600-1002"
+                }
+                """.trimIndent(),
+            ),
+        )
+
+        assertThat(attempts.map { it.status })
+            .containsExactlyInAnyOrder(HttpStatus.CREATED.value(), HttpStatus.CONFLICT.value())
+        val conflict = attempts.single { it.status == HttpStatus.CONFLICT.value() }
+        assertThat(JsonPath.read<String>(conflict.body, "$.code")).isEqualTo("CONFLICT")
+        assertThat(reservationRepository.countByRestaurantId(restaurant.id)).isEqualTo(1)
+        assertThat(
+            jdbcTemplate.queryForObject(
+                "select count(*) from reservation_table_assignments where restaurant_table_id = ?",
+                Long::class.java,
+                tableId,
+            ),
+        ).isEqualTo(1)
     }
 
     @Test
