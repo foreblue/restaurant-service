@@ -19,6 +19,16 @@ export interface BusinessLoginRequest {
   password: string;
 }
 
+export interface PasswordResetRequest {
+  email: string;
+}
+
+export interface PasswordResetRequestResult {
+  accepted: boolean;
+  resetToken?: string | null;
+  expiresAt?: string | null;
+}
+
 interface BusinessLoginResponse {
   user: BusinessUser;
 }
@@ -50,6 +60,7 @@ export interface BusinessApiClient {
   getCurrentUser(): Promise<BusinessUser>;
   login(request: BusinessLoginRequest): Promise<BusinessUser>;
   logout(): Promise<void>;
+  requestPasswordReset(request: PasswordResetRequest): Promise<PasswordResetRequestResult>;
 }
 
 export function createBusinessQueryClient() {
@@ -88,6 +99,13 @@ class HttpBusinessApiClient implements BusinessApiClient {
   async logout() {
     await this.request<void>("/api/business/auth/logout", {
       method: "POST",
+    });
+  }
+
+  requestPasswordReset(request: PasswordResetRequest) {
+    return this.request<PasswordResetRequestResult>("/api/business/auth/password-reset-requests", {
+      method: "POST",
+      body: request,
     });
   }
 
@@ -146,6 +164,10 @@ class MockBusinessApiClient implements BusinessApiClient {
       throw new ApiError("이메일과 비밀번호를 입력해 주세요.", 400, "INVALID_LOGIN_REQUEST");
     }
 
+    if (request.email === "invalid@example.com") {
+      throw new UnauthorizedApiError("이메일 또는 비밀번호가 올바르지 않습니다.");
+    }
+
     const user: BusinessUser = {
       id: 1,
       email: request.email,
@@ -172,6 +194,18 @@ class MockBusinessApiClient implements BusinessApiClient {
   async logout() {
     getBrowserStorage()?.removeItem(this.storageKey);
     this.memoryUser = null;
+  }
+
+  async requestPasswordReset(request: PasswordResetRequest) {
+    if (!request.email.trim()) {
+      throw new ApiError("이메일을 입력해 주세요.", 400, "INVALID_PASSWORD_RESET_REQUEST");
+    }
+
+    return {
+      accepted: true,
+      resetToken: null,
+      expiresAt: null,
+    };
   }
 
   private readUser() {

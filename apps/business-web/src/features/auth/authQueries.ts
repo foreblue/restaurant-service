@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type BusinessLoginRequest,
   type BusinessUser,
+  type PasswordResetRequest,
   UnauthorizedApiError,
 } from "@/shared/api/businessApiClient";
 import { useBusinessApiClient } from "@/shared/api/useBusinessApiClient";
@@ -47,5 +48,13 @@ export function useLogoutMutation() {
     onSettled: () => {
       queryClient.removeQueries({ queryKey: currentUserQueryKey });
     },
+  });
+}
+
+export function usePasswordResetRequestMutation() {
+  const apiClient = useBusinessApiClient();
+
+  return useMutation({
+    mutationFn: (request: PasswordResetRequest) => apiClient.requestPasswordReset(request),
   });
 }

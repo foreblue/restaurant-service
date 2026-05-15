@@ -1,6 +1,7 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 
 import { LoginPage } from "@/features/auth/LoginPage";
+import { PasswordResetRequestPage } from "@/features/auth/PasswordResetRequestPage";
 import { DashboardPage } from "@/features/dashboard/DashboardPage";
 import { AppShell } from "@/layout/AppShell";
 import { NotFoundPage } from "@/pages/NotFoundPage";
@@ -12,6 +13,10 @@ export function createBusinessRouter() {
     {
       path: "/login",
       element: <LoginPage />,
+    },
+    {
+      path: "/password-reset",
+      element: <PasswordResetRequestPage />,
     },
     {
       element: <ProtectedRoute />,

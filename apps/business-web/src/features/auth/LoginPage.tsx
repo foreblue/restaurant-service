@@ -1,98 +1,115 @@
-import { FormEvent, useState } from "react";
-import { Navigate, useLocation, useNavigate } from "react-router-dom";
-import { KeyRound, UtensilsCrossed } from "lucide-react";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { KeyRound } from "lucide-react";
+import { useForm } from "react-hook-form";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 
+import { Alert, Button, Field, fieldA11y, Input } from "@/components/ui";
+import { AuthFrame } from "@/features/auth/AuthFrame";
 import { useCurrentUserQuery, useLoginMutation } from "@/features/auth/authQueries";
+import { type LoginFormValues, loginSchema } from "@/features/auth/authSchemas";
+import { UnauthorizedApiError } from "@/shared/api/businessApiClient";
 
 interface RouteState {
-  from?: Location;
+  from?: {
+    pathname?: string;
+    search?: string;
+    hash?: string;
+  };
+  reason?: "auth-required";
 }
 
 export function LoginPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const routeState = location.state as RouteState | null;
-  const returnTo = routeState?.from?.pathname ?? "/";
+  const returnTo = toReturnPath(routeState);
   const currentUser = useCurrentUserQuery();
   const login = useLoginMutation();
-  const [email, setEmail] = useState("owner@example.com");
-  const [password, setPassword] = useState("password123");
+  const {
+    formState: { errors },
+    handleSubmit,
+    register,
+  } = useForm<LoginFormValues>({
+    defaultValues: {
+      email: "",
+      password: "",
+    },
+    resolver: zodResolver(loginSchema),
+  });
 
   if (currentUser.isSuccess) {
     return <Navigate to={returnTo} replace />;
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
+  async function handleLogin(values: LoginFormValues) {
     try {
-      await login.mutateAsync({ email, password });
+      await login.mutateAsync(values);
       navigate(returnTo, { replace: true });
     } catch {
-      // Mutation state renders the field-level error.
+      // Mutation state renders the submit error.
     }
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background px-5 py-10 text-foreground">
-      <section className="w-full max-w-[420px] rounded-lg border border-border bg-card p-6 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="flex size-10 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <UtensilsCrossed aria-hidden className="size-5" />
-          </div>
-          <div>
-            <h1 className="text-xl font-semibold tracking-normal">사업자 로그인</h1>
-            <p className="text-sm text-muted-foreground">예약 운영 콘솔</p>
-          </div>
-        </div>
+    <AuthFrame title="사업자 로그인" subtitle="예약 운영 콘솔">
+      {routeState?.reason === "auth-required" ? (
+        <Alert variant="info">로그인이 필요하거나 세션이 만료되었습니다.</Alert>
+      ) : null}
 
-        <form className="mt-6 grid gap-4" onSubmit={handleSubmit}>
-          <div className="grid gap-2">
-            <label className="text-sm font-medium" htmlFor="business-email">
-              이메일
-            </label>
-            <input
-              className="h-10 rounded-md border border-input bg-background px-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20"
-              id="business-email"
-              name="email"
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-            />
-          </div>
+      <form className="mt-5 grid gap-4" onSubmit={handleSubmit(handleLogin)}>
+        <Field id="business-email" label="이메일" error={errors.email?.message}>
+          <Input
+            id="business-email"
+            type="email"
+            autoComplete="email"
+            invalid={Boolean(errors.email)}
+            {...fieldA11y("business-email", { error: errors.email?.message })}
+            {...register("email")}
+          />
+        </Field>
 
-          <div className="grid gap-2">
-            <label className="text-sm font-medium" htmlFor="business-password">
-              비밀번호
-            </label>
-            <input
-              className="h-10 rounded-md border border-input bg-background px-3 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20"
-              id="business-password"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-          </div>
+        <Field id="business-password" label="비밀번호" error={errors.password?.message}>
+          <Input
+            id="business-password"
+            type="password"
+            autoComplete="current-password"
+            invalid={Boolean(errors.password)}
+            {...fieldA11y("business-password", { error: errors.password?.message })}
+            {...register("password")}
+          />
+        </Field>
 
-          {login.isError ? (
-            <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-              {login.error.message}
-            </p>
-          ) : null}
+        {login.isError ? <Alert variant="danger">{loginErrorMessage(login.error)}</Alert> : null}
 
-          <button
-            className="mt-1 flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-            type="submit"
-            disabled={login.isPending}
-          >
-            <KeyRound aria-hidden className="size-4" />
-            로그인
-          </button>
-        </form>
-      </section>
-    </main>
+        <Button className="mt-1" type="submit" isLoading={login.isPending}>
+          <KeyRound aria-hidden className="size-4" />
+          로그인
+        </Button>
+      </form>
+
+      <div className="mt-4 flex justify-end">
+        <Link className="text-sm font-medium text-primary hover:underline" to="/password-reset">
+          비밀번호 재설정
+        </Link>
+      </div>
+    </AuthFrame>
   );
+}
+
+function toReturnPath(routeState: RouteState | null) {
+  const from = routeState?.from;
+
+  if (!from?.pathname || from.pathname === "/login" || from.pathname === "/password-reset") {
+    return "/";
+  }
+
+  return `${from.pathname}${from.search ?? ""}${from.hash ?? ""}`;
+}
+
+function loginErrorMessage(error: Error) {
+  if (error instanceof UnauthorizedApiError) {
+    return "이메일 또는 비밀번호가 올바르지 않습니다.";
+  }
+
+  return error.message;
 }
