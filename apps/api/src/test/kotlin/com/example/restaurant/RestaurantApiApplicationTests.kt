@@ -3845,6 +3845,117 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun publicReservationCreateStoresOptionalCustomerInputsAndLinksCrm() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "reservation-optional-owner@example.com",
+            restaurantName = "Reservation Optional Table",
+            slug = "reservation-optional",
+            slotCapacity = 4,
+        )
+        val ownerCookie = loginAndExtractSessionCookie("reservation-optional-owner@example.com")
+
+        val createResult = mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "public-reserve-optional-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "restaurantId": ${fixture.restaurant.id},
+              "productId": ${fixture.productId},
+              "visitDate": "${fixture.targetDate}",
+              "startTime": "11:00:00",
+              "partySize": 2,
+              "customerName": "선택고객",
+              "customerPhone": "010-8484-0000",
+              "customerEmail": "OPTIONAL@EXAMPLE.COM",
+              "customerRequest": "초를 준비해 주세요",
+              "allergyNote": "견과류",
+              "anniversaryType": "birthday",
+              "anniversaryDate": "05-20",
+              "requestTemplateValues": ["window-seat", "birthday-dessert", "window-seat"],
+              "marketingOptIn": true
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.customerEmail") { value("optional@example.com") }
+            jsonPath("$.allergyNote") { value("견과류") }
+            jsonPath("$.anniversaryType") { value("birthday") }
+            jsonPath("$.anniversaryDate") { value("05-20") }
+            jsonPath("$.requestTemplateValues.length()") { value(2) }
+            jsonPath("$.requestTemplateValues[0]") { value("window-seat") }
+            jsonPath("$.requestTemplateValues[1]") { value("birthday-dessert") }
+            jsonPath("$.marketingOptIn") { value(true) }
+        }.andReturn()
+        val reservationId = JsonPath.read<Int>(createResult.response.contentAsString, "$.id").toLong()
+        val lookupToken = JsonPath.read<String>(createResult.response.contentAsString, "$.lookupToken")
+        val customerId = JsonPath.read<Int>(createResult.response.contentAsString, "$.customerId").toLong()
+
+        mockMvc.get("/api/public/reservations/$reservationId") {
+            header("X-Reservation-Lookup-Token", lookupToken)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.customerEmail") { value("optional@example.com") }
+            jsonPath("$.allergyNote") { value("견과류") }
+            jsonPath("$.anniversaryDate") { value("05-20") }
+            jsonPath("$.requestTemplateValues[0]") { value("window-seat") }
+            jsonPath("$.marketingOptIn") { value(true) }
+        }
+
+        mockMvc.get("/api/business/reservations/$reservationId") {
+            cookie(ownerCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.customer.id") { value(customerId.toInt()) }
+            jsonPath("$.customer.email") { value("optional@example.com") }
+            jsonPath("$.customer.allergyNote") { value("견과류") }
+            jsonPath("$.customer.anniversaryType") { value("birthday") }
+            jsonPath("$.customer.anniversaryDate") { value("05-20") }
+            jsonPath("$.customerEmail") { value("optional@example.com") }
+            jsonPath("$.allergyNote") { value("견과류") }
+            jsonPath("$.anniversaryType") { value("birthday") }
+            jsonPath("$.anniversaryDate") { value("05-20") }
+            jsonPath("$.requestTemplateValues[1]") { value("birthday-dessert") }
+            jsonPath("$.marketingOptIn") { value(true) }
+        }
+
+        mockMvc.get("/api/business/customers/$customerId") {
+            cookie(ownerCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.email") { value("optional@example.com") }
+            jsonPath("$.allergyNote") { value("견과류") }
+            jsonPath("$.anniversaryType") { value("birthday") }
+            jsonPath("$.anniversaryDate") { value("05-20") }
+            jsonPath("$.preferenceNote") { value(org.hamcrest.Matchers.nullValue()) }
+            jsonPath("$.recentReservations[0].id") { value(reservationId.toInt()) }
+            jsonPath("$.recentReservations[0].customerEmail") { value("optional@example.com") }
+            jsonPath("$.recentReservations[0].allergyNote") { value("견과류") }
+            jsonPath("$.recentReservations[0].requestTemplateValues[0]") { value("window-seat") }
+            jsonPath("$.recentReservations[0].marketingOptIn") { value(true) }
+        }
+
+        mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "public-reserve-optional-invalid")
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "restaurantId": ${fixture.restaurant.id},
+              "productId": ${fixture.productId},
+              "visitDate": "${fixture.targetDate}",
+              "startTime": "11:30:00",
+              "partySize": 1,
+              "customerName": "이메일오류",
+              "customerPhone": "010-8484-0001",
+              "customerEmail": "not-an-email"
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("VALIDATION_ERROR") }
+        }
+    }
+
+    @Test
     fun publicReservationRejectsIdempotencyMismatchStockAndBusinessHours() {
         val fixture = createPublicReservationFixture(
             ownerEmail = "reservation-reject-owner@example.com",

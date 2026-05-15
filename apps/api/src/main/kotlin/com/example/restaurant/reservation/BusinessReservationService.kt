@@ -22,6 +22,7 @@ import com.example.restaurant.restaurant.BusinessHourRepository
 import com.example.restaurant.restaurant.RestaurantEntity
 import com.example.restaurant.restaurant.RestaurantRepository
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
@@ -695,6 +696,12 @@ class BusinessReservationService(
                 noShowCount = reservationRepository.countByCustomerIdAndStatus(customer.id, ReservationStatus.NO_SHOW),
             ),
             customerRequest = customerRequest,
+            customerEmail = customerEmail,
+            allergyNote = allergyNote,
+            anniversaryType = anniversaryType,
+            anniversaryDate = anniversaryDate,
+            requestTemplateValues = requestTemplateValues(),
+            marketingOptIn = marketingOptIn,
             ownerNote = ownerNote,
             paymentStatus = paymentStatus.name,
             paymentActionRequired = paymentStatus.requiresBusinessAction(),
@@ -728,6 +735,9 @@ class BusinessReservationService(
             latestRefundAmount = latestRefund?.refundAmount,
         )
     }
+
+    private fun ReservationEntity.requestTemplateValues(): List<String> =
+        requestTemplateValuesJson?.let { objectMapper.readValue<List<String>>(it) }.orEmpty()
 
     private fun ReservationEntity.reservedInstant(time: LocalTime): Instant =
         ZonedDateTime.of(visitDate, time, ZoneId.of(restaurant.timezone)).toInstant()
@@ -792,6 +802,12 @@ class BusinessReservationService(
             "status" to status.name,
             "source" to source.name,
             "ownerNote" to ownerNote,
+            "customerEmail" to customerEmail,
+            "allergyNote" to allergyNote,
+            "anniversaryType" to anniversaryType,
+            "anniversaryDate" to anniversaryDate,
+            "requestTemplateValues" to requestTemplateValues(),
+            "marketingOptIn" to marketingOptIn,
             "paymentRequired" to paymentRequired,
             "paymentMode" to paymentMode.name,
             "paymentStatus" to paymentStatus.name,
