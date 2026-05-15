@@ -180,6 +180,11 @@ export interface HolidayRuleResponse {
   reason: string | null;
 }
 
+export interface ReservationPageSaveRequest {
+  slug?: string | null;
+  status: "PUBLIC" | "PRIVATE";
+}
+
 export interface RestaurantSettingsResponse {
   id: number;
   status: "DRAFT" | "APPROVAL_REQUESTED" | "APPROVED" | "REJECTED" | "SUSPENDED";
@@ -254,6 +259,10 @@ export interface BusinessApiClient {
     restaurantId: number,
     request: HolidayRulesSaveRequest,
   ): Promise<HolidayRuleResponse[]>;
+  updateReservationPage(
+    restaurantId: number,
+    request: ReservationPageSaveRequest,
+  ): Promise<ReservationPageSettingsResponse>;
 }
 
 export function createBusinessQueryClient() {
@@ -377,6 +386,16 @@ class HttpBusinessApiClient implements BusinessApiClient {
   saveHolidayRules(restaurantId: number, request: HolidayRulesSaveRequest) {
     return this.request<HolidayRuleResponse[]>(
       `/api/business/restaurants/${restaurantId}/holiday-rules`,
+      {
+        method: "PUT",
+        body: request,
+      },
+    );
+  }
+
+  updateReservationPage(restaurantId: number, request: ReservationPageSaveRequest) {
+    return this.request<ReservationPageSettingsResponse>(
+      `/api/business/restaurants/${restaurantId}/reservation-page`,
       {
         method: "PUT",
         body: request,
@@ -628,6 +647,38 @@ class MockBusinessApiClient implements BusinessApiClient {
     return holidayRules;
   }
 
+  async updateReservationPage(restaurantId: number, request: ReservationPageSaveRequest) {
+    const restaurant = this.readRestaurant() ?? defaultMockRestaurant();
+
+    if (restaurant.id !== restaurantId) {
+      throw new ApiError("매장을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    const slug = request.slug?.trim() || restaurant.slug || "cheongdam-main";
+    const blockers = reservationPageBlockers(restaurant, slug);
+
+    if (request.status === "PUBLIC" && blockers.length > 0) {
+      throw new ApiError(
+        `예약 페이지를 공개할 수 없습니다: ${blockers.join(", ")}`,
+        400,
+        "VALIDATION_ERROR",
+      );
+    }
+
+    const page: ReservationPageSettingsResponse = {
+      id: restaurant.reservationPage?.id ?? 1,
+      slug,
+      status: request.status,
+      publishedAt: request.status === "PUBLIC" ? new Date().toISOString() : null,
+      unpublishedAt: request.status === "PRIVATE" ? new Date().toISOString() : null,
+      publicUrl: `/r/${slug}`,
+      publishable: blockers.length === 0,
+      publishBlockers: blockers,
+    };
+    this.writeRestaurant({ ...restaurant, slug, reservationPage: page });
+    return page;
+  }
+
   private readUser() {
     const storage = getBrowserStorage();
 
@@ -853,10 +904,24 @@ function defaultMockRestaurant(): RestaurantSettingsResponse {
       publishedAt: null,
       unpublishedAt: null,
       publicUrl: "/r/cheongdam-main",
-      publishable: true,
-      publishBlockers: [],
+      publishable: false,
+      publishBlockers: ["businessHours"],
     },
     businessHours: [],
     holidayRules: [],
   };
+}
+
+function reservationPageBlockers(restaurant: RestaurantSettingsResponse, slug: string) {
+  const blockers: string[] = [];
+
+  if (restaurant.status !== "APPROVED") blockers.push("restaurantStatus");
+  if (!restaurant.name?.trim()) blockers.push("name");
+  if (!restaurant.phone?.trim()) blockers.push("phone");
+  if (!restaurant.addressLine1?.trim()) blockers.push("addressLine1");
+  if (restaurant.cuisineTypes.length === 0) blockers.push("cuisineTypes");
+  if (!slug.trim()) blockers.push("slug");
+  if (restaurant.businessHours.length === 0) blockers.push("businessHours");
+
+  return blockers;
 }

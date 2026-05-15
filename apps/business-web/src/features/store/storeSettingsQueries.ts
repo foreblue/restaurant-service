@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type BusinessHoursSaveRequest,
   type HolidayRulesSaveRequest,
+  type ReservationPageSaveRequest,
   type RestaurantSettingsResponse,
   type RestaurantSettingsUpdateRequest,
   type BusinessFilePurpose,
@@ -82,6 +83,26 @@ export function useSaveHolidayRulesMutation() {
     onSuccess: (holidayRules) => {
       queryClient.setQueryData<RestaurantSettingsResponse>(storeSettingsQueryKey, (current) =>
         current ? { ...current, holidayRules } : current,
+      );
+    },
+  });
+}
+
+export function useUpdateReservationPageMutation() {
+  const apiClient = useBusinessApiClient();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      restaurantId,
+      request,
+    }: {
+      restaurantId: number;
+      request: ReservationPageSaveRequest;
+    }) => apiClient.updateReservationPage(restaurantId, request),
+    onSuccess: (reservationPage) => {
+      queryClient.setQueryData<RestaurantSettingsResponse>(storeSettingsQueryKey, (current) =>
+        current ? { ...current, reservationPage, slug: reservationPage.slug } : current,
       );
     },
   });

@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ImageUp, Save } from "lucide-react";
+import { Copy, ExternalLink, ImageUp, QrCode, Save } from "lucide-react";
 import { type ChangeEvent, useEffect, useState } from "react";
 import {
   type FieldErrors,
@@ -20,6 +20,7 @@ import {
   useSaveHolidayRulesMutation,
   useStoreSettingsQuery,
   useUpdateStoreSettingsMutation,
+  useUpdateReservationPageMutation,
   useUploadStoreFileMutation,
 } from "@/features/store/storeSettingsQueries";
 import {
@@ -222,6 +223,250 @@ export function StoreSettingsPage() {
       </form>
 
       <StoreScheduleSection restaurant={storeSettings.data} />
+      <ReservationPolicySection restaurant={storeSettings.data} />
+    </section>
+  );
+}
+
+interface ReservationPolicyForm {
+  openDays: string;
+  cutoffHours: string;
+  minPartySize: string;
+  maxPartySize: string;
+}
+
+function ReservationPolicySection({ restaurant }: { restaurant: RestaurantSettingsResponse }) {
+  const [policy, setPolicy] = useState<ReservationPolicyForm>({
+    openDays: "30",
+    cutoffHours: "2",
+    minPartySize: "1",
+    maxPartySize: "8",
+  });
+  const [slug, setSlug] = useState(restaurant.reservationPage?.slug ?? restaurant.slug ?? "");
+  const [policyError, setPolicyError] = useState<string | null>(null);
+  const [policySaved, setPolicySaved] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const updateReservationPage = useUpdateReservationPageMutation();
+  const page = restaurant.reservationPage;
+  const previewUrl = page?.publicUrl ?? (slug ? `/r/${slug}` : "");
+  const blockerCodes = reservationPageBlockersForRestaurant(restaurant, slug);
+  const blockers = reservationPageBlockerLabels(blockerCodes);
+  const pageStatus = page ? pageStatusLabel(page.status) : "생성 전";
+  const statusText = `현재 상태: ${pageStatus}`;
+
+  function updatePolicy(patch: Partial<ReservationPolicyForm>) {
+    setPolicySaved(false);
+    setPolicy((current) => ({ ...current, ...patch }));
+  }
+
+  function handleSavePolicy() {
+    setPolicyError(null);
+    setPolicySaved(false);
+
+    const openDays = Number(policy.openDays);
+    const cutoffHours = Number(policy.cutoffHours);
+    const minPartySize = Number(policy.minPartySize);
+    const maxPartySize = Number(policy.maxPartySize);
+
+    if (!Number.isInteger(openDays) || openDays < 1 || openDays > 365) {
+      setPolicyError("예약 오픈 기간은 1일부터 365일 사이로 입력해 주세요.");
+      return;
+    }
+    if (!Number.isFinite(cutoffHours) || cutoffHours < 0 || cutoffHours > 168) {
+      setPolicyError("예약 마감 시간은 0시간부터 168시간 사이로 입력해 주세요.");
+      return;
+    }
+    if (!Number.isInteger(minPartySize) || !Number.isInteger(maxPartySize) || minPartySize < 1) {
+      setPolicyError("예약 인원 제한은 1명 이상 정수로 입력해 주세요.");
+      return;
+    }
+    if (minPartySize > maxPartySize) {
+      setPolicyError("최소 예약 인원은 최대 예약 인원보다 클 수 없습니다.");
+      return;
+    }
+
+    setPolicySaved(true);
+  }
+
+  async function handleUpdatePage(status: "PUBLIC" | "PRIVATE") {
+    setPageError(null);
+    setCopied(false);
+
+    const normalizedSlug = slug.trim();
+
+    if (!normalizedSlug) {
+      setPageError("예약 페이지 경로를 입력해 주세요.");
+      return;
+    }
+
+    if (!reservationPageSlugPattern.test(normalizedSlug)) {
+      setPageError("예약 페이지 경로는 영문 소문자, 숫자, 하이픈만 사용할 수 있습니다.");
+      return;
+    }
+
+    const currentBlockers = clientReservationPageBlockers(restaurant, normalizedSlug);
+
+    if (status === "PUBLIC" && currentBlockers.length > 0) {
+      setPageError(
+        `공개 전 필수 항목을 확인해 주세요: ${reservationPageBlockerLabels(currentBlockers).join(
+          ", ",
+        )}`,
+      );
+      return;
+    }
+
+    try {
+      await updateReservationPage.mutateAsync({
+        restaurantId: restaurant.id,
+        request: { slug: normalizedSlug, status },
+      });
+      setSlug(normalizedSlug);
+    } catch (error) {
+      setPageError(errorMessage(error));
+    }
+  }
+
+  async function handleCopyLink() {
+    setCopied(false);
+
+    if (!previewUrl) {
+      setPageError("공유할 예약 페이지 경로가 없습니다.");
+      return;
+    }
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(previewUrl);
+      }
+      setCopied(true);
+    } catch {
+      setPageError("공유 링크를 클립보드에 복사하지 못했습니다.");
+    }
+  }
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-5 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">예약 정책과 공개 페이지</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            예약 오픈/마감과 인원 제한을 확인하고 예약 페이지 공개 상태를 관리합니다.
+          </p>
+        </div>
+        <span className="rounded-md border border-border px-3 py-1 text-sm">{statusText}</span>
+      </div>
+
+      <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_280px]">
+        <div className="grid gap-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <TextFieldInline
+              id="reservation-open-days"
+              label="예약 오픈 기간"
+              value={policy.openDays}
+              onChange={(value) => updatePolicy({ openDays: value })}
+            />
+            <TextFieldInline
+              id="reservation-cutoff-hours"
+              label="예약 마감 시간"
+              value={policy.cutoffHours}
+              onChange={(value) => updatePolicy({ cutoffHours: value })}
+            />
+            <TextFieldInline
+              id="reservation-min-party"
+              label="최소 예약 인원"
+              value={policy.minPartySize}
+              onChange={(value) => updatePolicy({ minPartySize: value })}
+            />
+            <TextFieldInline
+              id="reservation-max-party"
+              label="최대 예약 인원"
+              value={policy.maxPartySize}
+              onChange={(value) => updatePolicy({ maxPartySize: value })}
+            />
+          </div>
+
+          <Field id="reservation-page-slug" label="예약 페이지 경로">
+            <Input
+              id="reservation-page-slug"
+              value={slug}
+              onChange={(event) => {
+                setSlug(event.target.value);
+                setPageError(null);
+                setCopied(false);
+              }}
+            />
+          </Field>
+
+          {blockers.length > 0 ? (
+            <Alert variant="danger" title="공개 전 필수 누락 항목">
+              {blockers.join(", ")}
+            </Alert>
+          ) : (
+            <Alert variant="success">예약 페이지를 공개할 수 있는 상태입니다.</Alert>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={handleSavePolicy}>
+              정책 저장
+            </Button>
+            <Button
+              type="button"
+              isLoading={updateReservationPage.isPending}
+              onClick={() => handleUpdatePage("PUBLIC")}
+            >
+              공개 전환
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              isLoading={updateReservationPage.isPending}
+              onClick={() => handleUpdatePage("PRIVATE")}
+            >
+              비공개 전환
+            </Button>
+            <Button type="button" variant="outline" disabled={!previewUrl} onClick={handleCopyLink}>
+              <Copy aria-hidden className="size-4" />
+              공유 링크 복사
+            </Button>
+            {previewUrl ? (
+              <a
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-input bg-card px-4 text-sm font-medium text-foreground transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+                href={previewUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <ExternalLink aria-hidden className="size-4" />
+                미리보기
+              </a>
+            ) : (
+              <Button type="button" variant="outline" disabled>
+                <ExternalLink aria-hidden className="size-4" />
+                미리보기
+              </Button>
+            )}
+          </div>
+
+          {policyError ? <Alert variant="danger">{policyError}</Alert> : null}
+          {pageError ? <Alert variant="danger">{pageError}</Alert> : null}
+          {policySaved ? (
+            <Alert variant="success">
+              예약 정책이 화면에 저장되었습니다. 실제 API 연동은 후속 계약에서 연결합니다.
+            </Alert>
+          ) : null}
+          {copied ? <Alert variant="success">공유 링크를 복사했습니다.</Alert> : null}
+        </div>
+
+        <div className="grid content-start gap-3">
+          <div className="flex aspect-square flex-col items-center justify-center gap-3 rounded-md border border-border bg-muted p-4 text-center text-sm text-muted-foreground">
+            <QrCode aria-hidden className="size-12" />
+            QR 생성 연동 준비
+          </div>
+          <p className="break-all text-sm text-muted-foreground">
+            공유 링크: {previewUrl || "예약 페이지 경로를 입력해 주세요."}
+          </p>
+        </div>
+      </div>
     </section>
   );
 }
@@ -685,6 +930,10 @@ function PublicPageNotice({
   missingRequirements: StoreRequirement[];
 }) {
   const page = restaurant.reservationPage;
+  const pageBlockers = reservationPageBlockersForRestaurant(
+    restaurant,
+    page?.slug ?? restaurant.slug ?? "",
+  );
 
   return (
     <section className="grid gap-3">
@@ -700,9 +949,9 @@ function PublicPageNotice({
         반영됩니다. 현재 예약 페이지 상태는 {page ? pageStatusLabel(page.status) : "생성 전"}입니다.
         {page?.publicUrl ? ` 공개 경로: ${page.publicUrl}` : ""}
       </Alert>
-      {page && !page.publishable && page.publishBlockers.length > 0 ? (
+      {pageBlockers.length > 0 ? (
         <Alert variant="danger" title="공개 차단 항목">
-          {page.publishBlockers.join(", ")}
+          {reservationPageBlockerLabels(pageBlockers).join(", ")}
         </Alert>
       ) : null}
     </section>
@@ -862,6 +1111,49 @@ function storeRequirements(values: StoreSettingsFormValues): StoreRequirement[] 
   ];
 }
 
+const reservationPageSlugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+const reservationPageBlockerLabelsByCode: Record<string, string> = {
+  restaurantStatus: "매장 승인 상태",
+  name: "매장명",
+  phone: "매장 전화번호",
+  addressLine1: "주소",
+  cuisineTypes: "음식 종류",
+  slug: "예약 페이지 경로",
+  businessHours: "영업시간",
+};
+
+function clientReservationPageBlockers(restaurant: RestaurantSettingsResponse, slug: string) {
+  const blockers: string[] = [];
+
+  if (restaurant.status !== "APPROVED") blockers.push("restaurantStatus");
+  if (!restaurant.name?.trim()) blockers.push("name");
+  if (!restaurant.phone?.trim()) blockers.push("phone");
+  if (!restaurant.addressLine1?.trim()) blockers.push("addressLine1");
+  if (restaurant.cuisineTypes.length === 0) blockers.push("cuisineTypes");
+  if (!slug.trim()) blockers.push("slug");
+  if (restaurant.businessHours.length === 0) blockers.push("businessHours");
+
+  return blockers;
+}
+
+function reservationPageBlockersForRestaurant(
+  restaurant: RestaurantSettingsResponse,
+  slug: string,
+) {
+  const clientBlockers = clientReservationPageBlockers(restaurant, slug);
+  const knownBlockers = new Set(Object.keys(reservationPageBlockerLabelsByCode));
+  const unknownServerBlockers =
+    restaurant.reservationPage?.publishBlockers.filter((blocker) => !knownBlockers.has(blocker)) ??
+    [];
+
+  return unique([...clientBlockers, ...unknownServerBlockers]);
+}
+
+function reservationPageBlockerLabels(blockers: string[]) {
+  return blockers.map((blocker) => reservationPageBlockerLabelsByCode[blocker] ?? blocker);
+}
+
 function pageStatusLabel(
   status: NonNullable<RestaurantSettingsResponse["reservationPage"]>["status"],
 ) {
@@ -880,6 +1172,10 @@ function pageStatusLabel(
 
 function renderableImageUrl(url: string) {
   return url.startsWith("blob:") || url.startsWith("http") || url.startsWith("/");
+}
+
+function unique<T>(items: T[]) {
+  return Array.from(new Set(items));
 }
 
 function errorMessage(error: unknown) {

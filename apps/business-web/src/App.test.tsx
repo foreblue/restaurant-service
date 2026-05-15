@@ -262,6 +262,7 @@ describe("App routing", () => {
       updateRestaurant: async () => mockRestaurant,
       saveBusinessHours: async () => [],
       saveHolidayRules: async () => [],
+      updateReservationPage: async () => mockRestaurant.reservationPage!,
     };
     window.history.pushState({}, "", "/onboarding");
 
@@ -343,5 +344,33 @@ describe("App routing", () => {
     fireEvent.click(screen.getByRole("button", { name: "영업시간/휴무 저장" }));
 
     expect(await screen.findByText("영업시간과 휴무가 저장되었습니다.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("최대 예약 인원"), {
+      target: { value: "0" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "정책 저장" }));
+
+    expect(
+      await screen.findByText("최소 예약 인원은 최대 예약 인원보다 클 수 없습니다."),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("최대 예약 인원"), {
+      target: { value: "8" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "정책 저장" }));
+
+    expect(
+      await screen.findByText(
+        "예약 정책이 화면에 저장되었습니다. 실제 API 연동은 후속 계약에서 연결합니다.",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "공개 전환" }));
+
+    expect(await screen.findByText("현재 상태: 공개")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "공유 링크 복사" }));
+
+    expect(await screen.findByText("공유 링크를 복사했습니다.")).toBeInTheDocument();
   });
 });
