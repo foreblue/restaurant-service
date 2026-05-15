@@ -18,7 +18,19 @@ import com.example.restaurant.notification.NotificationRepository
 import com.example.restaurant.notification.NotificationStatus
 import com.example.restaurant.notification.RESERVATION_CANCELLED_TEMPLATE
 import com.example.restaurant.notification.RESERVATION_CONFIRMED_TEMPLATE
+import com.example.restaurant.payment.CancellationPolicyEntity
+import com.example.restaurant.payment.CancellationPolicyRepository
+import com.example.restaurant.payment.PaymentEntity
+import com.example.restaurant.payment.PaymentRepository
+import com.example.restaurant.payment.PaymentStatus
+import com.example.restaurant.payment.PaymentType
+import com.example.restaurant.refund.RefundEntity
+import com.example.restaurant.refund.RefundReason
+import com.example.restaurant.refund.RefundRepository
+import com.example.restaurant.refund.RefundRequesterRole
+import com.example.restaurant.refund.RefundStatus
 import com.example.restaurant.reservation.CustomerRepository
+import com.example.restaurant.reservation.ReservationPaymentMode
 import com.example.restaurant.reservation.ReservationRepository
 import com.example.restaurant.reservation.ReservationSource
 import com.example.restaurant.reservation.ReservationStatus
@@ -143,6 +155,15 @@ class RestaurantApiApplicationTests {
     @Autowired
     private lateinit var auditLogRepository: AuditLogRepository
 
+    @Autowired
+    private lateinit var cancellationPolicyRepository: CancellationPolicyRepository
+
+    @Autowired
+    private lateinit var paymentRepository: PaymentRepository
+
+    @Autowired
+    private lateinit var refundRepository: RefundRepository
+
     @Test
     fun contextLoads() {
         assertThat(mysql.isRunning).isEqualTo(true)
@@ -161,6 +182,103 @@ class RestaurantApiApplicationTests {
 
         assertThat(versions).contains("1")
         assertThat(schemaVersion).isEqualTo("1")
+    }
+
+    @Test
+    fun paymentRefundAndCancellationPolicyRepositoriesPersistDomainFoundation() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "payment-domain-owner@example.com",
+            restaurantName = "Payment Domain Table",
+            slug = "payment-domain",
+        )
+        val created = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "payment-domain-reservation-1",
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "결제도메인",
+            customerPhone = "010-1919-0000",
+        )
+        val product = reservationProductRepository.findById(fixture.productId).orElseThrow()
+        val reservation = reservationRepository.findBusinessReservationById(created.id)
+            ?: error("Reservation should exist.")
+
+        val policy = cancellationPolicyRepository.saveAndFlush(
+            CancellationPolicyEntity(
+                restaurant = fixture.restaurant,
+                reservationProduct = product,
+                name = "표준 취소 정책",
+                rulesJson = """[{"beforeVisitHours":48,"refundRate":100},{"beforeVisitHours":24,"refundRate":50}]""",
+                noShowRuleJson = """{"refundRate":0,"feeAmount":30000}""",
+                restaurantCancelRefundRate = 100,
+                effectiveFrom = Instant.parse("2026-05-15T00:00:00Z"),
+            ),
+        )
+        val policySnapshot = """{"policyId":${policy.id},"rules":[{"beforeVisitHours":48,"refundRate":100}]}"""
+        reservation.paymentRequired = true
+        reservation.paymentMode = ReservationPaymentMode.DEPOSIT
+        reservation.paymentStatus = PaymentStatus.REQUIRES_PAYMENT
+        reservation.paymentDueAt = Instant.parse("2026-05-15T01:00:00Z")
+        reservation.cancellationPolicySnapshotJson = policySnapshot
+        reservationRepository.saveAndFlush(reservation)
+
+        val payment = paymentRepository.saveAndFlush(
+            PaymentEntity(
+                restaurant = fixture.restaurant,
+                reservation = reservation,
+                customer = reservation.customer,
+                paymentType = PaymentType.DEPOSIT,
+                status = PaymentStatus.PAID,
+                amount = 30_000,
+                refundedAmount = 10_000,
+                pgProviderKey = "fake-pg",
+                pgPaymentId = "pg-payment-domain-1",
+                pgOrderId = "order-payment-domain-1",
+                idempotencyKey = "payment-domain-payment-1",
+                paidAt = Instant.parse("2026-05-15T00:10:00Z"),
+            ),
+        )
+        val refund = refundRepository.saveAndFlush(
+            RefundEntity(
+                payment = payment,
+                reservation = reservation,
+                restaurant = fixture.restaurant,
+                status = RefundStatus.SUCCEEDED,
+                refundAmount = 10_000,
+                nonRefundableAmount = 20_000,
+                reason = RefundReason.CUSTOMER_CANCEL,
+                policySnapshotJson = policySnapshot,
+                policyRuleId = "rule_48h_100",
+                pgRefundId = "pg-refund-domain-1",
+                idempotencyKey = "payment-domain-refund-1",
+                requestedByRole = RefundRequesterRole.CUSTOMER,
+                succeededAt = Instant.parse("2026-05-15T00:20:00Z"),
+            ),
+        )
+
+        val reloadedReservation = reservationRepository.findById(created.id).orElseThrow()
+        assertThat(reloadedReservation.paymentRequired).isTrue()
+        assertThat(reloadedReservation.paymentMode).isEqualTo(ReservationPaymentMode.DEPOSIT)
+        assertThat(reloadedReservation.paymentStatus).isEqualTo(PaymentStatus.REQUIRES_PAYMENT)
+        assertThat(JsonPath.read<Int>(reloadedReservation.cancellationPolicySnapshotJson, "$.policyId").toLong())
+            .isEqualTo(policy.id)
+        assertThat(
+            cancellationPolicyRepository
+                .findByReservationProductIdAndActiveOrderByEffectiveFromDesc(fixture.productId, true)
+                .map { it.id },
+        ).containsExactly(policy.id)
+        assertThat(paymentRepository.findByReservationIdOrderByCreatedAtAsc(created.id).single().id)
+            .isEqualTo(payment.id)
+        assertThat(paymentRepository.findByIdempotencyKey("payment-domain-payment-1")?.status)
+            .isEqualTo(PaymentStatus.PAID)
+        assertThat(refundRepository.findByPaymentIdOrderByCreatedAtAsc(payment.id).single().id)
+            .isEqualTo(refund.id)
+        assertThat(refundRepository.findByIdempotencyKey("payment-domain-refund-1")?.status)
+            .isEqualTo(RefundStatus.SUCCEEDED)
+        assertThat(
+            jdbcTemplate.queryForList("show tables", String::class.java)
+                .filter { it.contains("settlement", ignoreCase = true) },
+        ).isEmpty()
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.example.restaurant.reservation
 
+import com.example.restaurant.payment.PaymentStatus
 import com.example.restaurant.reservationproduct.ReservationProductEntity
 import com.example.restaurant.restaurant.RestaurantEntity
 import jakarta.persistence.Column
@@ -76,6 +77,23 @@ class ReservationEntity(
 
     @Column(name = "no_show_at")
     var noShowAt: Instant? = null,
+
+    @Column(name = "payment_required", nullable = false)
+    var paymentRequired: Boolean = false,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "payment_mode", nullable = false, length = 50)
+    var paymentMode: ReservationPaymentMode = ReservationPaymentMode.FREE,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "payment_status", nullable = false, length = 50)
+    var paymentStatus: PaymentStatus = PaymentStatus.NOT_REQUIRED,
+
+    @Column(name = "payment_due_at")
+    var paymentDueAt: Instant? = null,
+
+    @Column(name = "cancellation_policy_snapshot", columnDefinition = "json")
+    var cancellationPolicySnapshotJson: String? = null,
 
     @Column(name = "idempotency_key", nullable = false, length = 128)
     val idempotencyKey: String,
