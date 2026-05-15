@@ -38,6 +38,8 @@ import com.example.restaurant.refund.RefundReason
 import com.example.restaurant.refund.RefundRepository
 import com.example.restaurant.refund.RefundRequesterRole
 import com.example.restaurant.refund.RefundStatus
+import com.example.restaurant.reservation.CustomerEntity
+import com.example.restaurant.reservation.ReservationEntity
 import com.example.restaurant.reservation.CustomerRepository
 import com.example.restaurant.reservation.ReservationPaymentMode
 import com.example.restaurant.reservation.ReservationRepository
@@ -101,6 +103,7 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RestController
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.ZoneId
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -3550,6 +3553,228 @@ class RestaurantApiApplicationTests {
 
         assertThat(auditLogRepository.findByTargetTypeAndTargetId("customer", customer.id).map { it.action })
             .contains("CUSTOMER_RESERVATIONS_VIEWED", "CUSTOMER_FLAGS_UPDATED")
+    }
+
+    @Test
+    fun businessOwnerCanMergeDuplicateCustomersAndAnonymizePrivacyData() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "customer-merge-owner@example.com",
+            restaurantName = "Customer Merge Table",
+            slug = "customer-merge",
+            slotCapacity = 6,
+        )
+        val ownerCookie = loginAndExtractSessionCookie("customer-merge-owner@example.com")
+        val targetResult = mockMvc.post("/api/business/customers") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "기준고객",
+              "phoneNumber": "010-2929-0000",
+              "email": "target@example.com"
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val targetCustomerId = JsonPath.read<Int>(targetResult.response.contentAsString, "$.id").toLong()
+        val sourceCustomer = customerRepository.saveAndFlush(
+            CustomerEntity(
+                restaurant = fixture.restaurant,
+                name = "중복고객",
+                phoneNumber = "01029290001",
+                email = "target@example.com",
+                allergyNote = "새우",
+                preferenceNote = "안쪽 좌석",
+                vip = true,
+                caution = true,
+                cautionReason = "응대 이력 확인",
+            ),
+        )
+        val product = reservationProductRepository.findById(fixture.productId).orElseThrow()
+        val sourceReservation = reservationRepository.saveAndFlush(
+            ReservationEntity(
+                restaurant = fixture.restaurant,
+                reservationProduct = product,
+                customer = sourceCustomer,
+                reservationNumber = "MERGE-${sourceCustomer.id}",
+                visitDate = fixture.targetDate,
+                startTime = LocalTime.parse("12:00:00"),
+                endTime = LocalTime.parse("12:30:00"),
+                partySize = 2,
+                status = ReservationStatus.CONFIRMED,
+                source = ReservationSource.MANUAL_PHONE,
+                customerRequest = "기존 예약 요청",
+                idempotencyKey = "customer-merge-source-${sourceCustomer.id}",
+                idempotencyRequestHash = TokenHash.sha256Hex("customer-merge-source-${sourceCustomer.id}"),
+            ),
+        )
+        val noteResult = mockMvc.post("/api/business/customers/${sourceCustomer.id}/notes") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"noteType":"GENERAL","content":"이전 고객 메모"}"""
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val movedNoteId = JsonPath.read<Int>(noteResult.response.contentAsString, "$.id").toLong()
+
+        mockMvc.get("/api/business/customers/duplicate-candidates") {
+            cookie(ownerCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.totalGroups") { value(1) }
+            jsonPath("$.groups[0].matchType") { value("EMAIL") }
+            jsonPath("$.groups[0].matchKeyMasked") { value("t***t@example.com") }
+            jsonPath("$.groups[0].customers.length()") { value(2) }
+            jsonPath("$.groups[0].customers[0].id") { value(targetCustomerId.toInt()) }
+            jsonPath("$.groups[0].customers[1].id") { value(sourceCustomer.id.toInt()) }
+            jsonPath("$.groups[0].customers[1].noteCount") { value(1) }
+        }
+
+        mockMvc.post("/api/business/customers/merge") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "targetCustomerId": $targetCustomerId,
+              "sourceCustomerIds": [${sourceCustomer.id}],
+              "reason": "동일 고객",
+              "confirmIrreversible": false
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("VALIDATION_ERROR") }
+        }
+
+        mockMvc.post("/api/business/customers/merge") {
+            cookie(ownerCookie)
+            header("User-Agent", "customer-merge-test")
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "targetCustomerId": $targetCustomerId,
+              "sourceCustomerIds": [${sourceCustomer.id}],
+              "reason": "동일 고객",
+              "confirmIrreversible": true
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.targetCustomerId") { value(targetCustomerId.toInt()) }
+            jsonPath("$.mergedCustomerIds[0]") { value(sourceCustomer.id.toInt()) }
+            jsonPath("$.movedReservationCount") { value(1) }
+            jsonPath("$.movedNoteCount") { value(1) }
+            jsonPath("$.anonymizedCustomerIds[0]") { value(sourceCustomer.id.toInt()) }
+            jsonPath("$.warning") { value("고객 병합은 되돌릴 수 없으며, 병합된 고객의 개인정보는 익명화됩니다.") }
+        }
+
+        assertThat(reservationRepository.findById(sourceReservation.id).orElseThrow().customer.id)
+            .isEqualTo(targetCustomerId)
+
+        mockMvc.get("/api/business/customers/$targetCustomerId") {
+            cookie(ownerCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.name") { value("기준고객") }
+            jsonPath("$.email") { value("target@example.com") }
+            jsonPath("$.allergyNote") { value("새우") }
+            jsonPath("$.preferenceNote") { value("안쪽 좌석") }
+            jsonPath("$.vip") { value(true) }
+            jsonPath("$.caution") { value(true) }
+            jsonPath("$.notes.length()") { value(1) }
+            jsonPath("$.notes[0].id") { value(movedNoteId.toInt()) }
+            jsonPath("$.recentReservations[0].id") { value(sourceReservation.id.toInt()) }
+            jsonPath("$.stats.reservationCount") { value(1) }
+        }
+
+        mockMvc.get("/api/business/customers/${sourceCustomer.id}") {
+            cookie(ownerCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.name") { value("병합된 고객") }
+            jsonPath("$.phoneNumber") { value(org.hamcrest.Matchers.startsWith("91000000")) }
+            jsonPath("$.email") { value(org.hamcrest.Matchers.nullValue()) }
+            jsonPath("$.allergyNote") { value(org.hamcrest.Matchers.nullValue()) }
+            jsonPath("$.notes.length()") { value(0) }
+            jsonPath("$.stats.reservationCount") { value(0) }
+        }
+
+        mockMvc.get("/api/business/customers/duplicate-candidates") {
+            cookie(ownerCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.totalGroups") { value(0) }
+        }
+
+        mockMvc.post("/api/business/customers/$targetCustomerId/anonymize") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reason":"고객 삭제 요청","confirmIrreversible":true}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.customerId") { value(targetCustomerId.toInt()) }
+            jsonPath("$.anonymized") { value(true) }
+            jsonPath("$.anonymizedName") { value("익명 고객") }
+            jsonPath("$.anonymizedPhoneMasked") { value("900-****-${targetCustomerId.toString().padStart(12, '0').takeLast(4)}") }
+            jsonPath("$.deletedNoteCount") { value(1) }
+            jsonPath("$.warning") { value("개인정보 익명화는 되돌릴 수 없으며, 예약 운영에 필요한 최소 이력만 유지됩니다.") }
+        }
+
+        mockMvc.get("/api/business/customers/$targetCustomerId") {
+            cookie(ownerCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.name") { value("익명 고객") }
+            jsonPath("$.phoneNumber") { value(org.hamcrest.Matchers.startsWith("90000000")) }
+            jsonPath("$.email") { value(org.hamcrest.Matchers.nullValue()) }
+            jsonPath("$.allergyNote") { value(org.hamcrest.Matchers.nullValue()) }
+            jsonPath("$.preferenceNote") { value(org.hamcrest.Matchers.nullValue()) }
+            jsonPath("$.vip") { value(false) }
+            jsonPath("$.caution") { value(false) }
+            jsonPath("$.notes.length()") { value(0) }
+            jsonPath("$.stats.reservationCount") { value(1) }
+        }
+
+        mockMvc.get("/api/business/reservations/${sourceReservation.id}") {
+            cookie(ownerCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.customer.id") { value(targetCustomerId.toInt()) }
+            jsonPath("$.customer.name") { value("익명 고객") }
+            jsonPath("$.customer.phoneNumber") { value(org.hamcrest.Matchers.startsWith("90000000")) }
+        }
+
+        val otherOwner = createBusinessUser("customer-merge-other@example.com")
+        val otherCookie = loginAndExtractSessionCookie(otherOwner.email)
+        createApprovedRestaurantForSettings(otherOwner, "Other Customer Merge Table", "customer-merge-other")
+        mockMvc.post("/api/business/customers/$targetCustomerId/anonymize") {
+            cookie(otherCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"confirmIrreversible":true}"""
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+        mockMvc.post("/api/business/customers/merge") {
+            cookie(otherCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "targetCustomerId": $targetCustomerId,
+              "sourceCustomerIds": [${sourceCustomer.id}],
+              "confirmIrreversible": true
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("customer", targetCustomerId).map { it.action })
+            .contains("CUSTOMER_MERGED", "CUSTOMER_ANONYMIZED")
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("customer", sourceCustomer.id).map { it.action })
+            .contains("CUSTOMER_MERGE_SOURCE_ANONYMIZED")
     }
 
     @Test

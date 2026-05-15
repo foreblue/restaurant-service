@@ -29,6 +29,25 @@ class BusinessCustomerController(
             query = q,
         )
 
+    @GetMapping("/customers/duplicate-candidates")
+    fun duplicateCandidates(
+        servletRequest: HttpServletRequest,
+    ): BusinessCustomerDuplicateCandidatesResponse =
+        businessCustomerService.duplicateCandidates(
+            principal = BusinessAuthContext.principal(servletRequest),
+        )
+
+    @PostMapping("/customers/merge")
+    fun merge(
+        servletRequest: HttpServletRequest,
+        @RequestBody request: BusinessCustomerMergeRequest,
+    ): BusinessCustomerMergeResponse =
+        businessCustomerService.merge(
+            principal = BusinessAuthContext.principal(servletRequest),
+            request = request,
+            metadata = servletRequest.toMetadata(),
+        )
+
     @GetMapping("/customers/{customerId}")
     fun detail(
         servletRequest: HttpServletRequest,
@@ -83,6 +102,19 @@ class BusinessCustomerController(
         @RequestBody request: BusinessCustomerFlagUpdateRequest,
     ): BusinessCustomerFlagsResponse =
         businessCustomerService.updateFlags(
+            principal = BusinessAuthContext.principal(servletRequest),
+            customerId = customerId,
+            request = request,
+            metadata = servletRequest.toMetadata(),
+        )
+
+    @PostMapping("/customers/{customerId}/anonymize")
+    fun anonymize(
+        servletRequest: HttpServletRequest,
+        @PathVariable customerId: Long,
+        @RequestBody request: BusinessCustomerAnonymizeRequest,
+    ): BusinessCustomerAnonymizeResponse =
+        businessCustomerService.anonymize(
             principal = BusinessAuthContext.principal(servletRequest),
             customerId = customerId,
             request = request,
