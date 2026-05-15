@@ -6,6 +6,7 @@ import com.example.restaurant.auth.TokenHash
 import com.example.restaurant.availability.AvailabilityService
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.example.restaurant.inventory.SeatInventoryService
 import com.example.restaurant.notification.NotificationService
 import com.example.restaurant.payment.CancellationPolicyEntity
 import com.example.restaurant.payment.CancellationPolicyRepository
@@ -45,6 +46,7 @@ class PublicReservationService(
     private val reservationPageRepository: ReservationPageRepository,
     private val customerRepository: CustomerRepository,
     private val reservationRepository: ReservationRepository,
+    private val seatInventoryService: SeatInventoryService,
     private val lookupTokenService: ReservationLookupTokenService,
     private val notificationService: NotificationService,
     private val paymentPolicyResolver: ReservationPaymentPolicyResolver,
@@ -71,6 +73,7 @@ class PublicReservationService(
             productId = normalized.productId,
             dateValue = normalized.visitDate.toString(),
             partySizeValue = normalized.partySize,
+            applyInventory = false,
         ).times.firstOrNull { it.startTime == normalized.startTime && it.available }
             ?: throw ApiException(ErrorCode.CONFLICT, "예약 가능한 시간이 아닙니다.")
 
@@ -90,16 +93,6 @@ class PublicReservationService(
 
         reservationRepository.findByIdempotencyKey(normalized.idempotencyKey)?.let {
             return it.requireSameRequest(normalized).toResponse()
-        }
-
-        val reservedPartySize = reservationRepository.sumPartySizeBySlot(
-            productId = product.id,
-            visitDate = normalized.visitDate,
-            startTime = normalized.startTime,
-            statuses = activeReservationStatuses(),
-        )
-        if (reservedPartySize + normalized.partySize > availableSlot.remainingCapacity) {
-            throw ApiException(ErrorCode.CONFLICT, "예약 가능한 재고가 없습니다.")
         }
 
         val customer = customerRepository.findByRestaurantIdAndPhoneNumber(
@@ -141,6 +134,7 @@ class PublicReservationService(
                 idempotencyRequestHash = normalized.requestHash,
             ),
         )
+        seatInventoryService.assignReservation(reservation)
         notificationService.recordReservationConfirmed(reservation)
 
         return reservation.toResponse()

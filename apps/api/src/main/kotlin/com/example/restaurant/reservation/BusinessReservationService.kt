@@ -9,6 +9,7 @@ import com.example.restaurant.auth.TokenHash
 import com.example.restaurant.availability.AvailabilityService
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.example.restaurant.inventory.SeatInventoryService
 import com.example.restaurant.notification.NotificationService
 import com.example.restaurant.payment.PaymentRepository
 import com.example.restaurant.refund.RefundOperationResponse
@@ -48,6 +49,7 @@ class BusinessReservationService(
     private val reservationProductRepository: ReservationProductRepository,
     private val customerRepository: CustomerRepository,
     private val reservationRepository: ReservationRepository,
+    private val seatInventoryService: SeatInventoryService,
     private val auditLogService: AuditLogService,
     private val auditLogRepository: AuditLogRepository,
     private val paymentRepository: PaymentRepository,
@@ -72,6 +74,7 @@ class BusinessReservationService(
             productId = normalized.productId,
             dateValue = normalized.visitDate.toString(),
             partySizeValue = normalized.partySize,
+            applyInventory = false,
         ).times.firstOrNull { it.startTime == normalized.startTime && it.available }
             ?: throw ApiException(ErrorCode.CONFLICT, "예약 가능한 시간이 아닙니다.")
 
@@ -82,16 +85,6 @@ class BusinessReservationService(
             product.status != ReservationProductStatus.ACTIVE
         ) {
             throw ApiException(ErrorCode.NOT_FOUND, "예약 상품을 찾을 수 없습니다.")
-        }
-
-        val reservedPartySize = reservationRepository.sumPartySizeBySlot(
-            productId = product.id,
-            visitDate = normalized.visitDate,
-            startTime = normalized.startTime,
-            statuses = activeReservationStatuses(),
-        )
-        if (reservedPartySize + normalized.partySize > availableSlot.remainingCapacity) {
-            throw ApiException(ErrorCode.CONFLICT, "예약 가능한 재고가 없습니다.")
         }
 
         val customer = customerRepository.findByRestaurantIdAndPhoneNumber(
@@ -127,6 +120,7 @@ class BusinessReservationService(
                 idempotencyRequestHash = TokenHash.sha256Hex(idempotencyKey),
             ),
         )
+        seatInventoryService.assignReservation(reservation)
         auditLogService.record(
             actorUser = owner,
             actorRole = "OWNER",
@@ -159,6 +153,8 @@ class BusinessReservationService(
             productId = normalized.productId,
             dateValue = normalized.visitDate.toString(),
             partySizeValue = normalized.partySize,
+            excludedReservationId = reservation.id,
+            applyInventory = false,
         ).times.firstOrNull { it.startTime == normalized.startTime && it.available }
             ?: throw ApiException(ErrorCode.CONFLICT, "예약 가능한 시간이 아닙니다.")
 
@@ -168,21 +164,6 @@ class BusinessReservationService(
             throw ApiException(ErrorCode.NOT_FOUND, "예약 상품을 찾을 수 없습니다.")
         }
 
-        val reservedPartySize = reservationRepository.sumPartySizeBySlot(
-            productId = product.id,
-            visitDate = normalized.visitDate,
-            startTime = normalized.startTime,
-            statuses = activeReservationStatuses(),
-        )
-        val currentPartySizeInTarget = reservation.currentPartySizeInTarget(
-            productId = product.id,
-            visitDate = normalized.visitDate,
-            startTime = normalized.startTime,
-        )
-        if (reservedPartySize - currentPartySizeInTarget + normalized.partySize > availableSlot.remainingCapacity) {
-            throw ApiException(ErrorCode.CONFLICT, "예약 가능한 재고가 없습니다.")
-        }
-
         val before = reservation.auditSnapshot()
         reservation.reservationProduct = product
         reservation.visitDate = normalized.visitDate
@@ -190,6 +171,7 @@ class BusinessReservationService(
         reservation.endTime = availableSlot.endTime
         reservation.partySize = normalized.partySize
         reservation.status = ReservationStatus.MODIFIED
+        seatInventoryService.assignReservation(reservation)
         auditReservationChange(owner, "RESERVATION_UPDATED", reservation, before, metadata)
         notificationService.recordReservationUpdated(reservation)
 
@@ -760,22 +742,6 @@ class BusinessReservationService(
             throw ApiException(ErrorCode.CONFLICT, message)
         }
     }
-
-    private fun ReservationEntity.currentPartySizeInTarget(
-        productId: Long,
-        visitDate: LocalDate,
-        startTime: LocalTime,
-    ): Int =
-        if (
-            status in activeReservationStatuses() &&
-            reservationProduct.id == productId &&
-            this.visitDate == visitDate &&
-            this.startTime == startTime
-        ) {
-            partySize
-        } else {
-            0
-        }
 
     private fun activeReservationStatuses(): List<ReservationStatus> =
         listOf(ReservationStatus.CONFIRMED, ReservationStatus.MODIFIED)
