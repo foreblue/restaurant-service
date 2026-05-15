@@ -411,6 +411,24 @@ describe("App routing", () => {
       updateBusinessReservationOperationNote: async () => {
         throw new Error("not implemented in this test");
       },
+      getBusinessReservationRefundPreview: async () => ({
+        reservationId: 1,
+        reservationNumber: "RSV-1",
+        cancelActor: "RESTAURANT",
+        paymentStatus: "NOT_REQUIRED",
+        paymentStatusLabel: "결제 없음",
+        refundStatus: "NOT_REQUIRED",
+        refundStatusLabel: "환불 없음",
+        refundStatusTone: "muted",
+        paidAmount: 0,
+        expectedRefundAmount: 0,
+        nonRefundableAmount: 0,
+        currency: "KRW",
+        policySummary: "결제 금액이 없어 자동 환불 예정 금액이 없습니다.",
+        actionRequired: false,
+        adminContactRequired: false,
+        settlementNotice: "정산금 계산이나 지급 스케줄은 이 화면에서 제공하지 않습니다.",
+      }),
       listBusinessPayments: async () => ({
         summary: {
           totalCount: 0,
@@ -714,6 +732,21 @@ describe("App routing", () => {
         "고객의 민감정보, 결제정보, 불필요한 개인정보는 운영 메모에 입력하지 마세요.",
       ),
     ).toBeInTheDocument();
+    expect(await screen.findByText("환불 운영 상태")).toBeInTheDocument();
+    expect(await screen.findByText("예상 환불")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "매장 취소" }));
+
+    expect(await screen.findByRole("dialog", { name: "예약 취소" })).toBeInTheDocument();
+    expect(screen.getByText("취소 환불 영향")).toBeInTheDocument();
+    expect(
+      screen.getAllByText("매장 취소 시 결제 금액 전액 환불을 기본으로 안내합니다.").length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("정산금 계산이나 지급 스케줄은 이 화면에서 제공하지 않습니다.").length,
+    ).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "예약 취소 닫기" }));
 
     fireEvent.change(screen.getByPlaceholderText("전화 확인 내용, 좌석 배정 참고사항 등"), {
       target: { value: "창가 자리 전화 확인" },
@@ -793,6 +826,11 @@ describe("App routing", () => {
     expect(await screen.findByText("박취소")).toBeInTheDocument();
     expect(screen.getByText("환불 대기")).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: "박취소 상세 열기" }));
+
+    expect((await screen.findAllByText("고객 취소")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("환불 처리중")).length).toBeGreaterThan(0);
+
     fireEvent.click(screen.getByRole("button", { name: "필터 초기화" }));
     fireEvent.change(screen.getByLabelText("상품"), {
       target: { value: "6002" },
@@ -862,6 +900,12 @@ describe("App routing", () => {
     expect(screen.getByText("PG 승인 거절")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "REF-9203 상세 보기" }));
     expect(await screen.findByRole("heading", { name: "환불 상세" })).toBeInTheDocument();
+    expect(
+      screen.getByText("플랫폼 관리자 문의 필요: 환불 실패 또는 보정 대상입니다."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("정산금 계산이나 지급 스케줄은 이 화면에서 제공하지 않습니다."),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "필터 초기화" }));
 
