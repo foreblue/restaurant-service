@@ -58,6 +58,12 @@ class ReservationEntity(
     @Column(name = "customer_request", length = 500)
     val customerRequest: String? = null,
 
+    @Column(name = "cancelled_at")
+    var cancelledAt: Instant? = null,
+
+    @Column(name = "cancel_reason", length = 255)
+    var cancelReason: String? = null,
+
     @Column(name = "idempotency_key", nullable = false, length = 128)
     val idempotencyKey: String,
 
