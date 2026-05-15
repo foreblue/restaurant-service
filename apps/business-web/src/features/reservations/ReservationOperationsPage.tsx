@@ -24,6 +24,7 @@ import {
   useCreateManualBusinessReservationMutation,
   useBusinessReservationCalendarQuery,
   useBusinessReservationDetailQuery,
+  useBusinessReservationRefundPreviewQuery,
   useBusinessReservationsQuery,
   useMarkBusinessReservationNoShowMutation,
   useUpdateBusinessReservationOperationNoteMutation,
@@ -36,6 +37,7 @@ import {
   type BusinessReservationDetailResponse,
   type BusinessReservationListItemResponse,
   type BusinessReservationNoShowRequest,
+  type BusinessReservationRefundPreviewResponse,
   type BusinessReservationStatus,
 } from "@/shared/api/businessApiClient";
 
@@ -176,6 +178,10 @@ export function ReservationOperationsPage() {
   const reservationsQuery = useBusinessReservationsQuery(listQuery);
   const calendarQueryResult = useBusinessReservationCalendarQuery(calendarQuery);
   const detailQuery = useBusinessReservationDetailQuery(selectedReservationId);
+  const refundPreviewQuery = useBusinessReservationRefundPreviewQuery(
+    selectedReservationId,
+    selectedReservationId !== null,
+  );
   const auditLogsQuery = useBusinessAuditLogsQuery(
     {
       targetType: "reservation",
@@ -683,7 +689,11 @@ export function ReservationOperationsPage() {
             ownerNoteApiError={updateOperationNote.error}
             ownerNoteError={ownerNoteError}
             ownerNoteValue={selectedOwnerNoteValue}
+            refundPreview={refundPreviewQuery.data}
+            refundPreviewError={refundPreviewQuery.error}
             reservationId={selectedReservationId}
+            isRefundPreviewError={refundPreviewQuery.isError}
+            isRefundPreviewPending={refundPreviewQuery.isPending && selectedReservationId !== null}
             onClose={() => setSelectedReservationId(null)}
             onOwnerNoteChange={updateOwnerNoteDraft}
             onSaveOwnerNote={handleSaveOwnerNote}
@@ -801,6 +811,16 @@ export function ReservationOperationsPage() {
           noShowReason={noShowReason}
           productOptions={manualProductOptions}
           reservation={actionReservation}
+          refundPreview={
+            actionReservation.id === selectedReservationId ? refundPreviewQuery.data : undefined
+          }
+          refundPreviewError={refundPreviewQuery.error}
+          isRefundPreviewError={
+            actionReservation.id === selectedReservationId && refundPreviewQuery.isError
+          }
+          isRefundPreviewPending={
+            actionReservation.id === selectedReservationId && refundPreviewQuery.isPending
+          }
           onCancel={closeReservationAction}
           onCancelReasonChange={(value) => {
             setActionFormError(null);
@@ -994,6 +1014,10 @@ function ReservationActionDialog({
   noShowForce,
   formError,
   apiError,
+  refundPreview,
+  refundPreviewError,
+  isRefundPreviewError,
+  isRefundPreviewPending,
   isSaving,
   onEditChange,
   onCancelReasonChange,
@@ -1011,6 +1035,10 @@ function ReservationActionDialog({
   noShowForce: boolean;
   formError: string | null;
   apiError: unknown;
+  refundPreview: BusinessReservationRefundPreviewResponse | undefined;
+  refundPreviewError: unknown;
+  isRefundPreviewError: boolean;
+  isRefundPreviewPending: boolean;
   isSaving: boolean;
   onEditChange: (patch: Partial<ReservationEditFormValues>) => void;
   onCancelReasonChange: (value: string) => void;
@@ -1094,9 +1122,16 @@ function ReservationActionDialog({
         {action === "cancel" ? (
           <div className="grid gap-3">
             <Alert variant="danger">
-              매장 취소는 예약을 되돌릴 수 없습니다. 결제/환불 영향 확인은 후속 결제 화면에서
-              처리합니다.
+              매장 취소는 예약을 되돌릴 수 없습니다. 환불이 필요한 결제 건은 전액 환불 예정 금액을
+              확인한 뒤 취소 처리하세요.
             </Alert>
+            <RefundImpactSummary
+              error={refundPreviewError}
+              isError={isRefundPreviewError}
+              isPending={isRefundPreviewPending}
+              preview={refundPreview}
+              title="취소 환불 영향"
+            />
             <Field id="action-cancel-reason" label="취소 사유">
               <textarea
                 className="min-h-24 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60"
@@ -1168,6 +1203,10 @@ function ReservationDetailPanel({
   ownerNoteApiError,
   ownerNoteError,
   ownerNoteValue,
+  refundPreview,
+  refundPreviewError,
+  isRefundPreviewError,
+  isRefundPreviewPending,
   onClose,
   onOwnerNoteChange,
   onSaveOwnerNote,
@@ -1186,6 +1225,10 @@ function ReservationDetailPanel({
   ownerNoteApiError: unknown;
   ownerNoteError: string | null;
   ownerNoteValue: string;
+  refundPreview: BusinessReservationRefundPreviewResponse | undefined;
+  refundPreviewError: unknown;
+  isRefundPreviewError: boolean;
+  isRefundPreviewPending: boolean;
   onClose: () => void;
   onOwnerNoteChange: (reservationId: number, value: string) => void;
   onSaveOwnerNote: (reservation: BusinessReservationDetailResponse) => void;
@@ -1345,6 +1388,13 @@ function ReservationDetailPanel({
             <Flag label={paymentStatusLabel(detail.paymentStatus)} />
             {detail.paymentActionRequired ? <Flag label="후속 확인 필요" tone="danger" /> : null}
           </div>
+          <RefundImpactSummary
+            error={refundPreviewError}
+            isError={isRefundPreviewError}
+            isPending={isRefundPreviewPending}
+            preview={refundPreview}
+            title="환불 운영 상태"
+          />
         </section>
 
         <section className="grid gap-2 border-t border-border pt-4">
@@ -1405,6 +1455,58 @@ function ReservationDetailPanel({
         </section>
       </div>
     </section>
+  );
+}
+
+function RefundImpactSummary({
+  title,
+  preview,
+  isPending,
+  isError,
+  error,
+}: {
+  title: string;
+  preview: BusinessReservationRefundPreviewResponse | undefined;
+  isPending: boolean;
+  isError: boolean;
+  error: unknown;
+}) {
+  if (isPending) {
+    return <Panel title="환불 예상 정보를 불러오는 중입니다." />;
+  }
+
+  if (isError) {
+    return <Alert variant="danger">{errorMessage(error)}</Alert>;
+  }
+
+  if (!preview) {
+    return null;
+  }
+
+  const cancelActorLabel = preview.cancelActor === "RESTAURANT" ? "매장 취소" : "고객 취소";
+
+  return (
+    <div className="grid gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-sm font-semibold">{title}</h4>
+        <StatusBadge label={preview.refundStatusLabel} tone={preview.refundStatusTone} />
+      </div>
+      <dl className="grid gap-2 text-sm">
+        <DetailRow label="취소 주체" value={cancelActorLabel} />
+        <DetailRow label="결제 상태" value={preview.paymentStatusLabel} />
+        <DetailRow label="결제 금액" value={formatPrice(preview.paidAmount)} />
+        <DetailRow label="예상 환불" value={formatPrice(preview.expectedRefundAmount)} />
+        <DetailRow label="환불 제외" value={formatPrice(preview.nonRefundableAmount)} />
+      </dl>
+      {preview.expectedRefundAmount > 0 && preview.cancelActor === "RESTAURANT" ? (
+        <Alert variant="success">매장 취소 시 결제 금액 전액 환불을 기본으로 안내합니다.</Alert>
+      ) : null}
+      {preview.adminContactRequired ? (
+        <Alert variant="danger">플랫폼 관리자 문의 필요: 환불 실패 또는 보정 대상입니다.</Alert>
+      ) : null}
+      <Alert>{preview.policySummary}</Alert>
+      <p className="text-xs text-muted-foreground">{preview.settlementNotice}</p>
+    </div>
   );
 }
 
@@ -1627,6 +1729,14 @@ function dayOfMonth(value: string) {
 
 function formatTime(value: string) {
   return value.slice(0, 5);
+}
+
+function formatPrice(value: number) {
+  return new Intl.NumberFormat("ko-KR", {
+    style: "currency",
+    currency: "KRW",
+    maximumFractionDigits: 0,
+  }).format(value);
 }
 
 function paymentStatusLabel(value: string) {

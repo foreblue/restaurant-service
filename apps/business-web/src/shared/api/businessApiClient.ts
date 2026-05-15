@@ -441,6 +441,25 @@ export interface BusinessReservationOperationNoteRequest {
   ownerNote?: string | null;
 }
 
+export interface BusinessReservationRefundPreviewResponse {
+  reservationId: number;
+  reservationNumber: string;
+  cancelActor: "CUSTOMER" | "RESTAURANT";
+  paymentStatus: string;
+  paymentStatusLabel: string;
+  refundStatus: string;
+  refundStatusLabel: string;
+  refundStatusTone: string;
+  paidAmount: number;
+  expectedRefundAmount: number;
+  nonRefundableAmount: number;
+  currency: string;
+  policySummary: string;
+  actionRequired: boolean;
+  adminContactRequired: boolean;
+  settlementNotice: string;
+}
+
 export interface BusinessAuditLogListQuery {
   targetType?: string | null;
   targetId?: number | null;
@@ -656,6 +675,9 @@ export interface BusinessApiClient {
     reservationId: number,
     request: BusinessReservationOperationNoteRequest,
   ): Promise<BusinessReservationDetailResponse>;
+  getBusinessReservationRefundPreview(
+    reservationId: number,
+  ): Promise<BusinessReservationRefundPreviewResponse>;
   listBusinessAuditLogs(query: BusinessAuditLogListQuery): Promise<BusinessAuditLogListResponse>;
   listBusinessPayments(query: BusinessPaymentListQuery): Promise<BusinessPaymentListResponse>;
   listBusinessRefunds(query: BusinessRefundListQuery): Promise<BusinessRefundListResponse>;
@@ -926,6 +948,12 @@ class HttpBusinessApiClient implements BusinessApiClient {
         method: "PUT",
         body: request,
       },
+    );
+  }
+
+  getBusinessReservationRefundPreview(reservationId: number) {
+    return this.request<BusinessReservationRefundPreviewResponse>(
+      `/api/public/reservations/${reservationId}/refund-preview`,
     );
   }
 
@@ -1558,6 +1586,16 @@ class MockBusinessApiClient implements BusinessApiClient {
     return toMockBusinessReservationDetail(updatedReservation, {
       ownerNote,
     });
+  }
+
+  async getBusinessReservationRefundPreview(reservationId: number) {
+    const reservation = this.readBusinessReservations().find((item) => item.id === reservationId);
+
+    if (!reservation) {
+      throw new ApiError("예약을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    return toMockBusinessReservationRefundPreview(reservation);
   }
 
   async listBusinessAuditLogs(query: BusinessAuditLogListQuery) {
@@ -2287,7 +2325,7 @@ function defaultMockBusinessReservations(): BusinessReservationListItemResponse[
       phoneMasked: "010-****-5678",
       hasCustomerRequest: true,
       hasOwnerNote: false,
-      paymentStatus: "NOT_REQUIRED",
+      paymentStatus: "PAID",
       paymentActionRequired: false,
     }),
     toMockBusinessReservation({
@@ -2524,6 +2562,96 @@ function defaultMockBusinessRefunds(): BusinessRefundListItemResponse[] {
       actionRequired: true,
     },
   ];
+}
+
+function toMockBusinessReservationRefundPreview(
+  reservation: BusinessReservationListItemResponse,
+): BusinessReservationRefundPreviewResponse {
+  const payment = defaultMockBusinessPayments().find(
+    (item) => item.reservationId === reservation.id,
+  );
+  const existingRefund = defaultMockBusinessRefunds().find(
+    (item) => item.reservationId === reservation.id,
+  );
+  const refund =
+    isCancelledReservation(reservation) || reservation.status === "NO_SHOW"
+      ? existingRefund
+      : undefined;
+  const paidAmount = payment?.amount ?? 0;
+  const refundAmount = refund?.refundAmount ?? refundableAmountForPayment(payment);
+  const cancelActor = reservation.status === "CANCELLED_BY_CUSTOMER" ? "CUSTOMER" : "RESTAURANT";
+
+  if (refund) {
+    return {
+      reservationId: reservation.id,
+      reservationNumber: reservation.reservationNumber,
+      cancelActor,
+      paymentStatus: reservation.paymentStatus,
+      paymentStatusLabel: mockPaymentStatusLabel(reservation.paymentStatus),
+      refundStatus: refund.status,
+      refundStatusLabel: refund.statusLabel,
+      refundStatusTone: refund.statusTone,
+      paidAmount,
+      expectedRefundAmount: refundAmount,
+      nonRefundableAmount: Math.max(paidAmount - refundAmount, 0),
+      currency: refund.currency,
+      policySummary:
+        refund.status === "FAILED"
+          ? "환불 실패 건은 플랫폼 관리자 확인 후 PG 또는 운영 절차로 보정합니다."
+          : refund.status === "PENDING"
+            ? "환불 요청이 접수되어 PG 처리 결과를 기다리는 상태입니다."
+            : "환불이 완료된 상태입니다.",
+      actionRequired: refund.actionRequired,
+      adminContactRequired: refund.status === "FAILED" || refund.actionRequired,
+      settlementNotice: "정산금 계산이나 지급 스케줄은 이 화면에서 제공하지 않습니다.",
+    };
+  }
+
+  return {
+    reservationId: reservation.id,
+    reservationNumber: reservation.reservationNumber,
+    cancelActor,
+    paymentStatus: reservation.paymentStatus,
+    paymentStatusLabel: mockPaymentStatusLabel(reservation.paymentStatus),
+    refundStatus: refundAmount > 0 ? "EXPECTED" : "NOT_REQUIRED",
+    refundStatusLabel: refundAmount > 0 ? "환불 예상" : "환불 없음",
+    refundStatusTone: refundAmount > 0 ? "warning" : "muted",
+    paidAmount,
+    expectedRefundAmount: refundAmount,
+    nonRefundableAmount: Math.max(paidAmount - refundAmount, 0),
+    currency: payment?.currency ?? "KRW",
+    policySummary:
+      refundAmount > 0
+        ? "매장 취소는 결제 금액 전액 환불을 기본으로 안내합니다."
+        : "결제 금액이 없거나 현장 결제 예약이라 자동 환불 예정 금액이 없습니다.",
+    actionRequired: false,
+    adminContactRequired: false,
+    settlementNotice: "정산금 계산이나 지급 스케줄은 이 화면에서 제공하지 않습니다.",
+  };
+}
+
+function refundableAmountForPayment(payment: BusinessPaymentListItemResponse | undefined) {
+  if (!payment) {
+    return 0;
+  }
+  if (payment.status === "PAID" || payment.status === "REFUND_PENDING") {
+    return payment.amount;
+  }
+
+  return 0;
+}
+
+function mockPaymentStatusLabel(value: string) {
+  const labels: Record<string, string> = {
+    NOT_REQUIRED: "결제 없음",
+    OFFLINE: "현장 결제",
+    PENDING_PAYMENT: "결제 대기",
+    PAID: "결제 완료",
+    REFUND_PENDING: "환불 대기",
+    CARD_GUARANTEE: "카드 보증",
+  };
+
+  return labels[value] ?? value;
 }
 
 function toMockBusinessReservation({

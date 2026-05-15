@@ -15,6 +15,10 @@ import { useBusinessApiClient } from "@/shared/api/useBusinessApiClient";
 
 export const businessReservationsQueryKey = ["business", "reservations"] as const;
 export const businessAuditLogsQueryKey = ["business", "audit-logs"] as const;
+export const businessReservationRefundPreviewQueryKey = [
+  "business",
+  "reservation-refund-preview",
+] as const;
 
 export function useBusinessReservationsQuery(query: BusinessReservationListQuery) {
   const apiClient = useBusinessApiClient();
@@ -41,6 +45,19 @@ export function useBusinessReservationDetailQuery(reservationId: number | null) 
     queryKey: [...businessReservationsQueryKey, "detail", reservationId],
     queryFn: () => apiClient.getBusinessReservationDetail(reservationId ?? 0),
     enabled: reservationId !== null,
+  });
+}
+
+export function useBusinessReservationRefundPreviewQuery(
+  reservationId: number | null,
+  enabled = true,
+) {
+  const apiClient = useBusinessApiClient();
+
+  return useQuery({
+    queryKey: [...businessReservationRefundPreviewQueryKey, reservationId],
+    queryFn: () => apiClient.getBusinessReservationRefundPreview(reservationId ?? 0),
+    enabled: enabled && reservationId !== null,
   });
 }
 

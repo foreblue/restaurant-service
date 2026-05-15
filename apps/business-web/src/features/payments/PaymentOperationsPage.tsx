@@ -430,11 +430,20 @@ function RefundDetailPanel({
           {refund.failureMessage ?? "등록된 실패 사유가 없습니다."}
         </p>
       </div>
+      {refund.status === "PENDING" ? (
+        <Alert>환불 처리중입니다. PG 처리 결과가 확정될 때까지 상태를 재확인하세요.</Alert>
+      ) : null}
+      {refund.status === "FAILED" ? (
+        <Alert variant="danger">플랫폼 관리자 문의 필요: 환불 실패 또는 보정 대상입니다.</Alert>
+      ) : null}
       {refund.actionRequired ? (
         <div className="flex flex-wrap gap-1.5">
           <Flag label="확인 필요" tone="danger" />
         </div>
       ) : null}
+      <p className="text-xs text-muted-foreground">
+        정산금 계산이나 지급 스케줄은 이 화면에서 제공하지 않습니다.
+      </p>
     </section>
   );
 }
