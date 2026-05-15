@@ -396,6 +396,18 @@ describe("App routing", () => {
         noShowAt: null,
         auditLogs: [],
       }),
+      updateBusinessReservation: async () => {
+        throw new Error("not implemented in this test");
+      },
+      cancelBusinessReservation: async () => {
+        throw new Error("not implemented in this test");
+      },
+      completeBusinessReservation: async () => {
+        throw new Error("not implemented in this test");
+      },
+      markBusinessReservationNoShow: async () => {
+        throw new Error("not implemented in this test");
+      },
     };
     window.history.pushState({}, "", "/onboarding");
 
@@ -674,7 +686,29 @@ describe("App routing", () => {
     expect(await screen.findByText("010-1234-5678")).toBeInTheDocument();
     expect(await screen.findByText("창가 좌석 요청, 알레르기 확인 필요")).toBeInTheDocument();
     expect(screen.getByText("VIP/주의 고객 표시는 CRM 단계에서 연결됩니다.")).toBeInTheDocument();
-    expect(screen.getByText("변경, 취소, 방문 완료, 노쇼 처리 가능")).toBeInTheDocument();
+    expect(screen.getAllByText("변경, 취소, 방문 완료, 노쇼 처리 가능").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "예약 변경" }));
+
+    expect(await screen.findByRole("dialog", { name: "예약 변경" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("변경 방문 시간"), {
+      target: { value: "12:00" },
+    });
+    fireEvent.change(screen.getByLabelText("변경 인원"), {
+      target: { value: "3" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "변경 저장" }));
+
+    expect(await screen.findByText("예약이 변경되었습니다.")).toBeInTheDocument();
+    expect((await screen.findAllByText("변경")).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "방문 완료" }));
+
+    expect(await screen.findByRole("dialog", { name: "방문 완료 처리" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "방문 완료 처리" }));
+
+    expect(await screen.findByText("방문 완료 처리되었습니다.")).toBeInTheDocument();
+    expect((await screen.findAllByText("방문 완료")).length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: "수동 예약 등록" }));
 
@@ -702,6 +736,17 @@ describe("App routing", () => {
     expect(await screen.findByText("수동 예약이 등록되었습니다.")).toBeInTheDocument();
     expect((await screen.findAllByText("한전화")).length).toBeGreaterThan(0);
 
+    fireEvent.click(screen.getByRole("button", { name: "매장 취소" }));
+
+    expect(await screen.findByRole("dialog", { name: "예약 취소" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("취소 사유"), {
+      target: { value: "매장 점검" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "취소 처리" }));
+
+    expect(await screen.findByText("예약이 취소되었습니다.")).toBeInTheDocument();
+    expect((await screen.findAllByText("매장 취소")).length).toBeGreaterThan(0);
+
     fireEvent.change(screen.getByPlaceholderText("예약번호, 고객명, 연락처, 상품명"), {
       target: { value: "박취소" },
     });
@@ -720,6 +765,19 @@ describe("App routing", () => {
 
     expect(await screen.findByText("이수정")).toBeInTheDocument();
     expect(screen.getAllByText("런치 코스").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "이수정 상세 열기" }));
+    fireEvent.click(await screen.findByRole("button", { name: "노쇼" }));
+
+    expect(await screen.findByRole("dialog", { name: "노쇼 처리" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("노쇼 사유"), {
+      target: { value: "연락 없이 미방문" },
+    });
+    fireEvent.click(screen.getByLabelText("예약 시작 전 처리 강제"));
+    fireEvent.click(screen.getByRole("button", { name: "노쇼 처리" }));
+
+    expect(await screen.findByText("노쇼 처리되었습니다.")).toBeInTheDocument();
+    expect((await screen.findAllByText("노쇼")).length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: "월" }));
 

@@ -421,6 +421,22 @@ export interface BusinessManualReservationCreateRequest {
   customerRequest?: string | null;
 }
 
+export interface BusinessReservationUpdateRequest {
+  productId?: number | null;
+  visitDate?: string | null;
+  startTime?: string | null;
+  partySize?: number | null;
+}
+
+export interface BusinessReservationCancelRequest {
+  reason?: string | null;
+}
+
+export interface BusinessReservationNoShowRequest {
+  reason?: string | null;
+  force?: boolean | null;
+}
+
 export interface RestaurantSettingsResponse {
   id: number;
   status: "DRAFT" | "APPROVAL_REQUESTED" | "APPROVED" | "REJECTED" | "SUSPENDED";
@@ -525,6 +541,19 @@ export interface BusinessApiClient {
   getBusinessReservationDetail(reservationId: number): Promise<BusinessReservationDetailResponse>;
   createManualBusinessReservation(
     request: BusinessManualReservationCreateRequest,
+  ): Promise<BusinessReservationDetailResponse>;
+  updateBusinessReservation(
+    reservationId: number,
+    request: BusinessReservationUpdateRequest,
+  ): Promise<BusinessReservationDetailResponse>;
+  cancelBusinessReservation(
+    reservationId: number,
+    request: BusinessReservationCancelRequest,
+  ): Promise<BusinessReservationDetailResponse>;
+  completeBusinessReservation(reservationId: number): Promise<BusinessReservationDetailResponse>;
+  markBusinessReservationNoShow(
+    reservationId: number,
+    request: BusinessReservationNoShowRequest,
   ): Promise<BusinessReservationDetailResponse>;
 }
 
@@ -744,6 +773,45 @@ class HttpBusinessApiClient implements BusinessApiClient {
     });
   }
 
+  updateBusinessReservation(reservationId: number, request: BusinessReservationUpdateRequest) {
+    return this.request<BusinessReservationDetailResponse>(
+      `/api/business/reservations/${reservationId}`,
+      {
+        method: "PUT",
+        body: request,
+      },
+    );
+  }
+
+  cancelBusinessReservation(reservationId: number, request: BusinessReservationCancelRequest) {
+    return this.request<BusinessReservationDetailResponse>(
+      `/api/business/reservations/${reservationId}/cancel`,
+      {
+        method: "POST",
+        body: request,
+      },
+    );
+  }
+
+  completeBusinessReservation(reservationId: number) {
+    return this.request<BusinessReservationDetailResponse>(
+      `/api/business/reservations/${reservationId}/complete`,
+      {
+        method: "POST",
+      },
+    );
+  }
+
+  markBusinessReservationNoShow(reservationId: number, request: BusinessReservationNoShowRequest) {
+    return this.request<BusinessReservationDetailResponse>(
+      `/api/business/reservations/${reservationId}/no-show`,
+      {
+        method: "POST",
+        body: request,
+      },
+    );
+  }
+
   private async request<T>(path: string, init: { method?: string; body?: unknown } = {}) {
     const requestInit: RequestInit = {
       method: init.method ?? "GET",
@@ -790,11 +858,14 @@ class MockBusinessApiClient implements BusinessApiClient {
     "restaurant-business-web.mock-reservation-products";
   private readonly manualReservationsStorageKey =
     "restaurant-business-web.mock-manual-reservations";
+  private readonly reservationOverridesStorageKey =
+    "restaurant-business-web.mock-reservation-overrides";
   private memoryUser: BusinessUser | null = null;
   private memoryApplication: RestaurantApplicationResponse | null = null;
   private memoryRestaurant: RestaurantSettingsResponse | null = null;
   private memoryReservationProducts: ReservationProductResponse[] | null = null;
   private memoryManualReservations: BusinessReservationListItemResponse[] | null = null;
+  private memoryReservationOverrides: BusinessReservationListItemResponse[] | null = null;
   private nextFileId = 3001;
 
   async getCurrentUser() {
@@ -1256,8 +1327,99 @@ class MockBusinessApiClient implements BusinessApiClient {
     });
   }
 
+  async updateBusinessReservation(
+    reservationId: number,
+    request: BusinessReservationUpdateRequest,
+  ) {
+    const reservation = this.findMockBusinessReservationForAction(reservationId);
+    const normalized = normalizeBusinessReservationUpdateRequest(request, reservation);
+    const product = this.findMockReservationProduct(normalized.productId);
+
+    if (!product) {
+      throw new ApiError("예약 상품을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+    if (normalized.startTime < "10:00:00" || normalized.startTime >= "22:00:00") {
+      throw new ApiError("예약 가능한 시간이 아닙니다.", 409, "CONFLICT");
+    }
+    if (normalized.partySize > product.maxPartySize) {
+      throw new ApiError("예약 가능한 재고가 없습니다.", 409, "CONFLICT");
+    }
+
+    const updatedReservation = patchMockBusinessReservation(reservation, {
+      status: "MODIFIED",
+      visitDate: normalized.visitDate,
+      startTime: normalized.startTime,
+      endTime: addMinutes(normalized.startTime, 90),
+      partySize: normalized.partySize,
+      productId: product.id,
+      productName: product.name,
+    });
+
+    this.writeBusinessReservation(updatedReservation);
+    return toMockBusinessReservationDetail(updatedReservation);
+  }
+
+  async cancelBusinessReservation(
+    reservationId: number,
+    request: BusinessReservationCancelRequest,
+  ) {
+    const reservation = this.findMockBusinessReservationForAction(reservationId);
+    const reason = normalizeBusinessReservationCancelRequest(request);
+    const cancelledReservation = patchMockBusinessReservation(reservation, {
+      status: "CANCELLED_BY_RESTAURANT",
+    });
+
+    this.writeBusinessReservation(cancelledReservation);
+    return toMockBusinessReservationDetail(cancelledReservation, {
+      cancelReason: reason,
+    });
+  }
+
+  async completeBusinessReservation(reservationId: number) {
+    const reservation = this.findMockBusinessReservationForAction(reservationId);
+    const completedReservation = patchMockBusinessReservation(reservation, {
+      status: "COMPLETED",
+    });
+
+    this.writeBusinessReservation(completedReservation);
+    return toMockBusinessReservationDetail(completedReservation);
+  }
+
+  async markBusinessReservationNoShow(
+    reservationId: number,
+    request: BusinessReservationNoShowRequest,
+  ) {
+    const reservation = this.findMockBusinessReservationForAction(reservationId);
+    normalizeBusinessReservationNoShowRequest(request);
+    const noShowReservation = patchMockBusinessReservation(reservation, {
+      status: "NO_SHOW",
+    });
+
+    this.writeBusinessReservation(noShowReservation);
+    return toMockBusinessReservationDetail(noShowReservation);
+  }
+
   private readBusinessReservations() {
-    return [...defaultMockBusinessReservations(), ...this.readManualReservations()];
+    const overrides = new Map(
+      this.readReservationOverrides().map((reservation) => [reservation.id, reservation]),
+    );
+
+    return [...defaultMockBusinessReservations(), ...this.readManualReservations()].map(
+      (reservation) => overrides.get(reservation.id) ?? reservation,
+    );
+  }
+
+  private findMockBusinessReservationForAction(reservationId: number) {
+    const reservation = this.readBusinessReservations().find((item) => item.id === reservationId);
+
+    if (!reservation) {
+      throw new ApiError("예약을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+    if (!isActionableBusinessReservation(reservation.status)) {
+      throw new ApiError("현재 상태에서는 처리할 수 없는 예약입니다.", 409, "CONFLICT");
+    }
+
+    return reservation;
   }
 
   private findMockReservationProduct(productId: number) {
@@ -1305,6 +1467,54 @@ class MockBusinessApiClient implements BusinessApiClient {
     } else {
       this.memoryManualReservations = reservations;
     }
+  }
+
+  private readReservationOverrides() {
+    const storage = getBrowserStorage();
+
+    if (!storage) {
+      return this.memoryReservationOverrides ?? [];
+    }
+
+    const raw = storage.getItem(this.reservationOverridesStorageKey);
+
+    if (!raw) {
+      return [];
+    }
+
+    try {
+      return JSON.parse(raw) as BusinessReservationListItemResponse[];
+    } catch {
+      storage.removeItem(this.reservationOverridesStorageKey);
+      return [];
+    }
+  }
+
+  private writeReservationOverrides(reservations: BusinessReservationListItemResponse[]) {
+    const storage = getBrowserStorage();
+
+    if (storage) {
+      storage.setItem(this.reservationOverridesStorageKey, JSON.stringify(reservations));
+    } else {
+      this.memoryReservationOverrides = reservations;
+    }
+  }
+
+  private writeBusinessReservation(reservation: BusinessReservationListItemResponse) {
+    const manualReservations = this.readManualReservations();
+    const manualIndex = manualReservations.findIndex((item) => item.id === reservation.id);
+
+    if (manualIndex >= 0) {
+      const nextManualReservations = [...manualReservations];
+      nextManualReservations[manualIndex] = reservation;
+      this.writeManualReservations(sortMockBusinessReservations(nextManualReservations));
+      return;
+    }
+
+    this.writeReservationOverrides([
+      ...this.readReservationOverrides().filter((item) => item.id !== reservation.id),
+      reservation,
+    ]);
   }
 
   private readUser() {
@@ -1960,7 +2170,11 @@ function toMockBusinessReservation({
 
 function toMockBusinessReservationDetail(
   reservation: BusinessReservationListItemResponse,
-  overrides: { customerPhone?: string; customerRequest?: string | null } = {},
+  overrides: {
+    customerPhone?: string;
+    customerRequest?: string | null;
+    cancelReason?: string | null;
+  } = {},
 ): BusinessReservationDetailResponse {
   return {
     id: reservation.id,
@@ -1995,7 +2209,13 @@ function toMockBusinessReservationDetail(
     cancelledAt: isCancelledReservation(reservation)
       ? toDateTimeIsoString(reservation.visitDate, reservation.startTime)
       : null,
-    cancelReason: isCancelledReservation(reservation) ? "고객 요청" : null,
+    cancelReason:
+      overrides.cancelReason ??
+      (isCancelledReservation(reservation)
+        ? reservation.status === "CANCELLED_BY_RESTAURANT"
+          ? "매장 사유"
+          : "고객 요청"
+        : null),
     completedAt:
       reservation.status === "COMPLETED"
         ? toDateTimeIsoString(reservation.visitDate, reservation.endTime)
@@ -2101,6 +2321,94 @@ function normalizeManualReservationRequest(request: BusinessManualReservationCre
     customerPhone,
     customerRequest,
   };
+}
+
+function normalizeBusinessReservationUpdateRequest(
+  request: BusinessReservationUpdateRequest,
+  reservation: BusinessReservationListItemResponse,
+) {
+  const productId = request.productId ?? reservation.productId;
+  const visitDate = request.visitDate?.trim() || reservation.visitDate;
+  const startTime = normalizeTime(request.startTime) ?? reservation.startTime;
+  const partySize = request.partySize ?? reservation.partySize;
+
+  if (!Number.isInteger(productId) || productId < 1) {
+    throw new ApiError("예약 상품을 선택해 주세요.", 400, "VALIDATION_ERROR");
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(visitDate)) {
+    throw new ApiError("방문일을 입력해 주세요.", 400, "VALIDATION_ERROR");
+  }
+  if (!/^\d{2}:\d{2}:\d{2}$/.test(startTime)) {
+    throw new ApiError("방문 시간을 입력해 주세요.", 400, "VALIDATION_ERROR");
+  }
+  if (!Number.isInteger(partySize) || partySize < 1) {
+    throw new ApiError("인원은 1명 이상이어야 합니다.", 400, "VALIDATION_ERROR");
+  }
+
+  return {
+    productId,
+    visitDate,
+    startTime,
+    partySize,
+  };
+}
+
+function normalizeBusinessReservationCancelRequest(request: BusinessReservationCancelRequest) {
+  const reason = request.reason?.trim() ?? "";
+
+  if (!reason) {
+    throw new ApiError("취소 사유를 입력해 주세요.", 400, "VALIDATION_ERROR");
+  }
+  if (reason.length > 255) {
+    throw new ApiError("취소 사유는 255자 이하여야 합니다.", 400, "VALIDATION_ERROR");
+  }
+
+  return reason;
+}
+
+function normalizeBusinessReservationNoShowRequest(request: BusinessReservationNoShowRequest) {
+  const reason = request.reason?.trim() ?? "";
+
+  if (reason.length > 255) {
+    throw new ApiError("노쇼 사유는 255자 이하여야 합니다.", 400, "VALIDATION_ERROR");
+  }
+
+  return {
+    reason: reason || null,
+    force: Boolean(request.force),
+  };
+}
+
+function patchMockBusinessReservation(
+  reservation: BusinessReservationListItemResponse,
+  patch: Partial<
+    Pick<
+      BusinessReservationListItemResponse,
+      "status" | "visitDate" | "startTime" | "endTime" | "partySize" | "productId" | "productName"
+    >
+  >,
+) {
+  const status = patch.status ?? reservation.status;
+  const visitDate = patch.visitDate ?? reservation.visitDate;
+  const startTime = patch.startTime ?? reservation.startTime;
+  const endTime = patch.endTime ?? reservation.endTime;
+
+  return {
+    ...reservation,
+    ...patch,
+    status,
+    statusLabel: businessReservationStatusLabel(status),
+    statusTone: businessReservationStatusTone(status),
+    visitDate,
+    startTime,
+    endTime,
+    reservedStartAt: toDateTimeIsoString(visitDate, startTime),
+    reservedEndAt: toDateTimeIsoString(visitDate, endTime),
+  } satisfies BusinessReservationListItemResponse;
+}
+
+function isActionableBusinessReservation(status: BusinessReservationStatus) {
+  return status === "CONFIRMED" || status === "MODIFIED";
 }
 
 function nextBusinessReservationId(reservations: BusinessReservationListItemResponse[]) {
