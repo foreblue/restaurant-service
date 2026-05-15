@@ -52,7 +52,7 @@ class RestaurantApplicationService(
                 status = RestaurantStatus.DRAFT,
             ),
         )
-        applyRestaurantFields(restaurant, request)
+        applyRestaurantFields(restaurant, request, owner)
         owner.linkedRestaurantId = restaurant.id
         owner.linkedRestaurantStatus = restaurant.status.name
 
@@ -62,7 +62,7 @@ class RestaurantApplicationService(
                 status = RestaurantApplicationStatus.DRAFT,
             ),
         )
-        applyApplicationFields(application, request)
+        applyApplicationFields(application, request, owner)
 
         return application.toResponse()
     }
@@ -83,13 +83,14 @@ class RestaurantApplicationService(
         applicationId: Long,
         request: RestaurantApplicationSaveRequest,
     ): RestaurantApplicationResponse {
+        val owner = owner(principal)
         val application = ownedApplication(principal, applicationId)
 
         when (application.status) {
             RestaurantApplicationStatus.DRAFT,
             RestaurantApplicationStatus.REJECTED -> {
-                applyRestaurantFields(application.restaurant, request)
-                applyApplicationFields(application, request)
+                applyRestaurantFields(application.restaurant, request, owner)
+                applyApplicationFields(application, request, owner)
             }
             RestaurantApplicationStatus.SUBMITTED -> {
                 application.managerEmail = request.managerEmail?.trimToNull()
@@ -311,6 +312,7 @@ class RestaurantApplicationService(
     private fun applyRestaurantFields(
         restaurant: RestaurantEntity,
         request: RestaurantApplicationSaveRequest,
+        owner: BusinessUserEntity,
     ) {
         restaurant.name = request.restaurantName.trimToNull()
         restaurant.description = request.restaurantDescription.trimToNull()
@@ -322,18 +324,19 @@ class RestaurantApplicationService(
             ?.mapNotNull { it.trimToNull() }
             ?.takeIf { it.isNotEmpty() }
             ?.let { objectMapper.writeValueAsString(it) }
-        restaurant.coverImageFile = fileOrNull(request.coverImageFileId, StoredFilePurpose.RESTAURANT_COVER_IMAGE)
+        restaurant.coverImageFile = fileOrNull(request.coverImageFileId, StoredFilePurpose.RESTAURANT_COVER_IMAGE, owner)
     }
 
     private fun applyApplicationFields(
         application: RestaurantApplicationEntity,
         request: RestaurantApplicationSaveRequest,
+        owner: BusinessUserEntity,
     ) {
         application.businessRegistrationNo = request.businessRegistrationNo.trimToNull()
         application.businessName = request.businessName.trimToNull()
         application.representativeName = request.representativeName.trimToNull()
         application.businessAddress = request.businessAddress.trimToNull()
-        application.businessLicenseFile = fileOrNull(request.businessLicenseFileId, StoredFilePurpose.BUSINESS_LICENSE)
+        application.businessLicenseFile = fileOrNull(request.businessLicenseFileId, StoredFilePurpose.BUSINESS_LICENSE, owner)
         application.managerName = request.managerName.trimToNull()
         application.managerPhone = request.managerPhone.trimToNull()
         application.managerEmail = request.managerEmail.trimToNull()
@@ -345,6 +348,7 @@ class RestaurantApplicationService(
     private fun fileOrNull(
         fileId: Long?,
         purpose: StoredFilePurpose,
+        owner: BusinessUserEntity,
     ): StoredFileEntity? {
         if (fileId == null) {
             return null
@@ -353,6 +357,9 @@ class RestaurantApplicationService(
             .orElseThrow { ApiException(ErrorCode.NOT_FOUND, "파일을 찾을 수 없습니다.") }
         if (file.purpose != purpose) {
             throw ApiException(ErrorCode.BAD_REQUEST, "파일 용도가 올바르지 않습니다.")
+        }
+        if (file.createdBy?.id != owner.id) {
+            throw ApiException(ErrorCode.NOT_FOUND, "파일을 찾을 수 없습니다.")
         }
         return file
     }

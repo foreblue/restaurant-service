@@ -56,7 +56,11 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Bean
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
+import org.springframework.mock.web.MockMultipartFile
 import org.springframework.security.crypto.password.PasswordEncoder
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
@@ -722,6 +726,115 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun businessFileUploadPersistsMetadataAndCanBeLinkedToApplication() {
+        val owner = createBusinessUser("file-upload-owner@example.com")
+        val sessionCookie = loginAndExtractSessionCookie(owner.email)
+
+        val imageResult = mockMvc.perform(
+            multipart("/api/business/files")
+                .file(MockMultipartFile("file", "cover.jpg", "image/jpeg", jpegBytes()))
+                .param("purpose", "restaurant_image")
+                .cookie(sessionCookie),
+        ).andExpect(status().isCreated())
+            .andExpect(jsonPath("$.purpose").value("restaurant_image"))
+            .andExpect(jsonPath("$.visibility").value("PUBLIC"))
+            .andExpect(jsonPath("$.originalFilename").value("cover.jpg"))
+            .andReturn()
+        val imageFileId = JsonPath.read<Int>(imageResult.response.contentAsString, "$.id").toLong()
+
+        val licenseResult = mockMvc.perform(
+            multipart("/api/business/files")
+                .file(MockMultipartFile("file", "license.pdf", "application/pdf", pdfBytes()))
+                .param("purpose", "business_license")
+                .cookie(sessionCookie),
+        ).andExpect(status().isCreated())
+            .andExpect(jsonPath("$.purpose").value("business_license"))
+            .andExpect(jsonPath("$.visibility").value("PRIVATE"))
+            .andExpect(jsonPath("$.publicUrl").value(org.hamcrest.Matchers.nullValue()))
+            .andReturn()
+        val licenseFileId = JsonPath.read<Int>(licenseResult.response.contentAsString, "$.id").toLong()
+
+        val imageFile = storedFileRepository.findById(imageFileId).orElseThrow()
+        val licenseFile = storedFileRepository.findById(licenseFileId).orElseThrow()
+        assertThat(imageFile.createdBy?.id).isEqualTo(owner.id)
+        assertThat(imageFile.purpose).isEqualTo(StoredFilePurpose.RESTAURANT_COVER_IMAGE)
+        assertThat(imageFile.visibility).isEqualTo(StoredFileVisibility.PUBLIC)
+        assertThat(licenseFile.createdBy?.id).isEqualTo(owner.id)
+        assertThat(licenseFile.purpose).isEqualTo(StoredFilePurpose.BUSINESS_LICENSE)
+        assertThat(licenseFile.visibility).isEqualTo(StoredFileVisibility.PRIVATE)
+
+        mockMvc.post("/api/business/restaurant-applications") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = fullRestaurantApplicationJson(
+                businessRegistrationNo = "7171717171",
+                coverImageFileId = imageFileId,
+                businessLicenseFileId = licenseFileId,
+                managerEmail = "uploaded-file-owner@example.com",
+            )
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.restaurant.coverImageFileId") { value(imageFileId.toInt()) }
+            jsonPath("$.businessLicenseFileId") { value(licenseFileId.toInt()) }
+        }
+    }
+
+    @Test
+    fun businessFileUploadRejectsUnsupportedTypeAndOversizedFiles() {
+        val owner = createBusinessUser("file-upload-reject@example.com")
+        val sessionCookie = loginAndExtractSessionCookie(owner.email)
+
+        mockMvc.perform(
+            multipart("/api/business/files")
+                .file(MockMultipartFile("file", "cover.txt", "text/plain", "plain".encodeToByteArray()))
+                .param("purpose", "restaurant_image")
+                .cookie(sessionCookie),
+        ).andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+
+        mockMvc.perform(
+            multipart("/api/business/files")
+                .file(MockMultipartFile("file", "cover.jpg", "image/jpeg", ByteArray(5 * 1024 * 1024 + 1)))
+                .param("purpose", "restaurant_image")
+                .cookie(sessionCookie),
+        ).andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+    }
+
+    @Test
+    fun restaurantApplicationRejectsFilesUploadedByAnotherOwner() {
+        val owner = createBusinessUser("file-owner-check@example.com")
+        val otherOwner = createBusinessUser("file-other-owner@example.com")
+        val sessionCookie = loginAndExtractSessionCookie(owner.email)
+        val otherCoverImage = createStoredFile(
+            storageKey = "restaurant-cover-images/other-owner.webp",
+            purpose = StoredFilePurpose.RESTAURANT_COVER_IMAGE,
+            visibility = StoredFileVisibility.PUBLIC,
+            createdBy = otherOwner,
+        )
+        val businessLicense = createStoredFile(
+            storageKey = "business-licenses/owner-license.pdf",
+            purpose = StoredFilePurpose.BUSINESS_LICENSE,
+            visibility = StoredFileVisibility.PRIVATE,
+            createdBy = owner,
+        )
+
+        mockMvc.post("/api/business/restaurant-applications") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = fullRestaurantApplicationJson(
+                businessRegistrationNo = "8181818181",
+                coverImageFileId = otherCoverImage.id,
+                businessLicenseFileId = businessLicense.id,
+                managerEmail = "file-owner-check@example.com",
+            )
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+    }
+
+    @Test
     fun businessRestaurantApplicationCanBeCreatedUpdatedSubmittedAndRead() {
         val owner = createBusinessUser("application-owner@example.com")
         val sessionCookie = loginAndExtractSessionCookie("application-owner@example.com")
@@ -1236,6 +1349,13 @@ class RestaurantApiApplicationTests {
             .substringBefore(";")
         return Cookie("BUSINESS_SESSION", token)
     }
+
+    private fun jpegBytes(): ByteArray =
+        byteArrayOf(0xff.toByte(), 0xd8.toByte(), 0xff.toByte(), 0xe0.toByte()) +
+            "test-jpeg".encodeToByteArray()
+
+    private fun pdfBytes(): ByteArray =
+        "%PDF-1.7\nrestaurant-service-test".encodeToByteArray()
 
     private fun createBusinessUser(
         email: String,
