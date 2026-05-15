@@ -10,7 +10,9 @@ import com.example.restaurant.availability.AvailabilityService
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
 import com.example.restaurant.notification.NotificationService
+import com.example.restaurant.payment.PaymentRepository
 import com.example.restaurant.refund.RefundOperationResponse
+import com.example.restaurant.refund.RefundRepository
 import com.example.restaurant.refund.RefundService
 import com.example.restaurant.reservationproduct.ReservationProductRepository
 import com.example.restaurant.reservationproduct.ReservationProductStatus
@@ -47,6 +49,8 @@ class BusinessReservationService(
     private val reservationRepository: ReservationRepository,
     private val auditLogService: AuditLogService,
     private val auditLogRepository: AuditLogRepository,
+    private val paymentRepository: PaymentRepository,
+    private val refundRepository: RefundRepository,
     private val refundService: RefundService,
     private val notificationService: NotificationService,
     private val clock: Clock,
@@ -682,6 +686,7 @@ class BusinessReservationService(
             ownerNote = ownerNote,
             paymentStatus = paymentStatus.name,
             paymentActionRequired = paymentStatus.requiresBusinessAction(),
+            paymentSummary = paymentSummary(),
             cancelledAt = cancelledAt,
             cancelReason = cancelReason,
             refund = refund,
@@ -690,6 +695,25 @@ class BusinessReservationService(
             auditLogs = auditLogRepository
                 .findByTargetTypeAndTargetIdOrderByCreatedAtAscIdAsc("reservation", id)
                 .map { BusinessReservationAuditLogResponse(id = it.id, action = it.action, createdAt = it.createdAt) },
+        )
+    }
+
+    private fun ReservationEntity.paymentSummary(): BusinessReservationPaymentSummaryResponse {
+        val latestPayment = paymentRepository.findByReservationIdOrderByCreatedAtAsc(id).lastOrNull()
+        val latestRefund = refundRepository.findByReservationIdOrderByCreatedAtAsc(id).lastOrNull()
+        return BusinessReservationPaymentSummaryResponse(
+            paymentRequired = paymentRequired,
+            paymentMode = paymentMode,
+            reservationPaymentStatus = paymentStatus,
+            paymentDueAt = paymentDueAt,
+            latestPaymentId = latestPayment?.id,
+            latestPaymentType = latestPayment?.paymentType,
+            latestPaymentStatus = latestPayment?.status,
+            latestPaymentAmount = latestPayment?.amount,
+            refundedAmount = latestPayment?.refundedAmount ?: 0,
+            latestRefundId = latestRefund?.id,
+            latestRefundStatus = latestRefund?.status,
+            latestRefundAmount = latestRefund?.refundAmount,
         )
     }
 

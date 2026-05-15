@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Lock
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
+import java.time.Instant
 
 interface RefundRepository : JpaRepository<RefundEntity, Long> {
     fun findByIdempotencyKey(idempotencyKey: String): RefundEntity?
@@ -20,4 +21,23 @@ interface RefundRepository : JpaRepository<RefundEntity, Long> {
     fun findByReservationIdOrderByCreatedAtAsc(reservationId: Long): List<RefundEntity>
 
     fun findByRestaurantIdOrderByCreatedAtDesc(restaurantId: Long): List<RefundEntity>
+
+    @Query(
+        """
+        select r from RefundEntity r
+        join fetch r.payment p
+        join fetch r.reservation rv
+        join fetch rv.reservationProduct rp
+        join fetch rv.customer c
+        where r.restaurant.id = :restaurantId
+          and (:fromCreatedAt is null or r.createdAt >= :fromCreatedAt)
+          and (:toCreatedAtExclusive is null or r.createdAt < :toCreatedAtExclusive)
+        order by r.createdAt desc, r.id desc
+        """,
+    )
+    fun findBusinessRefunds(
+        @Param("restaurantId") restaurantId: Long,
+        @Param("fromCreatedAt") fromCreatedAt: Instant?,
+        @Param("toCreatedAtExclusive") toCreatedAtExclusive: Instant?,
+    ): List<RefundEntity>
 }

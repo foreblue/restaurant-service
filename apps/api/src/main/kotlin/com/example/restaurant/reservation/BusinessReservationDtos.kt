@@ -1,6 +1,9 @@
 package com.example.restaurant.reservation
 
 import com.example.restaurant.refund.RefundOperationResponse
+import com.example.restaurant.payment.PaymentStatus
+import com.example.restaurant.payment.PaymentType
+import com.example.restaurant.refund.RefundStatus
 import com.fasterxml.jackson.annotation.JsonProperty
 import java.time.Instant
 import java.time.LocalDate
@@ -90,6 +93,7 @@ data class BusinessReservationDetailResponse(
     val ownerNote: String?,
     val paymentStatus: String,
     val paymentActionRequired: Boolean,
+    val paymentSummary: BusinessReservationPaymentSummaryResponse,
     val cancelledAt: Instant?,
     val cancelReason: String?,
     val refund: RefundOperationResponse? = null,
@@ -109,6 +113,21 @@ data class BusinessReservationCustomerDetailResponse(
     val phoneNumber: String,
     val visitCount: Long,
     val noShowCount: Long,
+)
+
+data class BusinessReservationPaymentSummaryResponse(
+    val paymentRequired: Boolean,
+    val paymentMode: ReservationPaymentMode,
+    val reservationPaymentStatus: PaymentStatus,
+    val paymentDueAt: Instant?,
+    val latestPaymentId: Long?,
+    val latestPaymentType: PaymentType?,
+    val latestPaymentStatus: PaymentStatus?,
+    val latestPaymentAmount: Long?,
+    val refundedAmount: Long,
+    val latestRefundId: Long?,
+    val latestRefundStatus: RefundStatus?,
+    val latestRefundAmount: Long?,
 )
 
 data class BusinessReservationAuditLogResponse(
