@@ -63,6 +63,7 @@ import com.example.restaurant.restaurant.StoredFileVisibility
 import com.example.restaurant.restaurantapplication.RestaurantApplicationEntity
 import com.example.restaurant.restaurantapplication.RestaurantApplicationRepository
 import com.example.restaurant.restaurantapplication.RestaurantApplicationStatus
+import com.example.restaurant.statistics.BusinessAnalyticsExportRepository
 import com.jayway.jsonpath.JsonPath
 import jakarta.servlet.http.Cookie
 import jakarta.validation.Valid
@@ -167,6 +168,9 @@ class RestaurantApiApplicationTests {
 
     @Autowired
     private lateinit var auditLogRepository: AuditLogRepository
+
+    @Autowired
+    private lateinit var analyticsExportRepository: BusinessAnalyticsExportRepository
 
     @Autowired
     private lateinit var cancellationPolicyRepository: CancellationPolicyRepository
@@ -4154,6 +4158,114 @@ class RestaurantApiApplicationTests {
         }.andExpect {
             status { isBadRequest() }
             jsonPath("$.code") { value("VALIDATION_ERROR") }
+        }
+    }
+
+    @Test
+    fun businessOwnerCanRequestAnalyticsCsvExportsAndAuditAccess() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "analytics-export-owner@example.com",
+            restaurantName = "Analytics Export Table",
+            slug = "analytics-export-table",
+            slotCapacity = 6,
+        )
+        val ownerCookie = loginAndExtractSessionCookie("analytics-export-owner@example.com")
+        val reservationDate = fixture.targetDate
+        val metricInstant = reservationDate
+            .atTime(12, 0)
+            .atZone(ZoneId.of("Asia/Seoul"))
+            .toInstant()
+        val reservation = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "analytics-export-reservation",
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "CSV고객",
+            customerPhone = "010-3131-9999",
+        )
+        val reservationEntity = reservationRepository.findBusinessReservationById(reservation.id)
+            ?: error("analytics export reservation not found")
+        paymentRepository.saveAndFlush(
+            PaymentEntity(
+                restaurant = fixture.restaurant,
+                reservation = reservationEntity,
+                customer = reservationEntity.customer,
+                paymentType = PaymentType.DEPOSIT,
+                status = PaymentStatus.PAID,
+                amount = 10_000,
+                idempotencyKey = "analytics-export-payment",
+                paidAt = metricInstant,
+            ),
+        )
+
+        fun requestExport(
+            type: String,
+            extra: String = """"from": "$reservationDate", "to": "$reservationDate"""",
+        ): Pair<Long, String> {
+            val result = mockMvc.post("/api/business/restaurants/${fixture.restaurant.id}/analytics/exports") {
+                cookie(ownerCookie)
+                header("User-Agent", "analytics-export-test")
+                contentType = MediaType.APPLICATION_JSON
+                content = """{"type": "$type", $extra}"""
+            }.andExpect {
+                status { isCreated() }
+                jsonPath("$.type") { value(type.uppercase()) }
+                jsonPath("$.status") { value("COMPLETED") }
+                jsonPath("$.contentType") { value("text/csv; charset=utf-8") }
+                jsonPath("$.privacyNotice") { value("기본 CSV에는 고객 전화번호 전체, 이메일, 상세 요청사항을 포함하지 않습니다.") }
+            }.andReturn()
+            return JsonPath.read<Int>(result.response.contentAsString, "$.id").toLong() to
+                JsonPath.read(result.response.contentAsString, "$.csvContent")
+        }
+
+        val (reservationExportId, reservationCsv) = requestExport("reservation_summary")
+        assertThat(reservationCsv).contains("total,1,VISIT_DATE")
+        assertThat(reservationCsv)
+            .doesNotContain("01031319999")
+            .doesNotContain("010-3131-9999")
+
+        val (paymentExportId, paymentCsv) = requestExport("payment_refund_summary")
+        assertThat(paymentCsv).contains("deposit_amount,10000,PAID_AT")
+        assertThat(paymentCsv).contains("refund_amount,0,SUCCEEDED_AT")
+
+        val (productExportId, productCsv) = requestExport("product_performance")
+        assertThat(productCsv).contains("${fixture.productId},공개 예약 코스,1")
+        assertThat(productCsv).doesNotContain("01031319999")
+
+        val (timeSlotExportId, timeSlotCsv) = requestExport(
+            type = "time_slot_reservation_rate",
+            extra = """"date": "$reservationDate"""",
+        )
+        assertThat(timeSlotCsv).contains("$reservationDate,11:00,11:30,6,2,0.3333")
+
+        listOf(reservationExportId, paymentExportId, productExportId, timeSlotExportId).forEach { exportId ->
+            val export = analyticsExportRepository.findById(exportId).orElseThrow()
+            assertThat(export.status.name).isEqualTo("COMPLETED")
+            assertThat(export.csvContent).isNotBlank()
+            assertThat(auditLogRepository.findByTargetTypeAndTargetId("analytics_export_request", exportId).map { it.action })
+                .contains("ANALYTICS_CSV_EXPORT_REQUESTED")
+        }
+        assertThat(analyticsExportRepository.findById(timeSlotExportId).orElseThrow().rowCount).isEqualTo(4)
+
+        mockMvc.post("/api/business/restaurants/${fixture.restaurant.id}/analytics/exports") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"type": "customer_raw", "from": "$reservationDate", "to": "$reservationDate"}"""
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("VALIDATION_ERROR") }
+        }
+
+        val otherOwner = createBusinessUser("analytics-export-other@example.com")
+        val otherCookie = loginAndExtractSessionCookie(otherOwner.email)
+        createApprovedRestaurantForSettings(otherOwner, "Other Analytics Export Table", "analytics-export-other")
+        mockMvc.post("/api/business/restaurants/${fixture.restaurant.id}/analytics/exports") {
+            cookie(otherCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"type": "reservation_summary", "from": "$reservationDate", "to": "$reservationDate"}"""
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
         }
     }
 
