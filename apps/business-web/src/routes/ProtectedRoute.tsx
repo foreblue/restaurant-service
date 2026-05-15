@@ -12,7 +12,7 @@ export function ProtectedRoute() {
   }
 
   if (currentUser.error instanceof UnauthorizedApiError) {
-    return <Navigate to="/login" replace state={{ from: location }} />;
+    return <Navigate to="/login" replace state={{ from: location, reason: "auth-required" }} />;
   }
 
   if (currentUser.isError) {
