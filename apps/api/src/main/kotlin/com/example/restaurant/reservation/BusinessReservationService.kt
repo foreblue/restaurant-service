@@ -33,8 +33,6 @@ private const val MAX_RESERVATION_QUERY_DAYS = 93L
 private const val MAX_MANUAL_CUSTOMER_NAME_LENGTH = 80
 private const val MAX_MANUAL_CUSTOMER_REQUEST_LENGTH = 500
 private const val MAX_OWNER_NOTE_LENGTH = 1000
-private const val BUSINESS_RESERVATION_PAYMENT_STATUS = "NOT_REQUIRED"
-
 @Service
 class BusinessReservationService(
     private val availabilityService: AvailabilityService,
@@ -638,8 +636,8 @@ class BusinessReservationService(
             ),
             hasCustomerRequest = !customerRequest.isNullOrBlank(),
             hasOwnerNote = !ownerNote.isNullOrBlank(),
-            paymentStatus = BUSINESS_RESERVATION_PAYMENT_STATUS,
-            paymentActionRequired = false,
+            paymentStatus = paymentStatus.name,
+            paymentActionRequired = paymentStatus.requiresBusinessAction(),
         )
     }
 
@@ -671,8 +669,8 @@ class BusinessReservationService(
             ),
             customerRequest = customerRequest,
             ownerNote = ownerNote,
-            paymentStatus = BUSINESS_RESERVATION_PAYMENT_STATUS,
-            paymentActionRequired = false,
+            paymentStatus = paymentStatus.name,
+            paymentActionRequired = paymentStatus.requiresBusinessAction(),
             cancelledAt = cancelledAt,
             cancelReason = cancelReason,
             completedAt = completedAt,
@@ -762,6 +760,11 @@ class BusinessReservationService(
             "status" to status.name,
             "source" to source.name,
             "ownerNote" to ownerNote,
+            "paymentRequired" to paymentRequired,
+            "paymentMode" to paymentMode.name,
+            "paymentStatus" to paymentStatus.name,
+            "paymentDueAt" to paymentDueAt?.toString(),
+            "cancellationPolicySnapshot" to cancellationPolicySnapshotJson,
             "cancelledAt" to cancelledAt?.toString(),
             "cancelReason" to cancelReason,
             "completedAt" to completedAt?.toString(),
