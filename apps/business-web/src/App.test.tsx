@@ -408,6 +408,10 @@ describe("App routing", () => {
       markBusinessReservationNoShow: async () => {
         throw new Error("not implemented in this test");
       },
+      updateBusinessReservationOperationNote: async () => {
+        throw new Error("not implemented in this test");
+      },
+      listBusinessAuditLogs: async () => ({ items: [] }),
     };
     window.history.pushState({}, "", "/onboarding");
 
@@ -687,6 +691,19 @@ describe("App routing", () => {
     expect(await screen.findByText("창가 좌석 요청, 알레르기 확인 필요")).toBeInTheDocument();
     expect(screen.getByText("VIP/주의 고객 표시는 CRM 단계에서 연결됩니다.")).toBeInTheDocument();
     expect(screen.getAllByText("변경, 취소, 방문 완료, 노쇼 처리 가능").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(
+        "고객의 민감정보, 결제정보, 불필요한 개인정보는 운영 메모에 입력하지 마세요.",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("전화 확인 내용, 좌석 배정 참고사항 등"), {
+      target: { value: "창가 자리 전화 확인" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "운영 메모 저장" }));
+
+    expect(await screen.findByText("운영 메모가 저장되었습니다.")).toBeInTheDocument();
+    expect(await screen.findByText("운영 메모 수정")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "예약 변경" }));
 
