@@ -14,6 +14,8 @@ import com.example.restaurant.audit.AuditLogRepository
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
 import com.example.restaurant.common.trace.TraceContext
+import com.example.restaurant.reservation.CustomerRepository
+import com.example.restaurant.reservation.ReservationRepository
 import com.example.restaurant.reservationproduct.ReservationProductRepository
 import com.example.restaurant.reservationproduct.ReservationProductStatus
 import com.example.restaurant.restaurant.FileStorage
@@ -115,6 +117,12 @@ class RestaurantApiApplicationTests {
 
     @Autowired
     private lateinit var reservationProductRepository: ReservationProductRepository
+
+    @Autowired
+    private lateinit var customerRepository: CustomerRepository
+
+    @Autowired
+    private lateinit var reservationRepository: ReservationRepository
 
     @Autowired
     private lateinit var fileStorage: FileStorage
@@ -1516,6 +1524,147 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun publicReservationCreateMatchesCustomerAndReusesIdempotencyKey() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "reservation-create-owner@example.com",
+            restaurantName = "Reservation Create Table",
+            slug = "reservation-create",
+        )
+        val requestBody = publicReservationRequestJson(
+            fixture = fixture,
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "김예약",
+            customerPhone = "010-1111-2222",
+            customerRequest = "창가 좌석 요청",
+        )
+
+        val createResult = mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "public-reserve-create-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = requestBody
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.status") { value("CONFIRMED") }
+            jsonPath("$.reservationNumber") { isNotEmpty() }
+            jsonPath("$.restaurantId") { value(fixture.restaurant.id.toInt()) }
+            jsonPath("$.productId") { value(fixture.productId.toInt()) }
+            jsonPath("$.visitDate") { value(fixture.targetDate.toString()) }
+            jsonPath("$.startTime") { value("11:00:00") }
+            jsonPath("$.endTime") { value("11:30:00") }
+            jsonPath("$.partySize") { value(2) }
+            jsonPath("$.customerName") { value("김예약") }
+            jsonPath("$.customerPhoneLast4") { value("2222") }
+            jsonPath("$.lookupToken") { isNotEmpty() }
+            jsonPath("$.lookupTokenExpiresAt") { isNotEmpty() }
+        }.andReturn()
+        val reservationId = JsonPath.read<Int>(createResult.response.contentAsString, "$.id")
+        val reservationNumber = JsonPath.read<String>(createResult.response.contentAsString, "$.reservationNumber")
+
+        mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "public-reserve-create-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = requestBody
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.id") { value(reservationId) }
+            jsonPath("$.reservationNumber") { value(reservationNumber) }
+        }
+
+        mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "public-reserve-create-2")
+            contentType = MediaType.APPLICATION_JSON
+            content = publicReservationRequestJson(
+                fixture = fixture,
+                startTime = "11:30:00",
+                partySize = 1,
+                customerName = "김예약",
+                customerPhone = "01011112222",
+            )
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.customerPhoneLast4") { value("2222") }
+        }
+
+        assertThat(customerRepository.countByRestaurantId(fixture.restaurant.id)).isEqualTo(1)
+        assertThat(reservationRepository.countByRestaurantId(fixture.restaurant.id)).isEqualTo(2)
+    }
+
+    @Test
+    fun publicReservationRejectsIdempotencyMismatchStockAndBusinessHours() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "reservation-reject-owner@example.com",
+            restaurantName = "Reservation Reject Table",
+            slug = "reservation-reject",
+            slotCapacity = 4,
+        )
+
+        mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "public-reserve-reject-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = publicReservationRequestJson(
+                fixture = fixture,
+                startTime = "11:00:00",
+                partySize = 3,
+                customerName = "박예약",
+                customerPhone = "010-3333-4444",
+            )
+        }.andExpect {
+            status { isCreated() }
+        }
+
+        mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "public-reserve-reject-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = publicReservationRequestJson(
+                fixture = fixture,
+                startTime = "11:00:00",
+                partySize = 2,
+                customerName = "박예약",
+                customerPhone = "010-3333-4444",
+            )
+        }.andExpect {
+            status { isConflict() }
+            jsonPath("$.code") { value("CONFLICT") }
+            jsonPath("$.message") { value("같은 Idempotency-Key로 다른 예약 요청을 처리할 수 없습니다.") }
+        }
+
+        mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "public-reserve-reject-2")
+            contentType = MediaType.APPLICATION_JSON
+            content = publicReservationRequestJson(
+                fixture = fixture,
+                startTime = "11:00:00",
+                partySize = 2,
+                customerName = "이예약",
+                customerPhone = "010-5555-6666",
+            )
+        }.andExpect {
+            status { isConflict() }
+            jsonPath("$.code") { value("CONFLICT") }
+            jsonPath("$.message") { value("예약 가능한 재고가 없습니다.") }
+        }
+
+        mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "public-reserve-reject-3")
+            contentType = MediaType.APPLICATION_JSON
+            content = publicReservationRequestJson(
+                fixture = fixture,
+                startTime = "10:30:00",
+                partySize = 1,
+                customerName = "최예약",
+                customerPhone = "010-7777-8888",
+            )
+        }.andExpect {
+            status { isConflict() }
+            jsonPath("$.code") { value("CONFLICT") }
+            jsonPath("$.message") { value("예약 가능한 시간이 아닙니다.") }
+        }
+
+        assertThat(reservationRepository.countByRestaurantId(fixture.restaurant.id)).isEqualTo(1)
+    }
+
+    @Test
     fun businessRestaurantApplicationSubmitRejectsMissingRequiredFields() {
         val sessionCookie = loginAndExtractSessionCookie(
             createBusinessUser("application-missing-required@example.com").email,
@@ -1807,6 +1956,97 @@ class RestaurantApiApplicationTests {
         }
         return restaurant
     }
+
+    private fun createPublicReservationFixture(
+        ownerEmail: String,
+        restaurantName: String,
+        slug: String,
+        slotCapacity: Int = 4,
+    ): PublicReservationFixture {
+        val owner = createBusinessUser(ownerEmail)
+        val sessionCookie = loginAndExtractSessionCookie(owner.email)
+        val restaurant = createApprovedRestaurantForSettings(owner, restaurantName, slug)
+        val targetDate = LocalDate.now(ZoneId.of("Asia/Seoul")).plusDays(3)
+        val targetDay = targetDate.dayOfWeek.name
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/business-hours") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "hours": [
+                {"dayOfWeek": "$targetDay", "opensAt": "11:00:00", "closesAt": "13:00:00"}
+              ]
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+        }
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/reservation-page") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"slug": "$slug", "status": "PUBLIC"}"""
+        }.andExpect {
+            status { isOk() }
+        }
+
+        val productResult = mockMvc.post("/api/business/reservation-products") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "공개 예약 코스",
+              "priceAmount": 50000,
+              "visible": true,
+              "minPartySize": 1,
+              "maxPartySize": 4,
+              "availableDays": ["$targetDay"],
+              "availableStartTime": "11:00:00",
+              "availableEndTime": "13:00:00",
+              "slotCapacity": $slotCapacity
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+
+        return PublicReservationFixture(
+            restaurant = restaurant,
+            productId = JsonPath.read<Int>(productResult.response.contentAsString, "$.id").toLong(),
+            targetDate = targetDate,
+        )
+    }
+
+    private fun publicReservationRequestJson(
+        fixture: PublicReservationFixture,
+        startTime: String,
+        partySize: Int,
+        customerName: String,
+        customerPhone: String,
+        customerRequest: String? = null,
+    ): String {
+        val customerRequestLine = customerRequest
+            ?.let { """, "customerRequest": "$it"""" }
+            .orEmpty()
+        return """
+        {
+          "restaurantId": ${fixture.restaurant.id},
+          "productId": ${fixture.productId},
+          "visitDate": "${fixture.targetDate}",
+          "startTime": "$startTime",
+          "partySize": $partySize,
+          "customerName": "$customerName",
+          "customerPhone": "$customerPhone"$customerRequestLine
+        }
+        """.trimIndent()
+    }
+
+    private data class PublicReservationFixture(
+        val restaurant: RestaurantEntity,
+        val productId: Long,
+        val targetDate: LocalDate,
+    )
 
     private fun fullRestaurantApplicationJson(
         businessRegistrationNo: String,
