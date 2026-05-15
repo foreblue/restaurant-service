@@ -84,7 +84,7 @@ class PublicReservationService(
             productId = product.id,
             visitDate = normalized.visitDate,
             startTime = normalized.startTime,
-            statuses = listOf(ReservationStatus.CONFIRMED),
+            statuses = activeReservationStatuses(),
         )
         if (reservedPartySize + normalized.partySize > availableSlot.remainingCapacity) {
             throw ApiException(ErrorCode.CONFLICT, "예약 가능한 재고가 없습니다.")
@@ -150,7 +150,7 @@ class PublicReservationService(
         if (reservation.status == ReservationStatus.CANCELLED_BY_CUSTOMER) {
             return reservation.toDetailResponse()
         }
-        if (reservation.status != ReservationStatus.CONFIRMED) {
+        if (reservation.status !in activeReservationStatuses()) {
             throw ApiException(ErrorCode.CONFLICT, "취소할 수 없는 예약입니다.")
         }
         if (!reservation.isCancelableNow()) {
@@ -306,7 +306,7 @@ class PublicReservationService(
     }
 
     private fun ReservationEntity.isCancelableNow(): Boolean =
-        status == ReservationStatus.CONFIRMED && Instant.now(clock).isBefore(cancelDeadline())
+        status in activeReservationStatuses() && Instant.now(clock).isBefore(cancelDeadline())
 
     private fun ReservationEntity.cancelDeadline(): Instant =
         ZonedDateTime.of(visitDate, startTime, ZoneId.of(restaurant.timezone)).toInstant()
@@ -318,6 +318,9 @@ class PublicReservationService(
         }
         return normalized
     }
+
+    private fun activeReservationStatuses(): List<ReservationStatus> =
+        listOf(ReservationStatus.CONFIRMED, ReservationStatus.MODIFIED)
 
     private fun generateReservationNumber(visitDate: LocalDate): String {
         repeat(10) {

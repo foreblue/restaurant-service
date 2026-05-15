@@ -30,7 +30,7 @@ class ReservationEntity(
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "reservation_product_id", nullable = false)
-    val reservationProduct: ReservationProductEntity,
+    var reservationProduct: ReservationProductEntity,
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "customer_id", nullable = false)
@@ -40,16 +40,16 @@ class ReservationEntity(
     val reservationNumber: String,
 
     @Column(name = "visit_date", nullable = false)
-    val visitDate: LocalDate,
+    var visitDate: LocalDate,
 
     @Column(name = "start_time", nullable = false)
-    val startTime: LocalTime,
+    var startTime: LocalTime,
 
     @Column(name = "end_time", nullable = false)
-    val endTime: LocalTime,
+    var endTime: LocalTime,
 
     @Column(name = "party_size", nullable = false)
-    val partySize: Int,
+    var partySize: Int,
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 50)
@@ -67,6 +67,12 @@ class ReservationEntity(
 
     @Column(name = "cancel_reason", length = 255)
     var cancelReason: String? = null,
+
+    @Column(name = "completed_at")
+    var completedAt: Instant? = null,
+
+    @Column(name = "no_show_at")
+    var noShowAt: Instant? = null,
 
     @Column(name = "idempotency_key", nullable = false, length = 128)
     val idempotencyKey: String,

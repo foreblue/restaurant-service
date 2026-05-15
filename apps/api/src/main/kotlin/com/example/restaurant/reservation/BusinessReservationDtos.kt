@@ -91,6 +91,8 @@ data class BusinessReservationDetailResponse(
     val paymentActionRequired: Boolean,
     val cancelledAt: Instant?,
     val cancelReason: String?,
+    val completedAt: Instant?,
+    val noShowAt: Instant?,
     val auditLogs: List<BusinessReservationAuditLogResponse>,
 )
 
