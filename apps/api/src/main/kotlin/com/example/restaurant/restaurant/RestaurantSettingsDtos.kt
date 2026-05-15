@@ -141,4 +141,6 @@ data class PublicRestaurantResponse(
 data class PublicReservationPageResponse(
     val status: ReservationPageStatus,
     val publishedAt: Instant?,
+    val publicUrl: String,
+    val reservationAvailable: Boolean,
 )
