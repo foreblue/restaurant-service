@@ -9,6 +9,7 @@ import com.example.restaurant.auth.TokenHash
 import com.example.restaurant.availability.AvailabilityService
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.example.restaurant.notification.NotificationService
 import com.example.restaurant.refund.RefundOperationResponse
 import com.example.restaurant.refund.RefundService
 import com.example.restaurant.reservationproduct.ReservationProductRepository
@@ -47,6 +48,7 @@ class BusinessReservationService(
     private val auditLogService: AuditLogService,
     private val auditLogRepository: AuditLogRepository,
     private val refundService: RefundService,
+    private val notificationService: NotificationService,
     private val clock: Clock,
 ) {
     private val objectMapper = jacksonObjectMapper()
@@ -130,6 +132,7 @@ class BusinessReservationService(
             ipAddress = metadata.ipAddress,
             userAgent = metadata.userAgent,
         )
+        notificationService.recordReservationConfirmed(reservation)
 
         return reservation.toDetail()
     }
@@ -183,6 +186,7 @@ class BusinessReservationService(
         reservation.partySize = normalized.partySize
         reservation.status = ReservationStatus.MODIFIED
         auditReservationChange(owner, "RESERVATION_UPDATED", reservation, before, metadata)
+        notificationService.recordReservationUpdated(reservation)
 
         return reservation.toDetail()
     }
@@ -208,6 +212,7 @@ class BusinessReservationService(
         reservation.cancelReason = reason
         val refund = refundService.requestRestaurantCancellationRefund(reservation)
         auditReservationChange(owner, "RESERVATION_CANCELLED_BY_RESTAURANT", reservation, before, metadata)
+        notificationService.recordReservationCancelled(reservation)
 
         return reservation.toDetail(refund)
     }

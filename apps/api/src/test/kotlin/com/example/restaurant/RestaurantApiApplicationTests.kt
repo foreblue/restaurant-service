@@ -16,8 +16,15 @@ import com.example.restaurant.common.error.ErrorCode
 import com.example.restaurant.common.trace.TraceContext
 import com.example.restaurant.notification.NotificationRepository
 import com.example.restaurant.notification.NotificationStatus
+import com.example.restaurant.notification.NotificationChannel
+import com.example.restaurant.notification.NotificationEntity
+import com.example.restaurant.notification.NotificationRecipientType
+import com.example.restaurant.notification.PAYMENT_COMPLETED_TEMPLATE
+import com.example.restaurant.notification.REFUND_COMPLETED_TEMPLATE
 import com.example.restaurant.notification.RESERVATION_CANCELLED_TEMPLATE
 import com.example.restaurant.notification.RESERVATION_CONFIRMED_TEMPLATE
+import com.example.restaurant.notification.RESERVATION_UPDATED_TEMPLATE
+import com.example.restaurant.notification.VISIT_REMINDER_TEMPLATE
 import com.example.restaurant.payment.CancellationPolicyEntity
 import com.example.restaurant.payment.CancellationPolicyRepository
 import com.example.restaurant.payment.PaymentEntity
@@ -746,6 +753,12 @@ class RestaurantApiApplicationTests {
             amount = 30_000,
             expectedPaymentStatus = "PAID",
         )
+        assertThat(
+            notificationRepository.countByReservationIdAndTemplateKey(
+                started.reservation.id,
+                PAYMENT_COMPLETED_TEMPLATE,
+            ),
+        ).isEqualTo(2)
         val reservation = reservationRepository.findById(started.reservation.id).orElseThrow()
         reservation.cancellationPolicySnapshotJson = """
         {
@@ -788,6 +801,12 @@ class RestaurantApiApplicationTests {
         assertThat(reservationRepository.findById(started.reservation.id).orElseThrow().paymentStatus)
             .isEqualTo(PaymentStatus.PARTIALLY_REFUNDED)
         assertThat(refundRepository.findByReservationIdOrderByCreatedAtAsc(started.reservation.id)).hasSize(1)
+        assertThat(
+            notificationRepository.countByReservationIdAndTemplateKey(
+                started.reservation.id,
+                REFUND_COMPLETED_TEMPLATE,
+            ),
+        ).isEqualTo(2)
     }
 
     @Test
@@ -933,6 +952,84 @@ class RestaurantApiApplicationTests {
             .isEqualTo(RefundStatus.SUCCEEDED)
         assertThat(auditLogRepository.findByTargetTypeAndTargetId("refund", manualRefund.id).map { it.action })
             .contains("REFUND_MANUAL_RESOLVED")
+    }
+
+    @Test
+    fun adminNotificationRetryUsesFakeSenderAndTracksFailureState() {
+        val admin = createBusinessUser("admin-notification@example.com", BusinessUserRole.ADMIN)
+        val adminCookie = loginAndExtractSessionCookie(admin.email)
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "admin-notification-owner@example.com",
+            restaurantName = "Admin Notification Table",
+            slug = "admin-notification",
+        )
+        val created = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "admin-notification-reservation-0001",
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "알림재시도",
+            customerPhone = "010-4141-0001",
+        )
+        val reservation = reservationRepository.findById(created.id).orElseThrow()
+        val failingNotification = notificationRepository.saveAndFlush(
+            NotificationEntity(
+                restaurant = fixture.restaurant,
+                reservation = reservation,
+                customer = reservation.customer,
+                recipientType = NotificationRecipientType.CUSTOMER,
+                channel = NotificationChannel.SMS,
+                recipientContact = "notification-fail",
+                templateKey = RESERVATION_CONFIRMED_TEMPLATE,
+                status = NotificationStatus.FAILED,
+                payloadJson = """{"templateKey":"$RESERVATION_CONFIRMED_TEMPLATE"}""",
+                attemptCount = 1,
+            ),
+        )
+        val successfulNotification = notificationRepository.saveAndFlush(
+            NotificationEntity(
+                restaurant = fixture.restaurant,
+                reservation = reservation,
+                customer = null,
+                recipientType = NotificationRecipientType.OWNER,
+                channel = NotificationChannel.EMAIL,
+                recipientContact = "owner-success@example.com",
+                templateKey = RESERVATION_CANCELLED_TEMPLATE,
+                status = NotificationStatus.FAILED,
+                payloadJson = """{"templateKey":"$RESERVATION_CANCELLED_TEMPLATE"}""",
+                attemptCount = 1,
+            ),
+        )
+
+        mockMvc.post("/api/admin/notifications/${failingNotification.id}/retry") {
+            cookie(adminCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("FAILED") }
+            jsonPath("$.attemptCount") { value(2) }
+            jsonPath("$.providerKey") { value("fake") }
+            jsonPath("$.nextRetryAt") { isNotEmpty() }
+            jsonPath("$.lastError") { value("테스트 알림 발송 실패") }
+        }
+
+        mockMvc.post("/api/admin/notifications/${successfulNotification.id}/retry") {
+            cookie(adminCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("SENT") }
+            jsonPath("$.attemptCount") { value(2) }
+            jsonPath("$.providerKey") { value("fake") }
+            jsonPath("$.providerMessageId") { value("fake-notification-${successfulNotification.id}") }
+            jsonPath("$.lastError") { value(org.hamcrest.Matchers.nullValue()) }
+        }
+
+        val failedReloaded = notificationRepository.findById(failingNotification.id).orElseThrow()
+        assertThat(failedReloaded.status).isEqualTo(NotificationStatus.FAILED)
+        assertThat(failedReloaded.attemptCount).isEqualTo(2)
+        assertThat(failedReloaded.nextRetryAt).isNotNull()
+        val sentReloaded = notificationRepository.findById(successfulNotification.id).orElseThrow()
+        assertThat(sentReloaded.status).isEqualTo(NotificationStatus.SENT)
+        assertThat(sentReloaded.sentAt).isNotNull()
     }
 
     @Test
@@ -2476,9 +2573,10 @@ class RestaurantApiApplicationTests {
         val reservationNumber = JsonPath.read<String>(createResult.response.contentAsString, "$.reservationNumber")
 
         val confirmedNotifications = notificationRepository.findByReservationIdOrderByCreatedAtAsc(reservationId)
-        assertThat(confirmedNotifications).hasSize(1)
-        assertThat(confirmedNotifications.single().templateKey).isEqualTo(RESERVATION_CONFIRMED_TEMPLATE)
-        assertThat(confirmedNotifications.single().status).isEqualTo(NotificationStatus.QUEUED)
+        assertThat(confirmedNotifications.map { it.templateKey })
+            .containsExactly(RESERVATION_CONFIRMED_TEMPLATE, VISIT_REMINDER_TEMPLATE)
+        assertThat(confirmedNotifications.map { it.status }).containsOnly(NotificationStatus.QUEUED)
+        assertThat(confirmedNotifications.single { it.templateKey == VISIT_REMINDER_TEMPLATE }.scheduledAt).isNotNull()
 
         mockMvc.get("/api/public/reservations/$reservationId").andExpect {
             status { isUnauthorized() }
@@ -2522,8 +2620,11 @@ class RestaurantApiApplicationTests {
             .isEqualTo(ReservationStatus.CANCELLED_BY_CUSTOMER)
         val cancelledNotifications = notificationRepository.findByReservationIdOrderByCreatedAtAsc(reservationId)
         assertThat(cancelledNotifications.map { it.templateKey })
-            .containsExactly(RESERVATION_CONFIRMED_TEMPLATE, RESERVATION_CANCELLED_TEMPLATE)
-        assertThat(cancelledNotifications.map { it.status }).containsOnly(NotificationStatus.QUEUED)
+            .containsExactly(RESERVATION_CONFIRMED_TEMPLATE, VISIT_REMINDER_TEMPLATE, RESERVATION_CANCELLED_TEMPLATE)
+        assertThat(cancelledNotifications.single { it.templateKey == VISIT_REMINDER_TEMPLATE }.status)
+            .isEqualTo(NotificationStatus.CANCELLED)
+        assertThat(cancelledNotifications.single { it.templateKey == RESERVATION_CANCELLED_TEMPLATE }.status)
+            .isEqualTo(NotificationStatus.QUEUED)
 
         mockMvc.post("/api/public/reservations/$reservationId/cancel") {
             header("X-Reservation-Lookup-Token", lookupToken)
@@ -2531,7 +2632,7 @@ class RestaurantApiApplicationTests {
             status { isOk() }
             jsonPath("$.status") { value("CANCELLED_BY_CUSTOMER") }
         }
-        assertThat(notificationRepository.findByReservationIdOrderByCreatedAtAsc(reservationId)).hasSize(2)
+        assertThat(notificationRepository.findByReservationIdOrderByCreatedAtAsc(reservationId)).hasSize(3)
 
         mockMvc.post("/api/public/reservations") {
             header("Idempotency-Key", "public-reserve-detail-2")
@@ -2968,6 +3069,8 @@ class RestaurantApiApplicationTests {
         assertThat(updatedLog.beforeValue).contains("\"startTime\": \"11:00\"")
         assertThat(updatedLog.afterValue).contains("\"startTime\": \"11:30\"")
         assertThat(updatedLog.ipAddress).isEqualTo("203.0.113.17")
+        assertThat(notificationRepository.findByReservationIdOrderByCreatedAtAsc(reservationId).map { it.templateKey })
+            .contains(RESERVATION_CONFIRMED_TEMPLATE, RESERVATION_UPDATED_TEMPLATE, VISIT_REMINDER_TEMPLATE)
 
         mockMvc.get("/api/business/reservations") {
             cookie(ownerCookie)
@@ -3012,6 +3115,8 @@ class RestaurantApiApplicationTests {
         }
         assertThat(auditLogRepository.findByTargetTypeAndTargetId("reservation", reservationId).map { it.action })
             .contains("RESERVATION_CANCELLED_BY_RESTAURANT")
+        assertThat(notificationRepository.findByReservationIdOrderByCreatedAtAsc(reservationId).map { it.templateKey })
+            .contains(RESERVATION_CANCELLED_TEMPLATE)
 
         createPublicReservationForFixture(
             fixture = fixture,

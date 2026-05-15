@@ -5,6 +5,7 @@ import com.example.restaurant.auth.BusinessPrincipal
 import com.example.restaurant.auth.ReservationLookupTokenService
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.example.restaurant.notification.NotificationService
 import com.example.restaurant.payment.CancellationPolicyRepository
 import com.example.restaurant.payment.PaymentEntity
 import com.example.restaurant.payment.PaymentRepository
@@ -36,6 +37,7 @@ class RefundService(
     private val lookupTokenService: ReservationLookupTokenService,
     private val refundGateway: RefundGateway,
     private val auditLogService: AuditLogService,
+    private val notificationService: NotificationService,
     private val clock: Clock,
 ) {
     private val objectMapper = jacksonObjectMapper()
@@ -137,6 +139,7 @@ class RefundService(
         refund.failureCode = null
         refund.failureMessage = null
         applySuccessfulRefund(refund)
+        notificationService.recordRefundCompleted(refund)
         auditRefund(
             action = "REFUND_MANUAL_RESOLVED",
             refund = refund,
@@ -224,6 +227,7 @@ class RefundService(
                 refund.failureCode = null
                 refund.failureMessage = null
                 applySuccessfulRefund(refund)
+                notificationService.recordRefundCompleted(refund)
                 "REFUND_SUCCEEDED"
             }
             RefundGatewayResultStatus.FAILED -> {
