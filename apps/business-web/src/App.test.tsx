@@ -308,6 +308,26 @@ describe("App routing", () => {
         },
         updatedAt: "2026-05-15T00:00:00.000Z",
       }),
+      listBusinessReservations: async () => ({
+        date: "2026-05-15",
+        from: "2026-05-15",
+        to: "2026-05-15",
+        summary: {
+          totalReservations: 0,
+          totalPartySize: 0,
+          confirmedCount: 0,
+          modifiedCount: 0,
+          completedCount: 0,
+          cancelledCount: 0,
+          noShowCount: 0,
+        },
+        items: [],
+      }),
+      listBusinessReservationCalendar: async () => ({
+        from: "2026-05-15",
+        to: "2026-05-15",
+        days: [],
+      }),
     };
     window.history.pushState({}, "", "/onboarding");
 
@@ -556,5 +576,50 @@ describe("App routing", () => {
 
     expect(await screen.findByText("상품이 삭제되었습니다.")).toBeInTheDocument();
     expect(await screen.findByText("등록된 예약 상품이 없습니다.")).toBeInTheDocument();
+  });
+
+  it("shows reservation list calendar and filters with the mock adapter", async () => {
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText("이메일"), {
+      target: { value: "owner@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("비밀번호"), {
+      target: { value: "password123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "로그인" }));
+
+    await screen.findByRole("heading", { name: "운영 현황" });
+    fireEvent.click(screen.getByRole("link", { name: "예약 운영" }));
+
+    expect(await screen.findByRole("heading", { name: "예약 운영" })).toBeInTheDocument();
+    expect(await screen.findByText("일별 예약 리스트")).toBeInTheDocument();
+    expect(await screen.findByText("주간 캘린더")).toBeInTheDocument();
+    expect(await screen.findByText("김예약")).toBeInTheDocument();
+    expect(screen.getAllByText("확정").length).toBeGreaterThan(0);
+    expect(screen.getByText("총 예약")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("예약번호, 고객명, 연락처, 상품명"), {
+      target: { value: "박취소" },
+    });
+
+    expect(await screen.findByText("조건에 맞는 예약이 없습니다.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("취소 예약 포함"));
+
+    expect(await screen.findByText("박취소")).toBeInTheDocument();
+    expect(screen.getByText("환불 대기")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "필터 초기화" }));
+    fireEvent.change(screen.getByLabelText("상품"), {
+      target: { value: "6002" },
+    });
+
+    expect(await screen.findByText("이수정")).toBeInTheDocument();
+    expect(screen.getAllByText("런치 코스").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "월" }));
+
+    expect(await screen.findByRole("heading", { name: "월간 캘린더" })).toBeInTheDocument();
   });
 });
