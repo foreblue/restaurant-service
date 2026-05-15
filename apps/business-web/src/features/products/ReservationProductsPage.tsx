@@ -2,7 +2,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { type ColumnDef } from "@tanstack/react-table";
 import { Edit3, PackagePlus, Save, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 
 import { ConfirmDialog } from "@/components/feedback/ConfirmDialog";
 import { DataTable } from "@/components/table/DataTable";
@@ -45,6 +45,16 @@ const allDays: BusinessDayOfWeek[] = [
   "SUNDAY",
 ];
 
+const dayOptions: Array<{ value: BusinessDayOfWeek; label: string; shortLabel: string }> = [
+  { value: "MONDAY", label: "월요일", shortLabel: "월" },
+  { value: "TUESDAY", label: "화요일", shortLabel: "화" },
+  { value: "WEDNESDAY", label: "수요일", shortLabel: "수" },
+  { value: "THURSDAY", label: "목요일", shortLabel: "목" },
+  { value: "FRIDAY", label: "금요일", shortLabel: "금" },
+  { value: "SATURDAY", label: "토요일", shortLabel: "토" },
+  { value: "SUNDAY", label: "일요일", shortLabel: "일" },
+];
+
 const sortOptions = [
   { label: "최신 등록순", value: "newest" },
   { label: "상품명순", value: "name" },
@@ -65,6 +75,12 @@ export function ReservationProductsPage() {
     defaultValues: emptyReservationProductFormValues,
     resolver: zodResolver(reservationProductFormSchema),
   });
+  const watchedValues = useWatch({ control: form.control });
+  const formValues: ReservationProductFormValues = {
+    ...emptyReservationProductFormValues,
+    ...watchedValues,
+  };
+  const selectedDays = formValues.availableDays;
   const products = productsQuery.data ?? emptyProducts;
   const sortedProducts = useMemo(() => sortProducts(products, sortKey), [products, sortKey]);
   const visibleCount = products.filter((product) => product.visible).length;
@@ -93,6 +109,19 @@ export function ReservationProductsPage() {
       accessorKey: "visible",
       header: "노출",
       cell: ({ row }) => <VisibilityBadge visible={row.original.visible} />,
+    },
+    {
+      id: "conditions",
+      header: "예약 조건",
+      cell: ({ row }) => (
+        <div className="grid min-w-[180px] gap-1 text-xs text-muted-foreground">
+          <span>{formatPartySize(row.original)}</span>
+          <span>{formatAvailableDays(row.original.availableDays)}</span>
+          <span>
+            {formatAvailableTime(row.original)} · 재고 {row.original.slotCapacity}
+          </span>
+        </div>
+      ),
     },
     {
       accessorKey: "createdAt",
@@ -152,6 +181,18 @@ export function ReservationProductsPage() {
     updateProduct.reset();
   }
 
+  function toggleAvailableDay(day: BusinessDayOfWeek, checked: boolean) {
+    const current = form.getValues("availableDays");
+    const nextDays = checked
+      ? allDays.filter((item) => item === day || current.includes(item))
+      : current.filter((item) => item !== day);
+
+    form.setValue("availableDays", nextDays, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+  }
+
   async function handleSubmit(values: ReservationProductFormValues) {
     if (!formMode) {
       return;
@@ -166,7 +207,7 @@ export function ReservationProductsPage() {
       } else {
         await updateProduct.mutateAsync({
           productId: formMode.product.id,
-          request: toSaveRequest(values, formMode.product),
+          request: toSaveRequest(values),
         });
         setResultMessage("상품이 수정되었습니다.");
       }
@@ -233,9 +274,6 @@ export function ReservationProductsPage() {
               <h2 className="text-lg font-semibold">
                 {formMode.type === "create" ? "상품 추가" : "상품 수정"}
               </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                상품별 인원, 요일, 시간, 재고 설정은 다음 단계에서 관리합니다.
-              </p>
             </div>
             <Button type="button" variant="ghost" size="sm" onClick={closeForm}>
               <X aria-hidden className="size-4" />
@@ -286,6 +324,117 @@ export function ReservationProductsPage() {
             </Field>
 
             <Checkbox id="product-visible" label="예약 페이지 노출" {...form.register("visible")} />
+
+            <div className="grid gap-4 lg:grid-cols-3">
+              <Field
+                id="product-min-party"
+                label="최소 인원"
+                error={form.formState.errors.minPartySize?.message}
+              >
+                <Input
+                  id="product-min-party"
+                  inputMode="numeric"
+                  invalid={Boolean(form.formState.errors.minPartySize)}
+                  {...fieldA11y("product-min-party", {
+                    error: form.formState.errors.minPartySize?.message,
+                  })}
+                  {...form.register("minPartySize")}
+                />
+              </Field>
+              <Field
+                id="product-max-party"
+                label="최대 인원"
+                error={form.formState.errors.maxPartySize?.message}
+              >
+                <Input
+                  id="product-max-party"
+                  inputMode="numeric"
+                  invalid={Boolean(form.formState.errors.maxPartySize)}
+                  {...fieldA11y("product-max-party", {
+                    error: form.formState.errors.maxPartySize?.message,
+                  })}
+                  {...form.register("maxPartySize")}
+                />
+              </Field>
+              <Field
+                id="product-slot-capacity"
+                label="슬롯 재고"
+                error={form.formState.errors.slotCapacity?.message}
+              >
+                <Input
+                  id="product-slot-capacity"
+                  inputMode="numeric"
+                  invalid={Boolean(form.formState.errors.slotCapacity)}
+                  {...fieldA11y("product-slot-capacity", {
+                    error: form.formState.errors.slotCapacity?.message,
+                  })}
+                  {...form.register("slotCapacity")}
+                />
+              </Field>
+            </div>
+
+            <div className="grid gap-2">
+              <p className="text-sm font-medium">예약 가능 요일</p>
+              <div
+                aria-label="예약 가능 요일"
+                className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4"
+                role="group"
+              >
+                {dayOptions.map((day) => (
+                  <Checkbox
+                    checked={selectedDays.includes(day.value)}
+                    id={`available-day-${day.value}`}
+                    key={day.value}
+                    label={`${day.label} 가능`}
+                    onChange={(event) => toggleAvailableDay(day.value, event.target.checked)}
+                  />
+                ))}
+              </div>
+              {form.formState.errors.availableDays?.message ? (
+                <p className="text-xs font-medium text-destructive">
+                  {form.formState.errors.availableDays.message}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Field
+                id="product-available-start"
+                label="예약 가능 시작"
+                error={form.formState.errors.availableStartTime?.message}
+              >
+                <Input
+                  id="product-available-start"
+                  type="time"
+                  invalid={Boolean(form.formState.errors.availableStartTime)}
+                  {...fieldA11y("product-available-start", {
+                    error: form.formState.errors.availableStartTime?.message,
+                  })}
+                  {...form.register("availableStartTime")}
+                />
+              </Field>
+              <Field
+                id="product-available-end"
+                label="예약 가능 종료"
+                error={form.formState.errors.availableEndTime?.message}
+              >
+                <Input
+                  id="product-available-end"
+                  type="time"
+                  invalid={Boolean(form.formState.errors.availableEndTime)}
+                  {...fieldA11y("product-available-end", {
+                    error: form.formState.errors.availableEndTime?.message,
+                  })}
+                  {...form.register("availableEndTime")}
+                />
+              </Field>
+            </div>
+
+            <Alert>
+              설정 요약: {formValues.minPartySize || "-"}-{formValues.maxPartySize || "-"}명,{" "}
+              {formatAvailableDays(selectedDays)}, {formatFormTimeRange(formValues)}, 슬롯 재고{" "}
+              {formValues.slotCapacity || "-"}
+            </Alert>
 
             {saveError ? <Alert variant="danger">{errorMessage(saveError)}</Alert> : null}
 
@@ -368,6 +517,39 @@ function VisibilityBadge({ visible }: { visible: boolean }) {
   );
 }
 
+function formatPartySize(product: ReservationProductResponse) {
+  return product.minPartySize === product.maxPartySize
+    ? `${product.minPartySize}명`
+    : `${product.minPartySize}-${product.maxPartySize}명`;
+}
+
+function formatAvailableDays(days: BusinessDayOfWeek[]) {
+  if (days.length === allDays.length) {
+    return "전체 요일";
+  }
+
+  return dayOptions
+    .filter((day) => days.includes(day.value))
+    .map((day) => day.shortLabel)
+    .join(", ");
+}
+
+function formatAvailableTime(product: ReservationProductResponse) {
+  if (!product.availableStartTime || !product.availableEndTime) {
+    return "전체 영업시간";
+  }
+
+  return `${formatTime(product.availableStartTime)}-${formatTime(product.availableEndTime)}`;
+}
+
+function formatFormTimeRange(values: ReservationProductFormValues) {
+  if (!values.availableStartTime && !values.availableEndTime) {
+    return "전체 영업시간";
+  }
+
+  return `${values.availableStartTime || "-"}-${values.availableEndTime || "-"}`;
+}
+
 function Panel({
   title,
   description,
@@ -393,13 +575,16 @@ function toFormValues(product: ReservationProductResponse): ReservationProductFo
     description: product.description ?? "",
     priceAmount: String(product.priceAmount),
     visible: product.visible,
+    minPartySize: String(product.minPartySize),
+    maxPartySize: String(product.maxPartySize),
+    availableDays: product.availableDays,
+    availableStartTime: product.availableStartTime ?? "",
+    availableEndTime: product.availableEndTime ?? "",
+    slotCapacity: String(product.slotCapacity),
   };
 }
 
-function toSaveRequest(
-  values: ReservationProductFormValues,
-  current?: ReservationProductResponse,
-): ReservationProductSaveRequest {
+function toSaveRequest(values: ReservationProductFormValues): ReservationProductSaveRequest {
   const description = values.description.trim();
 
   return {
@@ -407,12 +592,12 @@ function toSaveRequest(
     description: description || null,
     priceAmount: Number(values.priceAmount),
     visible: values.visible,
-    minPartySize: current?.minPartySize ?? 1,
-    maxPartySize: current?.maxPartySize ?? 4,
-    availableDays: current?.availableDays ?? allDays,
-    availableStartTime: current?.availableStartTime ?? null,
-    availableEndTime: current?.availableEndTime ?? null,
-    slotCapacity: current?.slotCapacity ?? 4,
+    minPartySize: Number(values.minPartySize),
+    maxPartySize: Number(values.maxPartySize),
+    availableDays: values.availableDays,
+    availableStartTime: values.availableStartTime || null,
+    availableEndTime: values.availableEndTime || null,
+    slotCapacity: Number(values.slotCapacity),
   };
 }
 
@@ -453,6 +638,10 @@ function formatDateTime(value: string | null) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function formatTime(value: string) {
+  return value.slice(0, 5);
 }
 
 function errorMessage(error: unknown) {
