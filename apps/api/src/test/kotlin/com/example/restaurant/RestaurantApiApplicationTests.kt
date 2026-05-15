@@ -24,6 +24,8 @@ import com.example.restaurant.payment.PaymentEntity
 import com.example.restaurant.payment.PaymentRepository
 import com.example.restaurant.payment.PaymentStatus
 import com.example.restaurant.payment.PaymentType
+import com.example.restaurant.payment.PgWebhookEventRepository
+import com.example.restaurant.payment.PgWebhookEventStatus
 import com.example.restaurant.refund.RefundEntity
 import com.example.restaurant.refund.RefundReason
 import com.example.restaurant.refund.RefundRepository
@@ -164,6 +166,9 @@ class RestaurantApiApplicationTests {
 
     @Autowired
     private lateinit var refundRepository: RefundRepository
+
+    @Autowired
+    private lateinit var pgWebhookEventRepository: PgWebhookEventRepository
 
     @Test
     fun contextLoads() {
@@ -532,6 +537,188 @@ class RestaurantApiApplicationTests {
             jsonPath("$.code") { value("CONFLICT") }
         }
         assertThat(paymentRepository.findByReservationIdOrderByCreatedAtAsc(created.id)).isEmpty()
+    }
+
+    @Test
+    fun pgWebhookPaymentSucceededIsIdempotentAndAudited() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "webhook-success-owner@example.com",
+            restaurantName = "Webhook Success Table",
+            slug = "webhook-success",
+        )
+        configureProductPaymentPolicy(
+            productId = fixture.productId,
+            type = ReservationProductPaymentPolicyType.DEPOSIT,
+            amount = 30_000,
+        )
+        val started = createReservationAndStartPaymentForWebhook(
+            fixture = fixture,
+            reservationKey = "webhook-success-reservation-1",
+            paymentKey = "webhook-success-payment-1",
+            startTime = "11:00:00",
+        )
+
+        mockMvc.post("/api/pg/webhooks") {
+            contentType = MediaType.APPLICATION_JSON
+            content = pgWebhookJson(
+                eventId = "evt-success-1",
+                eventType = "payment.succeeded",
+                pgPaymentId = started.payment.pgPaymentId!!,
+                amount = 30_000,
+            )
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("PROCESSED") }
+            jsonPath("$.paymentStatus") { value("PAID") }
+            jsonPath("$.reservationPaymentStatus") { value("PAID") }
+        }
+        mockMvc.post("/api/pg/webhooks") {
+            contentType = MediaType.APPLICATION_JSON
+            content = pgWebhookJson(
+                eventId = "evt-success-1",
+                eventType = "payment.succeeded",
+                pgPaymentId = started.payment.pgPaymentId!!,
+                amount = 30_000,
+            )
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("DUPLICATE") }
+        }
+
+        val payment = paymentRepository.findById(started.payment.id).orElseThrow()
+        assertThat(payment.status).isEqualTo(PaymentStatus.PAID)
+        assertThat(payment.paidAt).isNotNull()
+        val reservation = reservationRepository.findById(started.reservation.id).orElseThrow()
+        assertThat(reservation.status).isEqualTo(ReservationStatus.CONFIRMED)
+        assertThat(reservation.paymentStatus).isEqualTo(PaymentStatus.PAID)
+        assertThat(pgWebhookEventRepository.findByPaymentIdOrderByCreatedAtAsc(payment.id)).hasSize(1)
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("payment", payment.id).map { it.action })
+            .contains("PG_WEBHOOK_PAYMENT_SUCCEEDED")
+    }
+
+    @Test
+    fun pgWebhookFailureCancellationAndExpiryTransitionPaymentStatusOnly() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "webhook-terminal-owner@example.com",
+            restaurantName = "Webhook Terminal Table",
+            slug = "webhook-terminal",
+            slotCapacity = 6,
+        )
+        configureProductPaymentPolicy(
+            productId = fixture.productId,
+            type = ReservationProductPaymentPolicyType.DEPOSIT,
+            amount = 20_000,
+        )
+        val failed = createReservationAndStartPaymentForWebhook(
+            fixture = fixture,
+            reservationKey = "webhook-failed-reservation-1",
+            paymentKey = "webhook-failed-payment-1",
+            startTime = "11:00:00",
+        )
+        val cancelled = createReservationAndStartPaymentForWebhook(
+            fixture = fixture,
+            reservationKey = "webhook-cancelled-reservation-1",
+            paymentKey = "webhook-cancelled-payment-1",
+            startTime = "11:30:00",
+        )
+        val expired = createReservationAndStartPaymentForWebhook(
+            fixture = fixture,
+            reservationKey = "webhook-expired-reservation-1",
+            paymentKey = "webhook-expired-payment-1",
+            startTime = "12:00:00",
+        )
+
+        postPgWebhook("evt-failed-1", "payment.failed", failed.payment.pgPaymentId!!, 20_000, "FAILED")
+        postPgWebhook("evt-cancelled-1", "payment.cancelled", cancelled.payment.pgPaymentId!!, 20_000, "CANCELLED")
+        postPgWebhook("evt-expired-1", "payment.expired", expired.payment.pgPaymentId!!, 20_000, "EXPIRED")
+
+        assertPaymentAndReservationStatus(failed, PaymentStatus.FAILED, paymentRequired = true)
+        assertPaymentAndReservationStatus(cancelled, PaymentStatus.CANCELLED, paymentRequired = false)
+        assertPaymentAndReservationStatus(expired, PaymentStatus.EXPIRED, paymentRequired = false)
+
+        mockMvc.post("/api/pg/webhooks") {
+            contentType = MediaType.APPLICATION_JSON
+            content = pgWebhookJson(
+                eventId = "evt-expired-late-success-1",
+                eventType = "payment.succeeded",
+                pgPaymentId = expired.payment.pgPaymentId!!,
+                amount = 20_000,
+            )
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("FAILED") }
+            jsonPath("$.failureCode") { value("CONFLICT") }
+            jsonPath("$.paymentStatus") { value("EXPIRED") }
+            jsonPath("$.reservationPaymentStatus") { value("EXPIRED") }
+        }
+        assertPaymentAndReservationStatus(expired, PaymentStatus.EXPIRED, paymentRequired = false)
+    }
+
+    @Test
+    fun pgWebhookInvalidSignatureAndAmountMismatchAreTrackedWithoutStateChange() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "webhook-failure-tracking-owner@example.com",
+            restaurantName = "Webhook Failure Tracking Table",
+            slug = "webhook-failure-tracking",
+            slotCapacity = 4,
+        )
+        configureProductPaymentPolicy(
+            productId = fixture.productId,
+            type = ReservationProductPaymentPolicyType.DEPOSIT,
+            amount = 20_000,
+        )
+        val invalidSignature = createReservationAndStartPaymentForWebhook(
+            fixture = fixture,
+            reservationKey = "webhook-invalid-signature-reservation-1",
+            paymentKey = "webhook-invalid-signature-payment-1",
+            startTime = "11:00:00",
+        )
+        val mismatch = createReservationAndStartPaymentForWebhook(
+            fixture = fixture,
+            reservationKey = "webhook-amount-mismatch-reservation-1",
+            paymentKey = "webhook-amount-mismatch-payment-1",
+            startTime = "11:30:00",
+        )
+
+        mockMvc.post("/api/pg/webhooks") {
+            contentType = MediaType.APPLICATION_JSON
+            content = pgWebhookJson(
+                eventId = "evt-invalid-signature-1",
+                eventType = "payment.succeeded",
+                pgPaymentId = invalidSignature.payment.pgPaymentId!!,
+                amount = 20_000,
+                signature = "bad-signature",
+            )
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("SIGNATURE_FAILED") }
+            jsonPath("$.failureCode") { value("SIGNATURE_INVALID") }
+        }
+        mockMvc.post("/api/pg/webhooks") {
+            contentType = MediaType.APPLICATION_JSON
+            content = pgWebhookJson(
+                eventId = "evt-amount-mismatch-1",
+                eventType = "payment.succeeded",
+                pgPaymentId = mismatch.payment.pgPaymentId!!,
+                amount = 99_999,
+            )
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("FAILED") }
+            jsonPath("$.failureCode") { value("CONFLICT") }
+            jsonPath("$.paymentStatus") { value("PENDING") }
+        }
+
+        assertThat(paymentRepository.findById(invalidSignature.payment.id).orElseThrow().status)
+            .isEqualTo(PaymentStatus.PENDING)
+        assertThat(paymentRepository.findById(mismatch.payment.id).orElseThrow().status)
+            .isEqualTo(PaymentStatus.PENDING)
+        assertThat(
+            pgWebhookEventRepository.findByProviderKeyAndEventId("fake", "evt-invalid-signature-1")?.status,
+        ).isEqualTo(PgWebhookEventStatus.SIGNATURE_FAILED)
+        assertThat(
+            pgWebhookEventRepository.findByProviderKeyAndEventId("fake", "evt-amount-mismatch-1")?.status,
+        ).isEqualTo(PgWebhookEventStatus.FAILED)
     }
 
     @Test
@@ -3419,6 +3606,87 @@ class RestaurantApiApplicationTests {
         reservationProductRepository.saveAndFlush(product)
     }
 
+    private fun createReservationAndStartPaymentForWebhook(
+        fixture: PublicReservationFixture,
+        reservationKey: String,
+        paymentKey: String,
+        startTime: String,
+    ): StartedPaymentFixture {
+        val reservation = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = reservationKey,
+            startTime = startTime,
+            partySize = 1,
+            customerName = "웹훅결제",
+            customerPhone = "010-${reservationKey.takeLast(4)}-2121",
+        )
+        val result = mockMvc.post("/api/public/reservations/${reservation.id}/payments") {
+            header("X-Reservation-Lookup-Token", reservation.lookupToken)
+            header("Idempotency-Key", paymentKey)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"paymentMode": "deposit", "returnUrl": "https://service.example.com/payment-return"}"""
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.status") { value("PENDING") }
+        }.andReturn()
+        val paymentId = JsonPath.read<Int>(result.response.contentAsString, "$.paymentId").toLong()
+        return StartedPaymentFixture(
+            reservation = reservation,
+            payment = paymentRepository.findById(paymentId).orElseThrow(),
+        )
+    }
+
+    private fun postPgWebhook(
+        eventId: String,
+        eventType: String,
+        pgPaymentId: String,
+        amount: Long,
+        expectedPaymentStatus: String,
+    ) {
+        mockMvc.post("/api/pg/webhooks") {
+            contentType = MediaType.APPLICATION_JSON
+            content = pgWebhookJson(eventId, eventType, pgPaymentId, amount)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("PROCESSED") }
+            jsonPath("$.paymentStatus") { value(expectedPaymentStatus) }
+            jsonPath("$.reservationPaymentStatus") { value(expectedPaymentStatus) }
+        }
+    }
+
+    private fun pgWebhookJson(
+        eventId: String,
+        eventType: String,
+        pgPaymentId: String,
+        amount: Long,
+        signature: String = "fake-signature",
+    ): String =
+        """
+        {
+          "providerKey": "fake",
+          "eventId": "$eventId",
+          "eventType": "$eventType",
+          "pgPaymentId": "$pgPaymentId",
+          "amount": $amount,
+          "currency": "KRW",
+          "occurredAt": "2026-05-15T12:00:00+09:00",
+          "signature": "$signature"
+        }
+        """.trimIndent()
+
+    private fun assertPaymentAndReservationStatus(
+        started: StartedPaymentFixture,
+        status: PaymentStatus,
+        paymentRequired: Boolean,
+    ) {
+        val payment = paymentRepository.findById(started.payment.id).orElseThrow()
+        assertThat(payment.status).isEqualTo(status)
+        val reservation = reservationRepository.findById(started.reservation.id).orElseThrow()
+        assertThat(reservation.status).isEqualTo(ReservationStatus.CONFIRMED)
+        assertThat(reservation.paymentStatus).isEqualTo(status)
+        assertThat(reservation.paymentRequired).isEqualTo(paymentRequired)
+    }
+
     private data class PublicReservationFixture(
         val restaurant: RestaurantEntity,
         val productId: Long,
@@ -3429,6 +3697,11 @@ class RestaurantApiApplicationTests {
         val id: Long,
         val reservationNumber: String,
         val lookupToken: String,
+    )
+
+    private data class StartedPaymentFixture(
+        val reservation: PublicReservationCreated,
+        val payment: PaymentEntity,
     )
 
     private fun runConcurrentReservationCreates(
