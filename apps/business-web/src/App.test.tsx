@@ -260,6 +260,8 @@ describe("App routing", () => {
       submitRestaurantApplication: async () => rejectedApplication,
       getCurrentRestaurant: async () => mockRestaurant,
       updateRestaurant: async () => mockRestaurant,
+      saveBusinessHours: async () => [],
+      saveHolidayRules: async () => [],
     };
     window.history.pushState({}, "", "/onboarding");
 
@@ -320,5 +322,26 @@ describe("App routing", () => {
     fireEvent.click(screen.getByRole("button", { name: "저장" }));
 
     expect(await screen.findByText("매장 정보가 저장되었습니다.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("월요일 브레이크 시작"), {
+      target: { value: "14:00" },
+    });
+    fireEvent.change(screen.getByLabelText("월요일 브레이크 종료"), {
+      target: { value: "13:30" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "영업시간/휴무 저장" }));
+
+    expect(
+      await screen.findByText("월요일 브레이크 시작은 종료보다 빨라야 합니다."),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("월요일 브레이크 종료"), {
+      target: { value: "15:00" },
+    });
+    fireEvent.click(screen.getByLabelText("일요일 전체 휴무"));
+    fireEvent.click(screen.getByLabelText("일요일 정기 휴무"));
+    fireEvent.click(screen.getByRole("button", { name: "영업시간/휴무 저장" }));
+
+    expect(await screen.findByText("영업시간과 휴무가 저장되었습니다.")).toBeInTheDocument();
   });
 });

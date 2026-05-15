@@ -117,6 +117,69 @@ export interface ReservationPageSettingsResponse {
   publishBlockers: string[];
 }
 
+export type BusinessDayOfWeek =
+  | "MONDAY"
+  | "TUESDAY"
+  | "WEDNESDAY"
+  | "THURSDAY"
+  | "FRIDAY"
+  | "SATURDAY"
+  | "SUNDAY";
+
+export interface BusinessHourSaveItem {
+  dayOfWeek: BusinessDayOfWeek;
+  opensAt?: string | null;
+  closesAt?: string | null;
+  closed?: boolean | null;
+}
+
+export interface BusinessHoursSaveRequest {
+  hours: BusinessHourSaveItem[];
+}
+
+export interface BusinessHourResponse {
+  id: number;
+  dayOfWeek: BusinessDayOfWeek;
+  sequence: number;
+  opensAt: string | null;
+  closesAt: string | null;
+  closed: boolean;
+}
+
+export type HolidayRuleType =
+  | "WEEKLY"
+  | "MONTHLY_DATE"
+  | "MONTHLY_NTH_WEEKDAY"
+  | "TEMPORARY_DATE"
+  | "TEMPORARY_TIME";
+
+export interface HolidayRuleSaveItem {
+  type: HolidayRuleType;
+  dayOfWeek?: BusinessDayOfWeek | null;
+  dayOfMonth?: number | null;
+  weekOfMonth?: number | null;
+  date?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  reason?: string | null;
+}
+
+export interface HolidayRulesSaveRequest {
+  rules: HolidayRuleSaveItem[];
+}
+
+export interface HolidayRuleResponse {
+  id: number;
+  type: HolidayRuleType;
+  dayOfWeek: BusinessDayOfWeek | null;
+  dayOfMonth: number | null;
+  weekOfMonth: number | null;
+  date: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  reason: string | null;
+}
+
 export interface RestaurantSettingsResponse {
   id: number;
   status: "DRAFT" | "APPROVAL_REQUESTED" | "APPROVED" | "REJECTED" | "SUSPENDED";
@@ -132,8 +195,8 @@ export interface RestaurantSettingsResponse {
   timezone: string;
   approvedAt: string | null;
   reservationPage: ReservationPageSettingsResponse | null;
-  businessHours: unknown[];
-  holidayRules: unknown[];
+  businessHours: BusinessHourResponse[];
+  holidayRules: HolidayRuleResponse[];
 }
 
 interface BusinessLoginResponse {
@@ -183,6 +246,14 @@ export interface BusinessApiClient {
     restaurantId: number,
     request: RestaurantSettingsUpdateRequest,
   ): Promise<RestaurantSettingsResponse>;
+  saveBusinessHours(
+    restaurantId: number,
+    request: BusinessHoursSaveRequest,
+  ): Promise<BusinessHourResponse[]>;
+  saveHolidayRules(
+    restaurantId: number,
+    request: HolidayRulesSaveRequest,
+  ): Promise<HolidayRuleResponse[]>;
 }
 
 export function createBusinessQueryClient() {
@@ -291,6 +362,26 @@ class HttpBusinessApiClient implements BusinessApiClient {
       method: "PUT",
       body: request,
     });
+  }
+
+  saveBusinessHours(restaurantId: number, request: BusinessHoursSaveRequest) {
+    return this.request<BusinessHourResponse[]>(
+      `/api/business/restaurants/${restaurantId}/business-hours`,
+      {
+        method: "PUT",
+        body: request,
+      },
+    );
+  }
+
+  saveHolidayRules(restaurantId: number, request: HolidayRulesSaveRequest) {
+    return this.request<HolidayRuleResponse[]>(
+      `/api/business/restaurants/${restaurantId}/holiday-rules`,
+      {
+        method: "PUT",
+        body: request,
+      },
+    );
   }
 
   private async request<T>(path: string, init: { method?: string; body?: unknown } = {}) {
@@ -494,6 +585,47 @@ class MockBusinessApiClient implements BusinessApiClient {
     };
     this.writeRestaurant(updated);
     return updated;
+  }
+
+  async saveBusinessHours(restaurantId: number, request: BusinessHoursSaveRequest) {
+    const restaurant = this.readRestaurant() ?? defaultMockRestaurant();
+
+    if (restaurant.id !== restaurantId) {
+      throw new ApiError("매장을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    const businessHours = request.hours.map((item, index) => ({
+      id: 4000 + index + 1,
+      dayOfWeek: item.dayOfWeek,
+      sequence: index + 1,
+      opensAt: item.opensAt ?? null,
+      closesAt: item.closesAt ?? null,
+      closed: item.closed ?? false,
+    }));
+    this.writeRestaurant({ ...restaurant, businessHours });
+    return businessHours;
+  }
+
+  async saveHolidayRules(restaurantId: number, request: HolidayRulesSaveRequest) {
+    const restaurant = this.readRestaurant() ?? defaultMockRestaurant();
+
+    if (restaurant.id !== restaurantId) {
+      throw new ApiError("매장을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    const holidayRules = request.rules.map((item, index) => ({
+      id: 5000 + index + 1,
+      type: item.type,
+      dayOfWeek: item.dayOfWeek ?? null,
+      dayOfMonth: item.dayOfMonth ?? null,
+      weekOfMonth: item.weekOfMonth ?? null,
+      date: item.date ?? null,
+      startTime: item.startTime ?? null,
+      endTime: item.endTime ?? null,
+      reason: item.reason ?? null,
+    }));
+    this.writeRestaurant({ ...restaurant, holidayRules });
+    return holidayRules;
   }
 
   private readUser() {

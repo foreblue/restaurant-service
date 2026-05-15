@@ -9,13 +9,15 @@ import {
   useWatch,
 } from "react-hook-form";
 
-import { Alert, Button, Field, fieldA11y, Input } from "@/components/ui";
+import { Alert, Button, Checkbox, DateInput, Field, fieldA11y, Input } from "@/components/ui";
 import {
   emptyStoreSettingsValues,
   toStoreSettingsFormValues,
   toStoreSettingsUpdateRequest,
 } from "@/features/store/storeSettingsMapper";
 import {
+  useSaveBusinessHoursMutation,
+  useSaveHolidayRulesMutation,
   useStoreSettingsQuery,
   useUpdateStoreSettingsMutation,
   useUploadStoreFileMutation,
@@ -24,7 +26,14 @@ import {
   type StoreSettingsFormValues,
   storeSettingsSchema,
 } from "@/features/store/storeSettingsSchema";
-import { type RestaurantSettingsResponse } from "@/shared/api/businessApiClient";
+import {
+  type BusinessDayOfWeek,
+  type BusinessHourSaveItem,
+  type HolidayRuleSaveItem,
+  type BusinessHourResponse,
+  type HolidayRuleResponse,
+  type RestaurantSettingsResponse,
+} from "@/shared/api/businessApiClient";
 
 export function StoreSettingsPage() {
   const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null);
@@ -211,8 +220,461 @@ export function StoreSettingsPage() {
           </Button>
         </div>
       </form>
+
+      <StoreScheduleSection restaurant={storeSettings.data} />
     </section>
   );
+}
+
+const weekDays: Array<{ value: BusinessDayOfWeek; label: string }> = [
+  { value: "MONDAY", label: "월요일" },
+  { value: "TUESDAY", label: "화요일" },
+  { value: "WEDNESDAY", label: "수요일" },
+  { value: "THURSDAY", label: "목요일" },
+  { value: "FRIDAY", label: "금요일" },
+  { value: "SATURDAY", label: "토요일" },
+  { value: "SUNDAY", label: "일요일" },
+];
+
+interface DaySchedule {
+  dayOfWeek: BusinessDayOfWeek;
+  closed: boolean;
+  opensAt: string;
+  closesAt: string;
+  breakStart: string;
+  breakEnd: string;
+}
+
+interface TemporaryHolidayForm {
+  date: string;
+  startTime: string;
+  endTime: string;
+  reason: string;
+}
+
+function StoreScheduleSection({ restaurant }: { restaurant: RestaurantSettingsResponse }) {
+  const [schedule, setSchedule] = useState(() =>
+    scheduleFromBusinessHours(restaurant.businessHours),
+  );
+  const [weeklyHolidayDays, setWeeklyHolidayDays] = useState<BusinessDayOfWeek[]>(() =>
+    restaurant.holidayRules
+      .filter((rule) => rule.type === "WEEKLY" && rule.dayOfWeek)
+      .map((rule) => rule.dayOfWeek as BusinessDayOfWeek),
+  );
+  const [temporaryHoliday, setTemporaryHoliday] = useState<TemporaryHolidayForm>(() =>
+    temporaryHolidayFromRules(restaurant.holidayRules),
+  );
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const saveBusinessHours = useSaveBusinessHoursMutation();
+  const saveHolidayRules = useSaveHolidayRulesMutation();
+  const isSaving = saveBusinessHours.isPending || saveHolidayRules.isPending;
+
+  function updateSchedule(dayOfWeek: BusinessDayOfWeek, patch: Partial<DaySchedule>) {
+    setSaved(false);
+    setSchedule((current) =>
+      current.map((item) => (item.dayOfWeek === dayOfWeek ? { ...item, ...patch } : item)),
+    );
+  }
+
+  function toggleWeeklyHoliday(dayOfWeek: BusinessDayOfWeek, checked: boolean) {
+    setSaved(false);
+    setWeeklyHolidayDays((current) =>
+      checked ? [...current, dayOfWeek] : current.filter((item) => item !== dayOfWeek),
+    );
+  }
+
+  async function handleSaveSchedule() {
+    setSaved(false);
+    setScheduleError(null);
+
+    const validationError = validateSchedule(schedule, weeklyHolidayDays, temporaryHoliday);
+
+    if (validationError) {
+      setScheduleError(validationError);
+      return;
+    }
+
+    try {
+      await saveBusinessHours.mutateAsync({
+        restaurantId: restaurant.id,
+        request: { hours: toBusinessHourSaveItems(schedule) },
+      });
+      await saveHolidayRules.mutateAsync({
+        restaurantId: restaurant.id,
+        request: { rules: toHolidayRuleSaveItems(weeklyHolidayDays, temporaryHoliday) },
+      });
+      setSaved(true);
+    } catch (error) {
+      setScheduleError(errorMessage(error));
+    }
+  }
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-5 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">영업시간과 휴무</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            저장된 설정은 예약 가능 시간 계산에 사용할 요일별 구간과 휴무 규칙으로 전달됩니다.
+          </p>
+        </div>
+        <Button type="button" isLoading={isSaving} onClick={handleSaveSchedule}>
+          <Save aria-hidden className="size-4" />
+          영업시간/휴무 저장
+        </Button>
+      </div>
+
+      <div className="mt-5 grid gap-3">
+        {schedule.map((day) => (
+          <div
+            className="grid gap-3 border-b border-border pb-3 lg:grid-cols-[96px_1fr]"
+            key={day.dayOfWeek}
+          >
+            <div className="text-sm font-medium">{dayLabel(day.dayOfWeek)}</div>
+            <div className="grid gap-3 md:grid-cols-5">
+              <Checkbox
+                checked={day.closed}
+                id={`closed-${day.dayOfWeek}`}
+                label={`${dayLabel(day.dayOfWeek)} 전체 휴무`}
+                onChange={(event) =>
+                  updateSchedule(day.dayOfWeek, { closed: event.target.checked })
+                }
+              />
+              <TimeInput
+                disabled={day.closed}
+                id={`opens-${day.dayOfWeek}`}
+                label={`${dayLabel(day.dayOfWeek)} 영업 시작`}
+                value={day.opensAt}
+                onChange={(value) => updateSchedule(day.dayOfWeek, { opensAt: value })}
+              />
+              <TimeInput
+                disabled={day.closed}
+                id={`closes-${day.dayOfWeek}`}
+                label={`${dayLabel(day.dayOfWeek)} 영업 종료`}
+                value={day.closesAt}
+                onChange={(value) => updateSchedule(day.dayOfWeek, { closesAt: value })}
+              />
+              <TimeInput
+                disabled={day.closed}
+                id={`break-start-${day.dayOfWeek}`}
+                label={`${dayLabel(day.dayOfWeek)} 브레이크 시작`}
+                value={day.breakStart}
+                onChange={(value) => updateSchedule(day.dayOfWeek, { breakStart: value })}
+              />
+              <TimeInput
+                disabled={day.closed}
+                id={`break-end-${day.dayOfWeek}`}
+                label={`${dayLabel(day.dayOfWeek)} 브레이크 종료`}
+                value={day.breakEnd}
+                onChange={(value) => updateSchedule(day.dayOfWeek, { breakEnd: value })}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-5 grid gap-5 lg:grid-cols-2">
+        <div>
+          <h3 className="text-sm font-semibold">정기 휴무</h3>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            {weekDays.map((day) => (
+              <Checkbox
+                checked={weeklyHolidayDays.includes(day.value)}
+                id={`weekly-holiday-${day.value}`}
+                key={day.value}
+                label={`${day.label} 정기 휴무`}
+                onChange={(event) => toggleWeeklyHoliday(day.value, event.target.checked)}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <h3 className="text-sm font-semibold">임시 휴무</h3>
+          <div className="mt-2 grid gap-3 sm:grid-cols-2">
+            <Field id="temporary-holiday-date" label="임시 휴무 날짜">
+              <DateInput
+                id="temporary-holiday-date"
+                value={temporaryHoliday.date}
+                onChange={(event) =>
+                  setTemporaryHoliday((current) => ({ ...current, date: event.target.value }))
+                }
+              />
+            </Field>
+            <TextFieldInline
+              id="temporary-holiday-reason"
+              label="휴무 사유"
+              value={temporaryHoliday.reason}
+              onChange={(value) =>
+                setTemporaryHoliday((current) => ({ ...current, reason: value }))
+              }
+            />
+            <TimeInput
+              id="temporary-holiday-start"
+              label="임시 휴무 시작"
+              value={temporaryHoliday.startTime}
+              onChange={(value) =>
+                setTemporaryHoliday((current) => ({ ...current, startTime: value }))
+              }
+            />
+            <TimeInput
+              id="temporary-holiday-end"
+              label="임시 휴무 종료"
+              value={temporaryHoliday.endTime}
+              onChange={(value) =>
+                setTemporaryHoliday((current) => ({ ...current, endTime: value }))
+              }
+            />
+          </div>
+        </div>
+      </div>
+
+      <ScheduleSummary
+        schedule={schedule}
+        weeklyHolidayDays={weeklyHolidayDays}
+        temporaryHoliday={temporaryHoliday}
+      />
+
+      {scheduleError ? (
+        <div className="mt-4">
+          <Alert variant="danger">{scheduleError}</Alert>
+        </div>
+      ) : null}
+      {saved ? (
+        <div className="mt-4">
+          <Alert variant="success">영업시간과 휴무가 저장되었습니다.</Alert>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function TimeInput({
+  id,
+  label,
+  value,
+  disabled = false,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Field id={id} label={label}>
+      <Input
+        disabled={disabled}
+        id={id}
+        type="time"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </Field>
+  );
+}
+
+function TextFieldInline({
+  id,
+  label,
+  value,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Field id={id} label={label}>
+      <Input id={id} value={value} onChange={(event) => onChange(event.target.value)} />
+    </Field>
+  );
+}
+
+function ScheduleSummary({
+  schedule,
+  weeklyHolidayDays,
+  temporaryHoliday,
+}: {
+  schedule: DaySchedule[];
+  weeklyHolidayDays: BusinessDayOfWeek[];
+  temporaryHoliday: TemporaryHolidayForm;
+}) {
+  const openDays = schedule.filter((day) => !day.closed).length;
+  const closedDays = schedule.filter((day) => day.closed).length;
+
+  return (
+    <div className="mt-5 grid gap-2 text-sm text-muted-foreground">
+      <p>
+        영업 요일 {openDays}일, 전체 휴무 {closedDays}일, 정기 휴무 {weeklyHolidayDays.length}
+        개가 설정되어 있습니다.
+      </p>
+      {temporaryHoliday.date ? (
+        <p>
+          임시 휴무: {temporaryHoliday.date}
+          {temporaryHoliday.startTime && temporaryHoliday.endTime
+            ? ` ${temporaryHoliday.startTime}-${temporaryHoliday.endTime}`
+            : " 종일"}
+          {temporaryHoliday.reason ? `, ${temporaryHoliday.reason}` : ""}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function scheduleFromBusinessHours(businessHours: BusinessHourResponse[]): DaySchedule[] {
+  return weekDays.map((day) => {
+    const dayHours = businessHours
+      .filter((item) => item.dayOfWeek === day.value)
+      .sort((a, b) => a.sequence - b.sequence);
+    const closed = dayHours.some((item) => item.closed);
+    const first = dayHours[0];
+    const second = dayHours[1];
+
+    return {
+      dayOfWeek: day.value,
+      closed,
+      opensAt: closed ? "" : (first?.opensAt ?? "10:00"),
+      closesAt: closed ? "" : (second?.closesAt ?? first?.closesAt ?? "22:00"),
+      breakStart: closed ? "" : second ? (first?.closesAt ?? "") : "",
+      breakEnd: closed ? "" : (second?.opensAt ?? ""),
+    };
+  });
+}
+
+function temporaryHolidayFromRules(holidayRules: HolidayRuleResponse[]): TemporaryHolidayForm {
+  const temporary = holidayRules.find(
+    (rule) => rule.type === "TEMPORARY_DATE" || rule.type === "TEMPORARY_TIME",
+  );
+
+  return {
+    date: temporary?.date ?? "",
+    startTime: temporary?.startTime ?? "",
+    endTime: temporary?.endTime ?? "",
+    reason: temporary?.reason ?? "",
+  };
+}
+
+function validateSchedule(
+  schedule: DaySchedule[],
+  weeklyHolidayDays: BusinessDayOfWeek[],
+  temporaryHoliday: TemporaryHolidayForm,
+) {
+  for (const day of schedule) {
+    if (weeklyHolidayDays.includes(day.dayOfWeek) && !day.closed) {
+      return `${dayLabel(day.dayOfWeek)} 정기 휴무는 전체 휴무로 설정해 주세요.`;
+    }
+
+    if (day.closed) {
+      continue;
+    }
+
+    if (!day.opensAt || !day.closesAt) {
+      return `${dayLabel(day.dayOfWeek)} 영업 시작/종료 시간을 입력해 주세요.`;
+    }
+
+    if (!isBefore(day.opensAt, day.closesAt)) {
+      return `${dayLabel(day.dayOfWeek)} 영업 시작은 종료보다 빨라야 합니다.`;
+    }
+
+    const hasBreakStart = Boolean(day.breakStart);
+    const hasBreakEnd = Boolean(day.breakEnd);
+
+    if (hasBreakStart !== hasBreakEnd) {
+      return `${dayLabel(day.dayOfWeek)} 브레이크타임 시작/종료를 모두 입력해 주세요.`;
+    }
+
+    if (hasBreakStart && hasBreakEnd) {
+      if (!isBefore(day.breakStart, day.breakEnd)) {
+        return `${dayLabel(day.dayOfWeek)} 브레이크 시작은 종료보다 빨라야 합니다.`;
+      }
+      if (!isBefore(day.opensAt, day.breakStart) || !isBefore(day.breakEnd, day.closesAt)) {
+        return `${dayLabel(day.dayOfWeek)} 브레이크타임은 영업시간 안에 있어야 합니다.`;
+      }
+    }
+  }
+
+  if ((temporaryHoliday.startTime || temporaryHoliday.endTime) && !temporaryHoliday.date) {
+    return "임시 휴무 시간을 입력하려면 날짜를 먼저 선택해 주세요.";
+  }
+
+  if (
+    temporaryHoliday.date &&
+    Boolean(temporaryHoliday.startTime) !== Boolean(temporaryHoliday.endTime)
+  ) {
+    return "임시 휴무 시작/종료 시간을 모두 입력해 주세요.";
+  }
+
+  if (
+    temporaryHoliday.date &&
+    temporaryHoliday.startTime &&
+    temporaryHoliday.endTime &&
+    !isBefore(temporaryHoliday.startTime, temporaryHoliday.endTime)
+  ) {
+    return "임시 휴무 시작 시간은 종료 시간보다 빨라야 합니다.";
+  }
+
+  return null;
+}
+
+function toBusinessHourSaveItems(schedule: DaySchedule[]): BusinessHourSaveItem[] {
+  const items: BusinessHourSaveItem[] = [];
+
+  schedule.forEach((day) => {
+    if (day.closed) {
+      items.push({ dayOfWeek: day.dayOfWeek, closed: true });
+      return;
+    }
+
+    if (day.breakStart && day.breakEnd) {
+      items.push(
+        { dayOfWeek: day.dayOfWeek, opensAt: day.opensAt, closesAt: day.breakStart },
+        { dayOfWeek: day.dayOfWeek, opensAt: day.breakEnd, closesAt: day.closesAt },
+      );
+      return;
+    }
+
+    items.push({ dayOfWeek: day.dayOfWeek, opensAt: day.opensAt, closesAt: day.closesAt });
+  });
+
+  return items;
+}
+
+function toHolidayRuleSaveItems(
+  weeklyHolidayDays: BusinessDayOfWeek[],
+  temporaryHoliday: TemporaryHolidayForm,
+): HolidayRuleSaveItem[] {
+  const rules: HolidayRuleSaveItem[] = weeklyHolidayDays.map((dayOfWeek) => ({
+    type: "WEEKLY" as const,
+    dayOfWeek,
+  }));
+
+  if (temporaryHoliday.date) {
+    rules.push({
+      type:
+        temporaryHoliday.startTime && temporaryHoliday.endTime
+          ? "TEMPORARY_TIME"
+          : "TEMPORARY_DATE",
+      dayOfWeek: null,
+      date: temporaryHoliday.date,
+      startTime: temporaryHoliday.startTime || null,
+      endTime: temporaryHoliday.endTime || null,
+      reason: temporaryHoliday.reason.trim() || null,
+    });
+  }
+
+  return rules;
+}
+
+function isBefore(start: string, end: string) {
+  return start < end;
+}
+
+function dayLabel(dayOfWeek: BusinessDayOfWeek) {
+  return weekDays.find((day) => day.value === dayOfWeek)?.label ?? dayOfWeek;
 }
 
 function PublicPageNotice({
