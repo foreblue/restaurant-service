@@ -13,6 +13,7 @@ import com.example.restaurant.restaurant.ReservationPageRepository
 import com.example.restaurant.restaurant.ReservationPageStatus
 import com.example.restaurant.restaurant.RestaurantStatus
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Isolation
 import org.springframework.transaction.annotation.Transactional
 import java.security.SecureRandom
 import java.time.Clock
@@ -42,7 +43,7 @@ class PublicReservationService(
 ) {
     private val secureRandom = SecureRandom()
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     fun create(
         request: PublicReservationCreateRequest,
         headerIdempotencyKey: String?,

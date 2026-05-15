@@ -65,6 +65,7 @@ import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Bean
 import org.springframework.http.HttpHeaders
+import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.mock.web.MockMultipartFile
 import org.springframework.security.crypto.password.PasswordEncoder
@@ -78,6 +79,9 @@ import org.springframework.web.bind.annotation.RestController
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -1821,6 +1825,124 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun publicReservationConcurrentRequestsDoNotOverbookSameSlot() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "reservation-concurrent-stock-owner@example.com",
+            restaurantName = "Reservation Concurrent Stock Table",
+            slug = "reservation-concurrent-stock",
+            slotCapacity = 4,
+        )
+
+        val attempts = runConcurrentReservationCreates(
+            ReservationCreateCommand(
+                idempotencyKey = "public-reserve-concurrent-stock-1",
+                body = publicReservationRequestJson(
+                    fixture = fixture,
+                    startTime = "11:00:00",
+                    partySize = 3,
+                    customerName = "동시예약1",
+                    customerPhone = "010-1111-3001",
+                ),
+            ),
+            ReservationCreateCommand(
+                idempotencyKey = "public-reserve-concurrent-stock-2",
+                body = publicReservationRequestJson(
+                    fixture = fixture,
+                    startTime = "11:00:00",
+                    partySize = 3,
+                    customerName = "동시예약2",
+                    customerPhone = "010-1111-3002",
+                ),
+            ),
+        )
+
+        assertThat(attempts.map { it.status })
+            .containsExactlyInAnyOrder(HttpStatus.CREATED.value(), HttpStatus.CONFLICT.value())
+        val conflict = attempts.single { it.status == HttpStatus.CONFLICT.value() }
+        assertThat(JsonPath.read<String>(conflict.body, "$.code")).isEqualTo("CONFLICT")
+        assertThat(JsonPath.read<String>(conflict.body, "$.message")).isEqualTo("예약 가능한 재고가 없습니다.")
+        assertThat(reservationRepository.countByRestaurantId(fixture.restaurant.id)).isEqualTo(1)
+    }
+
+    @Test
+    fun publicReservationConcurrentIdempotencyReturnsSingleReservation() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "reservation-concurrent-idempotency-owner@example.com",
+            restaurantName = "Reservation Concurrent Idempotency Table",
+            slug = "reservation-concurrent-idempotency",
+            slotCapacity = 2,
+        )
+        val requestBody = publicReservationRequestJson(
+            fixture = fixture,
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "멱등예약",
+            customerPhone = "010-2222-3333",
+        )
+
+        val attempts = runConcurrentReservationCreates(
+            ReservationCreateCommand(
+                idempotencyKey = "public-reserve-concurrent-idempotency",
+                body = requestBody,
+            ),
+            ReservationCreateCommand(
+                idempotencyKey = "public-reserve-concurrent-idempotency",
+                body = requestBody,
+            ),
+        )
+
+        assertThat(attempts.map { it.status }).containsOnly(HttpStatus.CREATED.value())
+        val reservationIds = attempts.map { JsonPath.read<Int>(it.body, "$.id") }.toSet()
+        val reservationNumbers = attempts.map { JsonPath.read<String>(it.body, "$.reservationNumber") }.toSet()
+        assertThat(reservationIds).hasSize(1)
+        assertThat(reservationNumbers).hasSize(1)
+        assertThat(reservationRepository.countByRestaurantId(fixture.restaurant.id)).isEqualTo(1)
+        val reservationId = reservationIds.single().toLong()
+        assertThat(notificationRepository.countByReservationIdAndTemplateKey(reservationId, RESERVATION_CONFIRMED_TEMPLATE))
+            .isEqualTo(1)
+    }
+
+    @Test
+    fun publicReservationCreateRevalidatesAfterAvailabilityWasRead() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "reservation-revalidate-owner@example.com",
+            restaurantName = "Reservation Revalidate Table",
+            slug = "reservation-revalidate",
+        )
+
+        mockMvc.get("/api/public/restaurants/${fixture.restaurant.id}/availability/times") {
+            param("productId", fixture.productId.toString())
+            param("date", fixture.targetDate.toString())
+            param("partySize", "2")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.times.length()") { value(4) }
+            jsonPath("$.times[0].startTime") { value("11:00:00") }
+        }
+
+        val product = reservationProductRepository.findById(fixture.productId).orElseThrow()
+        product.visible = false
+        reservationProductRepository.saveAndFlush(product)
+
+        mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "public-reserve-revalidate-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = publicReservationRequestJson(
+                fixture = fixture,
+                startTime = "11:00:00",
+                partySize = 2,
+                customerName = "재검증",
+                customerPhone = "010-4444-5555",
+            )
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+
+        assertThat(reservationRepository.countByRestaurantId(fixture.restaurant.id)).isEqualTo(0)
+    }
+
+    @Test
     fun businessRestaurantApplicationSubmitRejectsMissingRequiredFields() {
         val sessionCookie = loginAndExtractSessionCookie(
             createBusinessUser("application-missing-required@example.com").email,
@@ -2202,6 +2324,50 @@ class RestaurantApiApplicationTests {
         val restaurant: RestaurantEntity,
         val productId: Long,
         val targetDate: LocalDate,
+    )
+
+    private fun runConcurrentReservationCreates(
+        vararg commands: ReservationCreateCommand,
+    ): List<ReservationCreateAttempt> {
+        val executor = Executors.newFixedThreadPool(commands.size)
+        val ready = CountDownLatch(commands.size)
+        val start = CountDownLatch(1)
+        return try {
+            val futures = commands.map { command ->
+                executor.submit<ReservationCreateAttempt> {
+                    ready.countDown()
+                    check(start.await(5, TimeUnit.SECONDS))
+                    postPublicReservation(command)
+                }
+            }
+            check(ready.await(5, TimeUnit.SECONDS))
+            start.countDown()
+            futures.map { it.get(10, TimeUnit.SECONDS) }
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    private fun postPublicReservation(command: ReservationCreateCommand): ReservationCreateAttempt {
+        val result = mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", command.idempotencyKey)
+            contentType = MediaType.APPLICATION_JSON
+            content = command.body
+        }.andReturn()
+        return ReservationCreateAttempt(
+            status = result.response.status,
+            body = result.response.contentAsString,
+        )
+    }
+
+    private data class ReservationCreateCommand(
+        val idempotencyKey: String,
+        val body: String,
+    )
+
+    private data class ReservationCreateAttempt(
+        val status: Int,
+        val body: String,
     )
 
     private fun fullRestaurantApplicationJson(
