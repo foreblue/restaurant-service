@@ -108,6 +108,19 @@ class BusinessReservationController(
             metadata = servletRequest.toMetadata(),
         )
 
+    @PutMapping("/{reservationId}/operation-note")
+    fun updateOperationNote(
+        servletRequest: HttpServletRequest,
+        @PathVariable reservationId: Long,
+        @RequestBody request: BusinessReservationOperationNoteRequest,
+    ): BusinessReservationDetailResponse =
+        businessReservationService.updateOperationNote(
+            principal = BusinessAuthContext.principal(servletRequest),
+            reservationId = reservationId,
+            request = request,
+            metadata = servletRequest.toMetadata(),
+        )
+
     @GetMapping("/calendar")
     fun calendar(
         servletRequest: HttpServletRequest,

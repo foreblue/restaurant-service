@@ -2358,6 +2358,112 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun businessOwnerCanUpdateOperationNoteAndReadReservationAuditLogs() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "business-audit-owner@example.com",
+            restaurantName = "Business Audit Table",
+            slug = "business-audit",
+            slotCapacity = 2,
+        )
+        val ownerCookie = loginAndExtractSessionCookie("business-audit-owner@example.com")
+        val createResult = mockMvc.post("/api/business/reservations/manual") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            header("X-Forwarded-For", "203.0.113.18")
+            header("User-Agent", "audit-test")
+            content = """
+            {
+              "source": "manual_phone",
+              "productId": ${fixture.productId},
+              "visitDate": "${fixture.targetDate}",
+              "startTime": "11:00:00",
+              "partySize": 1,
+              "customerName": "감사로그",
+              "customerPhone": "010-1818-0000"
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val reservationId = JsonPath.read<Int>(createResult.response.contentAsString, "$.id").toLong()
+
+        mockMvc.post("/api/business/reservations/$reservationId/cancel") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reason": "감사 로그 취소"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("CANCELLED_BY_RESTAURANT") }
+        }
+
+        mockMvc.put("/api/business/reservations/$reservationId/operation-note") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            header("X-Forwarded-For", "203.0.113.19")
+            content = """{"ownerNote": "통화 완료, 재예약 안내"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.ownerNote") { value("통화 완료, 재예약 안내") }
+            jsonPath("$.auditLogs.length()") { value(3) }
+            jsonPath("$.auditLogs[2].action") { value("RESERVATION_OWNER_NOTE_UPDATED") }
+        }
+
+        mockMvc.get("/api/business/reservations") {
+            cookie(ownerCookie)
+            param("date", fixture.targetDate.toString())
+            param("includeCancelled", "true")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.items[0].hasOwnerNote") { value(true) }
+        }
+
+        mockMvc.get("/api/business/audit-logs") {
+            cookie(ownerCookie)
+            param("targetType", "reservation")
+            param("targetId", reservationId.toString())
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.items.length()") { value(3) }
+            jsonPath("$.items[0].actorRole") { value("OWNER") }
+            jsonPath("$.items[0].actorUserId") { exists() }
+            jsonPath("$.items[0].targetType") { value("reservation") }
+            jsonPath("$.items[0].targetId") { value(reservationId.toInt()) }
+            jsonPath("$.items[0].action") { value("RESERVATION_CREATED_MANUAL") }
+            jsonPath("$.items[0].createdAt") { isNotEmpty() }
+            jsonPath("$.items[2].action") { value("RESERVATION_OWNER_NOTE_UPDATED") }
+            jsonPath("$.items[2].beforeValue.ownerNote") { value(org.hamcrest.Matchers.nullValue()) }
+            jsonPath("$.items[2].afterValue.ownerNote") { value("통화 완료, 재예약 안내") }
+            jsonPath("$.items[2].ipAddress") { value("203.0.113.19") }
+        }
+
+        val otherFixture = createPublicReservationFixture(
+            ownerEmail = "business-audit-other@example.com",
+            restaurantName = "Other Business Audit Table",
+            slug = "business-audit-other",
+        )
+        val otherCookie = loginAndExtractSessionCookie("business-audit-other@example.com")
+        mockMvc.get("/api/business/audit-logs") {
+            cookie(otherCookie)
+            param("targetType", "reservation")
+            param("targetId", reservationId.toString())
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+
+        mockMvc.put("/api/business/reservations/$reservationId/operation-note") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"ownerNote": "${"가".repeat(1001)}"}"""
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("VALIDATION_ERROR") }
+        }
+
+        assertThat(otherFixture.restaurant.id).isNotEqualTo(fixture.restaurant.id)
+    }
+
+    @Test
     fun publicReservationCancelRejectsVisitStartPassed() {
         val fixture = createPublicReservationFixture(
             ownerEmail = "reservation-past-cancel-owner@example.com",

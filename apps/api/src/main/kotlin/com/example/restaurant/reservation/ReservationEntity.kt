@@ -62,6 +62,9 @@ class ReservationEntity(
     @Column(name = "customer_request", length = 500)
     val customerRequest: String? = null,
 
+    @Column(name = "owner_note", length = 1000)
+    var ownerNote: String? = null,
+
     @Column(name = "cancelled_at")
     var cancelledAt: Instant? = null,
 

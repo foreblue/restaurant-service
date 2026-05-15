@@ -7,4 +7,9 @@ interface AuditLogRepository : JpaRepository<AuditLogEntity, Long> {
         targetType: String,
         targetId: Long,
     ): List<AuditLogEntity>
+
+    fun findByTargetTypeAndTargetIdOrderByCreatedAtAscIdAsc(
+        targetType: String,
+        targetId: Long,
+    ): List<AuditLogEntity>
 }
