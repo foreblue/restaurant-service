@@ -722,6 +722,220 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun publicRefundPreviewAndCustomerCancelCreatePartialRefund() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "refund-preview-owner@example.com",
+            restaurantName = "Refund Preview Table",
+            slug = "refund-preview",
+        )
+        configureProductPaymentPolicy(
+            productId = fixture.productId,
+            type = ReservationProductPaymentPolicyType.DEPOSIT,
+            amount = 30_000,
+        )
+        val started = createReservationAndStartPaymentForWebhook(
+            fixture = fixture,
+            reservationKey = "refund-preview-reservation-0001",
+            paymentKey = "refund-preview-payment-0001",
+            startTime = "11:00:00",
+        )
+        postPgWebhook(
+            eventId = "evt-refund-preview-paid-1",
+            eventType = "payment.succeeded",
+            pgPaymentId = started.payment.pgPaymentId!!,
+            amount = 30_000,
+            expectedPaymentStatus = "PAID",
+        )
+        val reservation = reservationRepository.findById(started.reservation.id).orElseThrow()
+        reservation.cancellationPolicySnapshotJson = """
+        {
+          "rules": [
+            {"id": "rule_test_50", "beforeVisitHours": 0, "refundRate": 50}
+          ],
+          "restaurantCancelRefundRate": 100
+        }
+        """.trimIndent()
+        reservationRepository.saveAndFlush(reservation)
+
+        mockMvc.get("/api/public/reservations/${started.reservation.id}/refund-preview") {
+            header("X-Reservation-Lookup-Token", started.reservation.lookupToken)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.paymentStatus") { value("PAID") }
+            jsonPath("$.refundRequired") { value(true) }
+            jsonPath("$.refundableAmount") { value(15000) }
+            jsonPath("$.nonRefundableAmount") { value(15000) }
+            jsonPath("$.alreadyRefundedAmount") { value(0) }
+            jsonPath("$.policyRuleId") { value("rule_test_50") }
+        }
+
+        mockMvc.post("/api/public/reservations/${started.reservation.id}/cancel") {
+            header("X-Reservation-Lookup-Token", started.reservation.lookupToken)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reason": "부분 환불 테스트", "confirmRefundAmount": 15000}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("CANCELLED_BY_CUSTOMER") }
+            jsonPath("$.refund.status") { value("SUCCEEDED") }
+            jsonPath("$.refund.paymentStatus") { value("PARTIALLY_REFUNDED") }
+            jsonPath("$.refund.refundAmount") { value(15000) }
+            jsonPath("$.refund.nonRefundableAmount") { value(15000) }
+        }
+
+        val payment = paymentRepository.findById(started.payment.id).orElseThrow()
+        assertThat(payment.status).isEqualTo(PaymentStatus.PARTIALLY_REFUNDED)
+        assertThat(payment.refundedAmount).isEqualTo(15_000)
+        assertThat(reservationRepository.findById(started.reservation.id).orElseThrow().paymentStatus)
+            .isEqualTo(PaymentStatus.PARTIALLY_REFUNDED)
+        assertThat(refundRepository.findByReservationIdOrderByCreatedAtAsc(started.reservation.id)).hasSize(1)
+    }
+
+    @Test
+    fun publicRefundPreviewSkipsOnlineRefundForPayOnSiteReservation() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "refund-onsite-owner@example.com",
+            restaurantName = "Refund Onsite Table",
+            slug = "refund-onsite",
+        )
+        configureProductPaymentPolicy(
+            productId = fixture.productId,
+            type = ReservationProductPaymentPolicyType.PAY_ON_SITE,
+        )
+        val created = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "refund-onsite-reservation-0001",
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "현장환불",
+            customerPhone = "010-3131-0001",
+        )
+
+        mockMvc.get("/api/public/reservations/${created.id}/refund-preview") {
+            header("X-Reservation-Lookup-Token", created.lookupToken)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.paymentStatus") { value("PAY_ON_SITE") }
+            jsonPath("$.refundRequired") { value(false) }
+            jsonPath("$.refundableAmount") { value(0) }
+            jsonPath("$.nonRefundableAmount") { value(0) }
+        }
+
+        mockMvc.post("/api/public/reservations/${created.id}/cancel") {
+            header("X-Reservation-Lookup-Token", created.lookupToken)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reason": "현장 결제 취소", "confirmRefundAmount": 0}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("CANCELLED_BY_CUSTOMER") }
+            jsonPath("$.refund.refundRequired") { value(false) }
+        }
+        assertThat(refundRepository.findByReservationIdOrderByCreatedAtAsc(created.id)).isEmpty()
+    }
+
+    @Test
+    fun businessRestaurantCancelCreatesFullRefund() {
+        val ownerEmail = "business-refund-owner@example.com"
+        val fixture = createPublicReservationFixture(
+            ownerEmail = ownerEmail,
+            restaurantName = "Business Refund Table",
+            slug = "business-refund",
+        )
+        val ownerCookie = loginAndExtractSessionCookie(ownerEmail)
+        configureProductPaymentPolicy(
+            productId = fixture.productId,
+            type = ReservationProductPaymentPolicyType.DEPOSIT,
+            amount = 30_000,
+        )
+        val started = createReservationAndStartPaymentForWebhook(
+            fixture = fixture,
+            reservationKey = "business-refund-reservation-0001",
+            paymentKey = "business-refund-payment-0001",
+            startTime = "11:00:00",
+        )
+        postPgWebhook(
+            eventId = "evt-business-refund-paid-1",
+            eventType = "payment.succeeded",
+            pgPaymentId = started.payment.pgPaymentId!!,
+            amount = 30_000,
+            expectedPaymentStatus = "PAID",
+        )
+
+        mockMvc.post("/api/business/reservations/${started.reservation.id}/cancel") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reason": "매장 사정 취소"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("CANCELLED_BY_RESTAURANT") }
+            jsonPath("$.paymentStatus") { value("REFUNDED") }
+            jsonPath("$.refund.status") { value("SUCCEEDED") }
+            jsonPath("$.refund.refundAmount") { value(30000) }
+            jsonPath("$.refund.nonRefundableAmount") { value(0) }
+        }
+
+        val payment = paymentRepository.findById(started.payment.id).orElseThrow()
+        assertThat(payment.status).isEqualTo(PaymentStatus.REFUNDED)
+        assertThat(payment.refundedAmount).isEqualTo(30_000)
+        assertThat(refundRepository.findByReservationIdOrderByCreatedAtAsc(started.reservation.id).single().reason)
+            .isEqualTo(RefundReason.RESTAURANT_CANCEL)
+    }
+
+    @Test
+    fun adminCanRetryAndManuallyResolveFailedRefunds() {
+        val admin = createBusinessUser("admin-refund@example.com", BusinessUserRole.ADMIN)
+        val adminCookie = loginAndExtractSessionCookie(admin.email)
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "admin-refund-owner@example.com",
+            restaurantName = "Admin Refund Table",
+            slug = "admin-refund",
+            slotCapacity = 6,
+        )
+        configureProductPaymentPolicy(
+            productId = fixture.productId,
+            type = ReservationProductPaymentPolicyType.DEPOSIT,
+            amount = 20_000,
+        )
+
+        val retryRefund = createFailedCustomerRefund(
+            fixture = fixture,
+            reservationKey = "refund-retry-0001",
+            paymentKey = "refund-retry-pay-0001",
+            startTime = "11:00:00",
+        )
+        mockMvc.post("/api/admin/refunds/${retryRefund.id}/retry") {
+            cookie(adminCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("SUCCEEDED") }
+            jsonPath("$.paymentStatus") { value("REFUNDED") }
+            jsonPath("$.failureCode") { value(org.hamcrest.Matchers.nullValue()) }
+        }
+        assertThat(refundRepository.findById(retryRefund.id).orElseThrow().status)
+            .isEqualTo(RefundStatus.SUCCEEDED)
+
+        val manualRefund = createFailedCustomerRefund(
+            fixture = fixture,
+            reservationKey = "refund-manual-0002",
+            paymentKey = "refund-manual-pay-0002",
+            startTime = "11:30:00",
+        )
+        mockMvc.post("/api/admin/refunds/${manualRefund.id}/mark-manual-resolved") {
+            cookie(adminCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"memo": "PG 관리자 화면에서 수동 환불 확인"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("SUCCEEDED") }
+            jsonPath("$.paymentStatus") { value("REFUNDED") }
+            jsonPath("$.manualResolved") { value(true) }
+        }
+        assertThat(refundRepository.findById(manualRefund.id).orElseThrow().status)
+            .isEqualTo(RefundStatus.SUCCEEDED)
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("refund", manualRefund.id).map { it.action })
+            .contains("REFUND_MANUAL_RESOLVED")
+    }
+
+    @Test
     fun mysqlServerDefaultsUseExpectedCharsetAndTimezone() {
         val serverDefaults = jdbcTemplate.queryForMap(
             "select @@character_set_server as charset_name, @@collation_server as collation_name, @@global.time_zone as time_zone",
@@ -3634,6 +3848,42 @@ class RestaurantApiApplicationTests {
             reservation = reservation,
             payment = paymentRepository.findById(paymentId).orElseThrow(),
         )
+    }
+
+    private fun createFailedCustomerRefund(
+        fixture: PublicReservationFixture,
+        reservationKey: String,
+        paymentKey: String,
+        startTime: String,
+    ): RefundEntity {
+        val started = createReservationAndStartPaymentForWebhook(
+            fixture = fixture,
+            reservationKey = reservationKey,
+            paymentKey = paymentKey,
+            startTime = startTime,
+        )
+        postPgWebhook(
+            eventId = "evt-$paymentKey-paid",
+            eventType = "payment.succeeded",
+            pgPaymentId = started.payment.pgPaymentId!!,
+            amount = 20_000,
+            expectedPaymentStatus = "PAID",
+        )
+        val payment = paymentRepository.findById(started.payment.id).orElseThrow()
+        payment.pgPaymentId = "fake-payment-refund-fail-${payment.id}"
+        paymentRepository.saveAndFlush(payment)
+
+        mockMvc.post("/api/public/reservations/${started.reservation.id}/cancel") {
+            header("X-Reservation-Lookup-Token", started.reservation.lookupToken)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reason": "환불 실패 테스트"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("CANCELLED_BY_CUSTOMER") }
+            jsonPath("$.refund.status") { value("FAILED") }
+            jsonPath("$.refund.paymentStatus") { value("REFUND_FAILED") }
+        }
+        return refundRepository.findByReservationIdOrderByCreatedAtAsc(started.reservation.id).single()
     }
 
     private fun postPgWebhook(

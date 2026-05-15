@@ -1,5 +1,6 @@
 package com.example.restaurant.reservation
 
+import com.example.restaurant.refund.RefundOperationResponse
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -18,6 +19,7 @@ data class PublicReservationCreateRequest(
 
 data class PublicReservationCancelRequest(
     val reason: String? = null,
+    val confirmRefundAmount: Long? = null,
 )
 
 data class PublicReservationResponse(
@@ -57,4 +59,5 @@ data class PublicReservationDetailResponse(
     val cancelDeadline: Instant,
     val cancelledAt: Instant?,
     val cancelReason: String?,
+    val refund: RefundOperationResponse? = null,
 )

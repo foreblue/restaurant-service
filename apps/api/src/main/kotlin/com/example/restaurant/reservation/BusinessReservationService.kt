@@ -9,6 +9,8 @@ import com.example.restaurant.auth.TokenHash
 import com.example.restaurant.availability.AvailabilityService
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.example.restaurant.refund.RefundOperationResponse
+import com.example.restaurant.refund.RefundService
 import com.example.restaurant.reservationproduct.ReservationProductRepository
 import com.example.restaurant.reservationproduct.ReservationProductStatus
 import com.example.restaurant.restaurant.BusinessHourRepository
@@ -44,6 +46,7 @@ class BusinessReservationService(
     private val reservationRepository: ReservationRepository,
     private val auditLogService: AuditLogService,
     private val auditLogRepository: AuditLogRepository,
+    private val refundService: RefundService,
     private val clock: Clock,
 ) {
     private val objectMapper = jacksonObjectMapper()
@@ -195,7 +198,7 @@ class BusinessReservationService(
         val restaurant = ownedRestaurant(principal)
         val reservation = ownedReservationForUpdate(restaurant.id, reservationId)
         if (reservation.status == ReservationStatus.CANCELLED_BY_RESTAURANT) {
-            return reservation.toDetail()
+            return reservation.toDetail(refundService.latestRefundOperation(reservation))
         }
         reservation.requireActive("취소할 수 없는 예약입니다.")
         val reason = request.normalizedCancelReason()
@@ -203,9 +206,10 @@ class BusinessReservationService(
         reservation.status = ReservationStatus.CANCELLED_BY_RESTAURANT
         reservation.cancelledAt = Instant.now(clock)
         reservation.cancelReason = reason
+        val refund = refundService.requestRestaurantCancellationRefund(reservation)
         auditReservationChange(owner, "RESERVATION_CANCELLED_BY_RESTAURANT", reservation, before, metadata)
 
-        return reservation.toDetail()
+        return reservation.toDetail(refund)
     }
 
     @Transactional
@@ -641,7 +645,9 @@ class BusinessReservationService(
         )
     }
 
-    private fun ReservationEntity.toDetail(): BusinessReservationDetailResponse {
+    private fun ReservationEntity.toDetail(
+        refund: RefundOperationResponse? = null,
+    ): BusinessReservationDetailResponse {
         val statusPresentation = status.presentation()
         return BusinessReservationDetailResponse(
             id = id,
@@ -673,6 +679,7 @@ class BusinessReservationService(
             paymentActionRequired = paymentStatus.requiresBusinessAction(),
             cancelledAt = cancelledAt,
             cancelReason = cancelReason,
+            refund = refund,
             completedAt = completedAt,
             noShowAt = noShowAt,
             auditLogs = auditLogRepository
