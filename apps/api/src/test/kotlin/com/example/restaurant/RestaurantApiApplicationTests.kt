@@ -3361,6 +3361,198 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun businessOwnerCanReadCustomerHistoryAndManageFlags() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "customer-history-owner@example.com",
+            restaurantName = "Customer History Table",
+            slug = "customer-history",
+            slotCapacity = 6,
+        )
+        val ownerCookie = loginAndExtractSessionCookie("customer-history-owner@example.com")
+        val completedReservation = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "customer-history-completed",
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "이력고객",
+            customerPhone = "010-2828-0000",
+            customerRequest = "생일 케이크 요청",
+        )
+        val noShowReservation = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "customer-history-noshow",
+            startTime = "11:30:00",
+            partySize = 1,
+            customerName = "이력고객",
+            customerPhone = "01028280000",
+            customerRequest = "창가 선호",
+        )
+        val customer = customerRepository
+            .findByRestaurantIdAndPhoneNumber(fixture.restaurant.id, "01028280000")
+            ?: error("customer not created")
+        customer.email = "history@example.com"
+        customer.allergyNote = "견과류"
+        customer.anniversaryType = "birthday"
+        customer.anniversaryDate = "05-15"
+        customer.preferenceNote = "조용한 좌석"
+        customerRepository.saveAndFlush(customer)
+
+        val pastDate = LocalDate.now(ZoneId.of("Asia/Seoul")).minusDays(1)
+        jdbcTemplate.update(
+            "update reservations set visit_date = ?, start_time = ?, end_time = ? where id = ?",
+            java.sql.Date.valueOf(pastDate),
+            java.sql.Time.valueOf("11:00:00"),
+            java.sql.Time.valueOf("11:30:00"),
+            completedReservation.id,
+        )
+        jdbcTemplate.update(
+            "update reservations set visit_date = ?, start_time = ?, end_time = ? where id = ?",
+            java.sql.Date.valueOf(pastDate),
+            java.sql.Time.valueOf("11:30:00"),
+            java.sql.Time.valueOf("12:00:00"),
+            noShowReservation.id,
+        )
+
+        mockMvc.post("/api/business/reservations/${completedReservation.id}/complete") {
+            cookie(ownerCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("COMPLETED") }
+        }
+        mockMvc.post("/api/business/reservations/${noShowReservation.id}/no-show") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reason": "예약 시간 경과"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("NO_SHOW") }
+        }
+
+        mockMvc.post("/api/business/customers/${customer.id}/flags") {
+            cookie(ownerCookie)
+            header("User-Agent", "customer-flags-test")
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "vip": true,
+              "caution": true,
+              "cautionReason": "반복 요청 확인",
+              "blocked": true,
+              "blockedReason": "전화 확인 후 응대"
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.customerId") { value(customer.id.toInt()) }
+            jsonPath("$.vip") { value(true) }
+            jsonPath("$.caution") { value(true) }
+            jsonPath("$.cautionReason") { value("반복 요청 확인") }
+            jsonPath("$.blocked") { value(true) }
+            jsonPath("$.blockedReason") { value("전화 확인 후 응대") }
+        }
+
+        mockMvc.get("/api/business/customers/${customer.id}/reservations") {
+            cookie(ownerCookie)
+            header("User-Agent", "customer-history-test")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.customer.phoneMasked") { value("010-****-0000") }
+            jsonPath("$.customer.allergyNote") { value("견과류") }
+            jsonPath("$.customer.anniversaryType") { value("birthday") }
+            jsonPath("$.customer.anniversaryDate") { value("05-15") }
+            jsonPath("$.customer.preferenceNote") { value("조용한 좌석") }
+            jsonPath("$.customer.vip") { value(true) }
+            jsonPath("$.customer.caution") { value(true) }
+            jsonPath("$.customer.blocked") { value(true) }
+            jsonPath("$.stats.reservationCount") { value(2) }
+            jsonPath("$.stats.completedCount") { value(1) }
+            jsonPath("$.stats.noShowCount") { value(1) }
+            jsonPath("$.items.length()") { value(2) }
+            jsonPath("$.items[0].status") { value("NO_SHOW") }
+            jsonPath("$.items[0].customerRequest") { value("창가 선호") }
+            jsonPath("$.items[0].noShowAt") { isNotEmpty() }
+            jsonPath("$.items[1].status") { value("COMPLETED") }
+            jsonPath("$.items[1].completedAt") { isNotEmpty() }
+        }
+
+        mockMvc.get("/api/business/reservations/${noShowReservation.id}") {
+            cookie(ownerCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.customer.email") { value("history@example.com") }
+            jsonPath("$.customer.allergyNote") { value("견과류") }
+            jsonPath("$.customer.anniversaryDate") { value("05-15") }
+            jsonPath("$.customer.preferenceNote") { value("조용한 좌석") }
+            jsonPath("$.customer.vip") { value(true) }
+            jsonPath("$.customer.caution") { value(true) }
+            jsonPath("$.customer.cautionReason") { value("반복 요청 확인") }
+            jsonPath("$.customer.blocked") { value(true) }
+            jsonPath("$.customer.blockedReason") { value("전화 확인 후 응대") }
+            jsonPath("$.customer.reservationCount") { value(2) }
+            jsonPath("$.customer.visitCount") { value(1) }
+            jsonPath("$.customer.noShowCount") { value(1) }
+        }
+
+        mockMvc.get("/api/business/reservations") {
+            cookie(ownerCookie)
+            param("date", pastDate.toString())
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.items.length()") { value(2) }
+            jsonPath("$.items[0].customer.vip") { value(true) }
+            jsonPath("$.items[0].customer.caution") { value(true) }
+            jsonPath("$.items[0].customer.blocked") { value(true) }
+        }
+
+        mockMvc.post("/api/business/customers/${customer.id}/flags") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"cautionReason": "", "blockedReason": ""}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.vip") { value(true) }
+            jsonPath("$.caution") { value(true) }
+            jsonPath("$.cautionReason") { value(org.hamcrest.Matchers.nullValue()) }
+            jsonPath("$.blocked") { value(true) }
+            jsonPath("$.blockedReason") { value(org.hamcrest.Matchers.nullValue()) }
+        }
+
+        mockMvc.post("/api/business/customers/${customer.id}/flags") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"caution": false, "blocked": false}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.vip") { value(true) }
+            jsonPath("$.caution") { value(false) }
+            jsonPath("$.cautionReason") { value(org.hamcrest.Matchers.nullValue()) }
+            jsonPath("$.blocked") { value(false) }
+            jsonPath("$.blockedReason") { value(org.hamcrest.Matchers.nullValue()) }
+        }
+
+        val otherOwner = createBusinessUser("customer-history-other@example.com")
+        val otherCookie = loginAndExtractSessionCookie(otherOwner.email)
+        createApprovedRestaurantForSettings(otherOwner, "Other Customer History Table", "customer-history-other")
+        mockMvc.get("/api/business/customers/${customer.id}/reservations") {
+            cookie(otherCookie)
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+        mockMvc.post("/api/business/customers/${customer.id}/flags") {
+            cookie(otherCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"vip": false}"""
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("customer", customer.id).map { it.action })
+            .contains("CUSTOMER_RESERVATIONS_VIEWED", "CUSTOMER_FLAGS_UPDATED")
+    }
+
+    @Test
     fun publicReservationCreateMatchesCustomerAndReusesIdempotencyKey() {
         val fixture = createPublicReservationFixture(
             ownerEmail = "reservation-create-owner@example.com",
@@ -3745,7 +3937,11 @@ class RestaurantApiApplicationTests {
             jsonPath("$.product.name") { value("공개 예약 코스") }
             jsonPath("$.customer.name") { value("김조회") }
             jsonPath("$.customer.phoneNumber") { value("01012345678") }
-            jsonPath("$.customer.visitCount") { value(1) }
+            jsonPath("$.customer.vip") { value(false) }
+            jsonPath("$.customer.caution") { value(false) }
+            jsonPath("$.customer.blocked") { value(false) }
+            jsonPath("$.customer.reservationCount") { value(1) }
+            jsonPath("$.customer.visitCount") { value(0) }
             jsonPath("$.customer.noShowCount") { value(0) }
             jsonPath("$.customerRequest") { value("창가 좌석") }
             jsonPath("$.ownerNote") { value(org.hamcrest.Matchers.nullValue()) }
