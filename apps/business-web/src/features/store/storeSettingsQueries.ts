@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  type BusinessHoursSaveRequest,
+  type HolidayRulesSaveRequest,
+  type RestaurantSettingsResponse,
   type RestaurantSettingsUpdateRequest,
   type BusinessFilePurpose,
 } from "@/shared/api/businessApiClient";
@@ -41,5 +44,45 @@ export function useUploadStoreFileMutation() {
   return useMutation({
     mutationFn: ({ purpose, file }: { purpose: BusinessFilePurpose; file: File }) =>
       apiClient.uploadBusinessFile(purpose, file),
+  });
+}
+
+export function useSaveBusinessHoursMutation() {
+  const apiClient = useBusinessApiClient();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      restaurantId,
+      request,
+    }: {
+      restaurantId: number;
+      request: BusinessHoursSaveRequest;
+    }) => apiClient.saveBusinessHours(restaurantId, request),
+    onSuccess: (businessHours) => {
+      queryClient.setQueryData<RestaurantSettingsResponse>(storeSettingsQueryKey, (current) =>
+        current ? { ...current, businessHours } : current,
+      );
+    },
+  });
+}
+
+export function useSaveHolidayRulesMutation() {
+  const apiClient = useBusinessApiClient();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      restaurantId,
+      request,
+    }: {
+      restaurantId: number;
+      request: HolidayRulesSaveRequest;
+    }) => apiClient.saveHolidayRules(restaurantId, request),
+    onSuccess: (holidayRules) => {
+      queryClient.setQueryData<RestaurantSettingsResponse>(storeSettingsQueryKey, (current) =>
+        current ? { ...current, holidayRules } : current,
+      );
+    },
   });
 }
