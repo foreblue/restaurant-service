@@ -199,6 +199,19 @@ class RestaurantSettingsService(
     fun publicRestaurant(slug: String): PublicRestaurantResponse {
         val page = reservationPageRepository.findBySlug(slug)
             ?: throw ApiException(ErrorCode.NOT_FOUND, "공개 예약 페이지를 찾을 수 없습니다.")
+        return publicRestaurant(page)
+    }
+
+    @Transactional(readOnly = true)
+    fun publicRestaurantById(restaurantId: Long): PublicRestaurantResponse {
+        val restaurant = restaurantRepository.findById(restaurantId)
+            .orElseThrow { ApiException(ErrorCode.NOT_FOUND, "공개 예약 페이지를 찾을 수 없습니다.") }
+        val page = reservationPageRepository.findByRestaurantId(restaurant.id)
+            ?: throw ApiException(ErrorCode.NOT_FOUND, "공개 예약 페이지를 찾을 수 없습니다.")
+        return publicRestaurant(page)
+    }
+
+    private fun publicRestaurant(page: ReservationPageEntity): PublicRestaurantResponse {
         val restaurant = page.restaurant
         if (
             page.status != ReservationPageStatus.PUBLIC ||
@@ -475,11 +488,12 @@ class RestaurantSettingsService(
         )
     }
 
-    private fun RestaurantEntity.toPublicResponse(page: ReservationPageEntity): PublicRestaurantResponse =
-        PublicRestaurantResponse(
+    private fun RestaurantEntity.toPublicResponse(page: ReservationPageEntity): PublicRestaurantResponse {
+        val pageSlug = page.slug ?: throw ApiException(ErrorCode.NOT_FOUND, "공개 예약 페이지를 찾을 수 없습니다.")
+        return PublicRestaurantResponse(
             id = id,
             name = name ?: throw ApiException(ErrorCode.NOT_FOUND, "공개 예약 페이지를 찾을 수 없습니다."),
-            slug = page.slug ?: throw ApiException(ErrorCode.NOT_FOUND, "공개 예약 페이지를 찾을 수 없습니다."),
+            slug = pageSlug,
             description = description,
             phone = phone ?: throw ApiException(ErrorCode.NOT_FOUND, "공개 예약 페이지를 찾을 수 없습니다."),
             addressLine1 = addressLine1 ?: throw ApiException(ErrorCode.NOT_FOUND, "공개 예약 페이지를 찾을 수 없습니다."),
@@ -497,8 +511,11 @@ class RestaurantSettingsService(
             reservationPage = PublicReservationPageResponse(
                 status = page.status,
                 publishedAt = page.publishedAt,
+                publicUrl = "/r/$pageSlug",
+                reservationAvailable = true,
             ),
         )
+    }
 
     private fun ReservationPageEntity.toSettingsResponse(): ReservationPageSettingsResponse {
         val blockers = publishBlockers(restaurant, this)

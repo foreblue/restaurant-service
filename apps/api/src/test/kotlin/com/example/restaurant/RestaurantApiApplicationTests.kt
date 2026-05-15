@@ -209,6 +209,12 @@ class RestaurantApiApplicationTests {
             status { isOk() }
             jsonPath("$.openapi") { exists() }
             jsonPath("$.info.title") { value("Restaurant Service API") }
+            jsonPath("$.paths['/api/public/restaurants/{slug}'].get.summary") {
+                value("slug 기준 공개 예약 페이지 조회")
+            }
+            jsonPath("$.paths['/api/public/restaurants/{restaurantId}/reservation-page'].get.summary") {
+                value("restaurantId 기준 공개 예약 페이지 조회")
+            }
         }
     }
 
@@ -1127,8 +1133,19 @@ class RestaurantApiApplicationTests {
             status { isOk() }
             jsonPath("$.name") { value("Public Table") }
             jsonPath("$.reservationPage.status") { value("PUBLIC") }
+            jsonPath("$.reservationPage.publicUrl") { value("/r/public-table") }
+            jsonPath("$.reservationPage.reservationAvailable") { value(true) }
             jsonPath("$.businessHours[0].dayOfWeek") { value("MONDAY") }
             jsonPath("$.holidayRules[0].reason") { isNotEmpty() }
+        }
+
+        mockMvc.get("/api/public/restaurants/${restaurant.id}/reservation-page").andExpect {
+            status { isOk() }
+            jsonPath("$.id") { value(restaurant.id.toInt()) }
+            jsonPath("$.slug") { value("public-table") }
+            jsonPath("$.reservationPage.status") { value("PUBLIC") }
+            jsonPath("$.reservationPage.publicUrl") { value("/r/public-table") }
+            jsonPath("$.reservationPage.reservationAvailable") { value(true) }
         }
 
         val restaurantLogs = auditLogRepository.findByTargetTypeAndTargetId("restaurant", restaurant.id)
@@ -1149,6 +1166,11 @@ class RestaurantApiApplicationTests {
         val restaurant = createApprovedRestaurantForSettings(owner, "Hidden Table", "hidden-table")
 
         mockMvc.get("/api/public/restaurants/hidden-table").andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+
+        mockMvc.get("/api/public/restaurants/${restaurant.id}/reservation-page").andExpect {
             status { isNotFound() }
             jsonPath("$.code") { value("NOT_FOUND") }
         }
