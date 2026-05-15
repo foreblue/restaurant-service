@@ -14,6 +14,8 @@ import com.example.restaurant.audit.AuditLogRepository
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
 import com.example.restaurant.common.trace.TraceContext
+import com.example.restaurant.reservationproduct.ReservationProductRepository
+import com.example.restaurant.reservationproduct.ReservationProductStatus
 import com.example.restaurant.restaurant.FileStorage
 import com.example.restaurant.restaurant.FileStorageSaveRequest
 import com.example.restaurant.restaurant.ReservationPageEntity
@@ -44,6 +46,7 @@ import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 import org.springframework.test.web.servlet.MockMvc
+import org.springframework.test.web.servlet.delete
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
 import org.springframework.test.web.servlet.put
@@ -107,6 +110,9 @@ class RestaurantApiApplicationTests {
 
     @Autowired
     private lateinit var reservationPageRepository: ReservationPageRepository
+
+    @Autowired
+    private lateinit var reservationProductRepository: ReservationProductRepository
 
     @Autowired
     private lateinit var fileStorage: FileStorage
@@ -1209,6 +1215,160 @@ class RestaurantApiApplicationTests {
             status { isBadRequest() }
             jsonPath("$.code") { value("VALIDATION_ERROR") }
             jsonPath("$.message") { value("같은 요일의 영업 구간은 겹칠 수 없습니다.") }
+        }
+    }
+
+    @Test
+    fun businessOwnerCanManageReservationProductsAndPublicOnlyVisibleProducts() {
+        val owner = createBusinessUser("product-owner@example.com")
+        val sessionCookie = loginAndExtractSessionCookie(owner.email)
+        val restaurant = createApprovedRestaurantForSettings(owner, "Product Table", "product-table")
+
+        mockMvc.get("/api/public/restaurants/${restaurant.id}/reservation-products").andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+
+        val createResult = mockMvc.post("/api/business/reservation-products") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "디너 코스",
+              "description": "계절 메뉴 코스",
+              "priceAmount": 80000,
+              "visible": true,
+              "minPartySize": 1,
+              "maxPartySize": 4,
+              "availableDays": ["FRIDAY", "SATURDAY"],
+              "availableStartTime": "18:00:00",
+              "availableEndTime": "21:00:00",
+              "slotCapacity": 8
+            }
+            """.trimIndent()
+            header("X-Forwarded-For", "203.0.113.40")
+            header("User-Agent", "reservation-product-test")
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.name") { value("디너 코스") }
+            jsonPath("$.visible") { value(true) }
+            jsonPath("$.status") { value("ACTIVE") }
+            jsonPath("$.availableDays[0]") { value("FRIDAY") }
+            jsonPath("$.slotCapacity") { value(8) }
+            jsonPath("$.paymentPolicyType") { value("NONE") }
+        }.andReturn()
+        val productId = JsonPath.read<Int>(createResult.response.contentAsString, "$.id").toLong()
+
+        val otherOwner = createBusinessUser("product-other-owner@example.com")
+        val otherCookie = loginAndExtractSessionCookie(otherOwner.email)
+        mockMvc.put("/api/business/reservation-products/$productId") {
+            cookie(otherCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"name": "권한 없음"}"""
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+
+        mockMvc.get("/api/business/reservation-products") {
+            cookie(sessionCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$[0].id") { value(productId.toInt()) }
+            jsonPath("$[0].name") { value("디너 코스") }
+        }
+
+        mockMvc.put("/api/business/reservation-products/$productId") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "런치 코스",
+              "description": "점심 메뉴",
+              "priceAmount": 50000,
+              "visible": false,
+              "minPartySize": 2,
+              "maxPartySize": 6,
+              "availableDays": ["SUNDAY"],
+              "availableStartTime": "12:00:00",
+              "availableEndTime": "14:00:00",
+              "slotCapacity": 5
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.name") { value("런치 코스") }
+            jsonPath("$.visible") { value(false) }
+            jsonPath("$.availableDays[0]") { value("SUNDAY") }
+        }
+
+        val page = reservationPageRepository.findByRestaurantId(restaurant.id)
+            ?: error("Reservation page should exist.")
+        page.status = ReservationPageStatus.PUBLIC
+        page.publishedAt = Instant.now()
+        reservationPageRepository.saveAndFlush(page)
+
+        mockMvc.get("/api/public/restaurants/${restaurant.id}/reservation-products").andExpect {
+            status { isOk() }
+            jsonPath("$.products.length()") { value(0) }
+        }
+
+        val visibleResult = mockMvc.post("/api/business/reservation-products") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "오마카세",
+              "description": "카운터 코스",
+              "priceAmount": 120000,
+              "visible": true,
+              "minPartySize": 1,
+              "maxPartySize": 2,
+              "slotCapacity": 3
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.availableDays.length()") { value(7) }
+        }.andReturn()
+        val visibleProductId = JsonPath.read<Int>(visibleResult.response.contentAsString, "$.id").toLong()
+
+        mockMvc.get("/api/public/restaurants/${restaurant.id}/reservation-products").andExpect {
+            status { isOk() }
+            jsonPath("$.products.length()") { value(1) }
+            jsonPath("$.products[0].id") { value(visibleProductId.toInt()) }
+            jsonPath("$.products[0].displayPrice") { value(120000) }
+            jsonPath("$.products[0].requiresPayment") { value(false) }
+        }
+
+        mockMvc.delete("/api/business/reservation-products/$visibleProductId") {
+            cookie(sessionCookie)
+        }.andExpect {
+            status { isNoContent() }
+        }
+
+        assertThat(reservationProductRepository.findById(visibleProductId).orElseThrow().status)
+            .isEqualTo(ReservationProductStatus.DELETED)
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("reservation_product", productId).map { it.action })
+            .contains("RESERVATION_PRODUCT_CREATED", "RESERVATION_PRODUCT_UPDATED")
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("reservation_product", visibleProductId).map { it.action })
+            .contains("RESERVATION_PRODUCT_CREATED", "RESERVATION_PRODUCT_DELETED")
+    }
+
+    @Test
+    fun reservationProductRejectsInvalidPartyRange() {
+        val owner = createBusinessUser("product-invalid-owner@example.com")
+        val sessionCookie = loginAndExtractSessionCookie(owner.email)
+        createApprovedRestaurantForSettings(owner, "Invalid Product Table")
+
+        mockMvc.post("/api/business/reservation-products") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"name": "대관 상품", "minPartySize": 1, "maxPartySize": 30, "slotCapacity": 1}"""
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("VALIDATION_ERROR") }
+            jsonPath("$.message") { value("단체 예약 상품은 MVP 범위에서 제외됩니다.") }
         }
     }
 
