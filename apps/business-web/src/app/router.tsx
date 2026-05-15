@@ -3,6 +3,7 @@ import { createBrowserRouter, Navigate } from "react-router-dom";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { PasswordResetRequestPage } from "@/features/auth/PasswordResetRequestPage";
 import { DashboardPage } from "@/features/dashboard/DashboardPage";
+import { SeatTablesPage } from "@/features/inventory/SeatTablesPage";
 import { RestaurantApplicationPage } from "@/features/onboarding/RestaurantApplicationPage";
 import { PaymentOperationsPage } from "@/features/payments/PaymentOperationsPage";
 import { ReservationProductsPage } from "@/features/products/ReservationProductsPage";
@@ -48,6 +49,10 @@ export function createBusinessRouter() {
             {
               path: "payments",
               element: <PaymentOperationsPage />,
+            },
+            {
+              path: "inventory/tables",
+              element: <SeatTablesPage />,
             },
             {
               path: "products",
