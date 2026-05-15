@@ -3956,6 +3956,208 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun businessOwnerCanReadOperationsAnalytics() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "analytics-owner@example.com",
+            restaurantName = "Analytics Table",
+            slug = "analytics-table",
+            slotCapacity = 6,
+        )
+        val ownerCookie = loginAndExtractSessionCookie("analytics-owner@example.com")
+        val reservationDate = fixture.targetDate
+        val metricInstant = reservationDate
+            .atTime(12, 0)
+            .atZone(ZoneId.of("Asia/Seoul"))
+            .toInstant()
+
+        val confirmed = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "analytics-confirmed",
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "통계확정",
+            customerPhone = "010-3030-0001",
+        )
+        val completed = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "analytics-completed",
+            startTime = "11:30:00",
+            partySize = 3,
+            customerName = "통계완료",
+            customerPhone = "010-3030-0002",
+        )
+        val cancelled = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "analytics-cancelled",
+            startTime = "12:00:00",
+            partySize = 4,
+            customerName = "통계취소",
+            customerPhone = "010-3030-0003",
+        )
+        val noShow = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "analytics-noshow",
+            startTime = "12:30:00",
+            partySize = 1,
+            customerName = "통계노쇼",
+            customerPhone = "010-3030-0004",
+        )
+
+        val completedEntity = reservationRepository.findBusinessReservationById(completed.id)
+            ?: error("completed reservation not found")
+        completedEntity.status = ReservationStatus.COMPLETED
+        completedEntity.completedAt = metricInstant
+        val cancelledEntity = reservationRepository.findBusinessReservationById(cancelled.id)
+            ?: error("cancelled reservation not found")
+        cancelledEntity.status = ReservationStatus.CANCELLED_BY_CUSTOMER
+        cancelledEntity.cancelledAt = metricInstant
+        val noShowEntity = reservationRepository.findBusinessReservationById(noShow.id)
+            ?: error("no-show reservation not found")
+        noShowEntity.status = ReservationStatus.NO_SHOW
+        noShowEntity.noShowAt = metricInstant
+        reservationRepository.saveAllAndFlush(listOf(completedEntity, cancelledEntity, noShowEntity))
+
+        val confirmedEntity = reservationRepository.findBusinessReservationById(confirmed.id)
+            ?: error("confirmed reservation not found")
+        val confirmedPayment = paymentRepository.saveAndFlush(
+            PaymentEntity(
+                restaurant = fixture.restaurant,
+                reservation = confirmedEntity,
+                customer = confirmedEntity.customer,
+                paymentType = PaymentType.DEPOSIT,
+                status = PaymentStatus.PAID,
+                amount = 30_000,
+                idempotencyKey = "analytics-payment-confirmed",
+                paidAt = metricInstant,
+            ),
+        )
+        paymentRepository.saveAndFlush(
+            PaymentEntity(
+                restaurant = fixture.restaurant,
+                reservation = completedEntity,
+                customer = completedEntity.customer,
+                paymentType = PaymentType.PREPAID,
+                status = PaymentStatus.PAID,
+                amount = 40_000,
+                idempotencyKey = "analytics-payment-completed",
+                paidAt = metricInstant,
+            ),
+        )
+        val refundedPayment = paymentRepository.saveAndFlush(
+            PaymentEntity(
+                restaurant = fixture.restaurant,
+                reservation = cancelledEntity,
+                customer = cancelledEntity.customer,
+                paymentType = PaymentType.DEPOSIT,
+                status = PaymentStatus.PARTIALLY_REFUNDED,
+                amount = 20_000,
+                refundedAmount = 5_000,
+                idempotencyKey = "analytics-payment-refunded",
+                paidAt = metricInstant,
+            ),
+        )
+        refundRepository.saveAndFlush(
+            RefundEntity(
+                payment = refundedPayment,
+                reservation = cancelledEntity,
+                restaurant = fixture.restaurant,
+                status = RefundStatus.SUCCEEDED,
+                refundAmount = 5_000,
+                nonRefundableAmount = 15_000,
+                reason = RefundReason.CUSTOMER_CANCEL,
+                idempotencyKey = "analytics-refund-succeeded",
+                requestedByRole = RefundRequesterRole.CUSTOMER,
+                succeededAt = metricInstant,
+            ),
+        )
+        assertThat(confirmedPayment.status).isEqualTo(PaymentStatus.PAID)
+
+        mockMvc.get("/api/business/restaurants/${fixture.restaurant.id}/analytics/summary") {
+            cookie(ownerCookie)
+            param("from", reservationDate.toString())
+            param("to", reservationDate.toString())
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.period.from") { value(reservationDate.toString()) }
+            jsonPath("$.period.to") { value(reservationDate.toString()) }
+            jsonPath("$.reservationMetricBasis") { value("VISIT_DATE") }
+            jsonPath("$.paymentMetricBasis") { value("PAID_AT") }
+            jsonPath("$.refundMetricBasis") { value("SUCCEEDED_AT") }
+            jsonPath("$.settlementNotice") { value("운영 참고용 통계이며 정산 자동화 또는 세금 처리 기준 금액이 아닙니다.") }
+            jsonPath("$.reservations.total") { value(4) }
+            jsonPath("$.reservations.confirmed") { value(1) }
+            jsonPath("$.reservations.completed") { value(1) }
+            jsonPath("$.reservations.cancelledByCustomer") { value(1) }
+            jsonPath("$.reservations.noShow") { value(1) }
+            jsonPath("$.payments.depositAmount") { value(50_000) }
+            jsonPath("$.payments.prepaidAmount") { value(40_000) }
+            jsonPath("$.payments.paymentAmount") { value(90_000) }
+            jsonPath("$.payments.refundAmount") { value(5_000) }
+            jsonPath("$.payments.netAmount") { value(85_000) }
+            jsonPath("$.rates.completionRate") { value(0.3333) }
+            jsonPath("$.rates.cancellationRate") { value(0.25) }
+            jsonPath("$.rates.noShowRate") { value(0.3333) }
+        }
+
+        mockMvc.get("/api/business/restaurants/${fixture.restaurant.id}/analytics/time-slots") {
+            cookie(ownerCookie)
+            param("date", reservationDate.toString())
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.date") { value(reservationDate.toString()) }
+            jsonPath("$.slotMinutes") { value(30) }
+            jsonPath("$.slots.length()") { value(4) }
+            jsonPath("$.slots[0].startTime") { value("11:00:00") }
+            jsonPath("$.slots[0].capacity") { value(6) }
+            jsonPath("$.slots[0].reserved") { value(2) }
+            jsonPath("$.slots[0].reservationRate") { value(0.3333) }
+            jsonPath("$.slots[2].startTime") { value("12:00:00") }
+            jsonPath("$.slots[2].reserved") { value(0) }
+            jsonPath("$.slots[3].startTime") { value("12:30:00") }
+            jsonPath("$.slots[3].reserved") { value(1) }
+        }
+
+        mockMvc.get("/api/business/restaurants/${fixture.restaurant.id}/analytics/products") {
+            cookie(ownerCookie)
+            param("from", reservationDate.toString())
+            param("to", reservationDate.toString())
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.items.length()") { value(1) }
+            jsonPath("$.items[0].reservationProductId") { value(fixture.productId.toInt()) }
+            jsonPath("$.items[0].reservations") { value(4) }
+            jsonPath("$.items[0].completed") { value(1) }
+            jsonPath("$.items[0].cancelled") { value(1) }
+            jsonPath("$.items[0].noShow") { value(1) }
+            jsonPath("$.items[0].paymentAmount") { value(90_000) }
+            jsonPath("$.items[0].refundAmount") { value(5_000) }
+            jsonPath("$.items[0].netAmount") { value(85_000) }
+            jsonPath("$.items[0].averagePartySize") { value(2.5) }
+        }
+
+        val otherOwner = createBusinessUser("analytics-other@example.com")
+        val otherCookie = loginAndExtractSessionCookie(otherOwner.email)
+        createApprovedRestaurantForSettings(otherOwner, "Other Analytics Table", "analytics-other")
+        mockMvc.get("/api/business/restaurants/${fixture.restaurant.id}/analytics/summary") {
+            cookie(otherCookie)
+            param("from", reservationDate.toString())
+            param("to", reservationDate.toString())
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+
+        mockMvc.get("/api/business/restaurants/${fixture.restaurant.id}/analytics/summary") {
+            cookie(ownerCookie)
+            param("from", reservationDate.plusDays(1).toString())
+            param("to", reservationDate.toString())
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("VALIDATION_ERROR") }
+        }
+    }
+
+    @Test
     fun publicReservationRejectsIdempotencyMismatchStockAndBusinessHours() {
         val fixture = createPublicReservationFixture(
             ownerEmail = "reservation-reject-owner@example.com",

@@ -34,4 +34,22 @@ interface PaymentRepository : JpaRepository<PaymentEntity, Long> {
         @Param("fromCreatedAt") fromCreatedAt: Instant?,
         @Param("toCreatedAtExclusive") toCreatedAtExclusive: Instant?,
     ): List<PaymentEntity>
+
+    @Query(
+        """
+        select p from PaymentEntity p
+        join fetch p.reservation r
+        join fetch r.reservationProduct
+        where p.restaurant.id = :restaurantId
+          and p.paidAt is not null
+          and p.paidAt >= :fromPaidAt
+          and p.paidAt < :toPaidAtExclusive
+        order by p.paidAt asc, p.id asc
+        """,
+    )
+    fun findAnalyticsPaidPayments(
+        @Param("restaurantId") restaurantId: Long,
+        @Param("fromPaidAt") fromPaidAt: Instant,
+        @Param("toPaidAtExclusive") toPaidAtExclusive: Instant,
+    ): List<PaymentEntity>
 }
