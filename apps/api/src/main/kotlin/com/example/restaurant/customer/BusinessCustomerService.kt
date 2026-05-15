@@ -14,6 +14,7 @@ import com.example.restaurant.reservation.ReservationStatus
 import com.example.restaurant.restaurant.RestaurantEntity
 import com.example.restaurant.restaurant.RestaurantRepository
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
@@ -757,6 +758,12 @@ class BusinessCustomerService(
             status = status.name,
             source = source.name,
             customerRequest = customerRequest,
+            customerEmail = customerEmail,
+            allergyNote = allergyNote,
+            anniversaryType = anniversaryType,
+            anniversaryDate = anniversaryDate,
+            requestTemplateValues = requestTemplateValues(),
+            marketingOptIn = marketingOptIn,
             completedAt = completedAt,
             noShowAt = noShowAt,
             cancelledAt = cancelledAt,
@@ -774,6 +781,9 @@ class BusinessCustomerService(
             createdAt = createdAt,
             updatedAt = updatedAt,
         )
+
+    private fun ReservationEntity.requestTemplateValues(): List<String> =
+        requestTemplateValuesJson?.let { objectMapper.readValue<List<String>>(it) }.orEmpty()
 
     private fun CustomerEntity.snapshot(): Map<String, Any?> =
         mapOf(

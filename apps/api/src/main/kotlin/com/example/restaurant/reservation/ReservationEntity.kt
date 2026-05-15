@@ -63,6 +63,24 @@ class ReservationEntity(
     @Column(name = "customer_request", length = 500)
     val customerRequest: String? = null,
 
+    @Column(name = "customer_email", length = 255)
+    val customerEmail: String? = null,
+
+    @Column(name = "allergy_note", columnDefinition = "text")
+    val allergyNote: String? = null,
+
+    @Column(name = "anniversary_type", length = 40)
+    val anniversaryType: String? = null,
+
+    @Column(name = "anniversary_date", length = 10)
+    val anniversaryDate: String? = null,
+
+    @Column(name = "request_template_values", columnDefinition = "json")
+    val requestTemplateValuesJson: String? = null,
+
+    @Column(name = "marketing_opt_in", nullable = false)
+    val marketingOptIn: Boolean = false,
+
     @Column(name = "owner_note", length = 1000)
     var ownerNote: String? = null,
 

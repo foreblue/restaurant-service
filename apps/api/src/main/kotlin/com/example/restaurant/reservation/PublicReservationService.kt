@@ -20,6 +20,7 @@ import com.example.restaurant.restaurant.ReservationPageRepository
 import com.example.restaurant.restaurant.ReservationPageStatus
 import com.example.restaurant.restaurant.RestaurantStatus
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Isolation
 import org.springframework.transaction.annotation.Transactional
@@ -38,6 +39,11 @@ private const val MAX_IDEMPOTENCY_KEY_LENGTH = 128
 private const val MAX_CUSTOMER_NAME_LENGTH = 80
 private const val MAX_CUSTOMER_REQUEST_LENGTH = 500
 private const val MAX_CANCEL_REASON_LENGTH = 255
+private const val MAX_CUSTOMER_EMAIL_LENGTH = 255
+private const val MAX_CUSTOMER_NOTE_LENGTH = 1000
+private const val MAX_CUSTOMER_SHORT_FIELD_LENGTH = 40
+private const val MAX_REQUEST_TEMPLATE_COUNT = 10
+private const val MAX_REQUEST_TEMPLATE_VALUE_LENGTH = 80
 
 @Service
 class PublicReservationService(
@@ -109,6 +115,7 @@ class PublicReservationService(
                 phoneNumber = normalized.customerPhone,
             ),
         )
+        customer.applyReservationSelections(normalized)
 
         val paymentPolicy = paymentPolicyResolver.resolve(product, normalized.partySize)
         val reservation = reservationRepository.saveAndFlush(
@@ -124,6 +131,12 @@ class PublicReservationService(
                 status = ReservationStatus.CONFIRMED,
                 source = ReservationSource.ONLINE,
                 customerRequest = normalized.customerRequest,
+                customerEmail = normalized.customerEmail,
+                allergyNote = normalized.allergyNote,
+                anniversaryType = normalized.anniversaryType,
+                anniversaryDate = normalized.anniversaryDate,
+                requestTemplateValuesJson = normalized.requestTemplateValuesJson(),
+                marketingOptIn = normalized.marketingOptIn,
                 paymentRequired = paymentPolicy.requiresGateway,
                 paymentMode = paymentPolicy.mode,
                 paymentStatus = paymentPolicy.initialStatus,
@@ -215,6 +228,12 @@ class PublicReservationService(
         if ((normalizedCustomerRequest?.length ?: 0) > MAX_CUSTOMER_REQUEST_LENGTH) {
             throw ApiException(ErrorCode.VALIDATION_ERROR, "customerRequest는 500자 이하여야 합니다.")
         }
+        val normalizedCustomerEmail = customerEmail.normalizedEmail()
+        val normalizedAllergyNote = allergyNote.normalizedText(MAX_CUSTOMER_NOTE_LENGTH, "allergyNote")
+        val normalizedAnniversaryType = anniversaryType.normalizedText(MAX_CUSTOMER_SHORT_FIELD_LENGTH, "anniversaryType")
+        val normalizedAnniversaryDate = anniversaryDate.normalizedAnniversaryDate()
+        val normalizedRequestTemplateValues = requestTemplateValues.normalizedRequestTemplateValues()
+        val normalizedMarketingOptIn = marketingOptIn ?: false
 
         val normalizedIdempotencyKey = (headerIdempotencyKey?.takeIf { it.isNotBlank() } ?: idempotencyKey)
             ?.trim()
@@ -236,6 +255,12 @@ class PublicReservationService(
                 normalizedCustomerName,
                 normalizedCustomerPhone,
                 normalizedCustomerRequest.orEmpty(),
+                normalizedCustomerEmail.orEmpty(),
+                normalizedAllergyNote.orEmpty(),
+                normalizedAnniversaryType.orEmpty(),
+                normalizedAnniversaryDate.orEmpty(),
+                normalizedRequestTemplateValues.joinToString(separator = "\u001E"),
+                normalizedMarketingOptIn.toString(),
             ).joinToString(separator = "\u001F"),
         )
 
@@ -248,6 +273,12 @@ class PublicReservationService(
             customerName = normalizedCustomerName,
             customerPhone = normalizedCustomerPhone,
             customerRequest = normalizedCustomerRequest,
+            customerEmail = normalizedCustomerEmail,
+            allergyNote = normalizedAllergyNote,
+            anniversaryType = normalizedAnniversaryType,
+            anniversaryDate = normalizedAnniversaryDate,
+            requestTemplateValues = normalizedRequestTemplateValues,
+            marketingOptIn = normalizedMarketingOptIn,
             idempotencyKey = normalizedIdempotencyKey,
             requestHash = requestHash,
         )
@@ -283,6 +314,12 @@ class PublicReservationService(
             partySize = partySize,
             customerName = customer.name,
             customerPhoneLast4 = customer.phoneNumber.takeLast(4),
+            customerEmail = customerEmail,
+            allergyNote = allergyNote,
+            anniversaryType = anniversaryType,
+            anniversaryDate = anniversaryDate,
+            requestTemplateValues = requestTemplateValues(),
+            marketingOptIn = marketingOptIn,
             lookupToken = token.lookupToken,
             lookupTokenExpiresAt = token.expiresAt,
         )
@@ -307,6 +344,12 @@ class PublicReservationService(
             customerName = customer.name,
             customerPhoneLast4 = customer.phoneNumber.takeLast(4),
             customerRequest = customerRequest,
+            customerEmail = customerEmail,
+            allergyNote = allergyNote,
+            anniversaryType = anniversaryType,
+            anniversaryDate = anniversaryDate,
+            requestTemplateValues = requestTemplateValues(),
+            marketingOptIn = marketingOptIn,
             cancelable = isCancelableNow(),
             cancelDeadline = cancelDeadline(),
             cancelledAt = cancelledAt,
@@ -366,6 +409,67 @@ class PublicReservationService(
         }
     }
 
+    private fun CustomerEntity.applyReservationSelections(
+        normalized: NormalizedReservationCreateRequest,
+    ) {
+        normalized.customerEmail?.let { email = it }
+        normalized.allergyNote?.let { allergyNote = it }
+        normalized.anniversaryType?.let { anniversaryType = it }
+        normalized.anniversaryDate?.let { anniversaryDate = it }
+    }
+
+    private fun NormalizedReservationCreateRequest.requestTemplateValuesJson(): String? =
+        requestTemplateValues.takeIf { it.isNotEmpty() }
+            ?.let { objectMapper.writeValueAsString(it) }
+
+    private fun ReservationEntity.requestTemplateValues(): List<String> =
+        requestTemplateValuesJson?.let { objectMapper.readValue<List<String>>(it) }.orEmpty()
+
+    private fun String?.normalizedEmail(): String? {
+        val normalized = normalizedText(MAX_CUSTOMER_EMAIL_LENGTH, "customerEmail") ?: return null
+        val hasValidShape = normalized.count { it == '@' } == 1 &&
+            normalized.substringAfter("@").contains(".") &&
+            normalized.none { it.isWhitespace() }
+        if (!hasValidShape) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "customerEmail 형식이 올바르지 않습니다.")
+        }
+        return normalized.lowercase()
+    }
+
+    private fun String?.normalizedText(
+        maxLength: Int,
+        fieldName: String,
+    ): String? {
+        val normalized = this?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        if (normalized.length > maxLength) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "${fieldName}은 ${maxLength}자 이하여야 합니다.")
+        }
+        return normalized
+    }
+
+    private fun String?.normalizedAnniversaryDate(): String? {
+        val normalized = normalizedText(10, "anniversaryDate") ?: return null
+        val valid = Regex("""\d{2}-\d{2}|\d{4}-\d{2}-\d{2}""").matches(normalized)
+        if (!valid) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "anniversaryDate 형식이 올바르지 않습니다.")
+        }
+        return normalized
+    }
+
+    private fun List<String>?.normalizedRequestTemplateValues(): List<String> {
+        val values = this.orEmpty()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+        if (values.size > MAX_REQUEST_TEMPLATE_COUNT) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "requestTemplateValues는 최대 10개까지 입력할 수 있습니다.")
+        }
+        values.firstOrNull { it.length > MAX_REQUEST_TEMPLATE_VALUE_LENGTH }?.let {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "requestTemplateValues 항목은 80자 이하여야 합니다.")
+        }
+        return values
+    }
+
     private fun activeReservationStatuses(): List<ReservationStatus> =
         listOf(ReservationStatus.CONFIRMED, ReservationStatus.MODIFIED)
 
@@ -411,6 +515,12 @@ private data class NormalizedReservationCreateRequest(
     val customerName: String,
     val customerPhone: String,
     val customerRequest: String?,
+    val customerEmail: String?,
+    val allergyNote: String?,
+    val anniversaryType: String?,
+    val anniversaryDate: String?,
+    val requestTemplateValues: List<String>,
+    val marketingOptIn: Boolean,
     val idempotencyKey: String,
     val requestHash: String,
 )
