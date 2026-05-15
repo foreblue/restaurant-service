@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import {
   type BusinessApiClient,
   type RestaurantApplicationResponse,
+  type RestaurantSettingsResponse,
 } from "@/shared/api/businessApiClient";
 
 import App from "./App";
@@ -17,6 +18,34 @@ const mockSession = {
     id: 1,
     status: "REJECTED",
   },
+};
+
+const mockRestaurant: RestaurantSettingsResponse = {
+  id: 1,
+  status: "APPROVED",
+  name: "청담 본점",
+  slug: "cheongdam-main",
+  description: "제철 식재료로 준비하는 예약제 다이닝입니다.",
+  phone: "02-1234-5678",
+  addressLine1: "서울시 강남구 테스트로 1",
+  addressLine2: "2층",
+  postalCode: "06000",
+  cuisineTypes: ["한식", "코스"],
+  coverImageFileId: null,
+  timezone: "Asia/Seoul",
+  approvedAt: "2026-05-15T00:00:00.000Z",
+  reservationPage: {
+    id: 1,
+    slug: "cheongdam-main",
+    status: "PRIVATE",
+    publishedAt: null,
+    unpublishedAt: null,
+    publicUrl: "/r/cheongdam-main",
+    publishable: true,
+    publishBlockers: [],
+  },
+  businessHours: [],
+  holidayRules: [],
 };
 
 describe("App routing", () => {
@@ -229,6 +258,8 @@ describe("App routing", () => {
         createdAt: "2026-05-15T00:00:00.000Z",
       }),
       submitRestaurantApplication: async () => rejectedApplication,
+      getCurrentRestaurant: async () => mockRestaurant,
+      updateRestaurant: async () => mockRestaurant,
     };
     window.history.pushState({}, "", "/onboarding");
 
@@ -241,5 +272,53 @@ describe("App routing", () => {
 
     expect(await screen.findByRole("heading", { name: "입점 신청" })).toBeInTheDocument();
     expect(screen.getByText("반려 사유")).toBeInTheDocument();
+  });
+
+  it("updates store settings with a cover image", async () => {
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText("이메일"), {
+      target: { value: "owner@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("비밀번호"), {
+      target: { value: "password123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "로그인" }));
+
+    await screen.findByRole("heading", { name: "운영 현황" });
+    fireEvent.click(screen.getByRole("link", { name: "매장 설정" }));
+
+    expect(await screen.findByRole("heading", { name: "매장 설정" })).toBeInTheDocument();
+    expect(await screen.findByDisplayValue("청담 본점")).toBeInTheDocument();
+    expect(
+      await screen.findByText("공개 페이지 기본 정보가 준비되어 있습니다."),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("매장명"), {
+      target: { value: "청담 리뉴얼 키친" },
+    });
+    fireEvent.change(screen.getByLabelText("매장 소개"), {
+      target: { value: "계절 메뉴 중심의 예약제 레스토랑입니다." },
+    });
+    fireEvent.change(screen.getByLabelText("매장 전화번호"), {
+      target: { value: "02-9876-5432" },
+    });
+    fireEvent.change(screen.getByLabelText("주소"), {
+      target: { value: "서울시 강남구 새길 10" },
+    });
+    fireEvent.change(screen.getByLabelText("음식 종류"), {
+      target: { value: "양식, 와인" },
+    });
+    fireEvent.change(screen.getByLabelText("대표 이미지"), {
+      target: {
+        files: [new File(["cover"], "store-cover.png", { type: "image/png" })],
+      },
+    });
+
+    expect(await screen.findByText("현재 대표 이미지: store-cover.png")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    expect(await screen.findByText("매장 정보가 저장되었습니다.")).toBeInTheDocument();
   });
 });
