@@ -3218,6 +3218,149 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun businessOwnerCanManageCustomerProfilesAndNotes() {
+        val owner = createBusinessUser("customer-crm-owner@example.com")
+        val sessionCookie = loginAndExtractSessionCookie(owner.email)
+        createApprovedRestaurantForSettings(owner, "Customer CRM Table", "customer-crm")
+
+        val createResult = mockMvc.post("/api/business/customers") {
+            cookie(sessionCookie)
+            header("User-Agent", "customer-crm-test")
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "김고객",
+              "phoneNumber": "010-1234-5678",
+              "email": "customer@example.com",
+              "allergyNote": "갑각류",
+              "anniversaryType": "birthday",
+              "anniversaryDate": "05-20",
+              "preferenceNote": "창가 선호",
+              "internalNote": "조용한 응대"
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.name") { value("김고객") }
+            jsonPath("$.phoneNumber") { value("01012345678") }
+            jsonPath("$.phoneMasked") { value("010-****-5678") }
+            jsonPath("$.email") { value("customer@example.com") }
+            jsonPath("$.allergyNote") { value("갑각류") }
+            jsonPath("$.stats.reservationCount") { value(0) }
+        }.andReturn()
+        val customerId = JsonPath.read<Int>(createResult.response.contentAsString, "$.id").toLong()
+
+        mockMvc.get("/api/business/customers") {
+            cookie(sessionCookie)
+            param("q", "5678")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.totalCount") { value(1) }
+            jsonPath("$.items[0].id") { value(customerId.toInt()) }
+            jsonPath("$.items[0].phoneMasked") { value("010-****-5678") }
+        }
+
+        mockMvc.get("/api/business/customers/$customerId") {
+            cookie(sessionCookie)
+            header("User-Agent", "customer-crm-test")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.phoneNumber") { value("01012345678") }
+            jsonPath("$.notes.length()") { value(0) }
+        }
+
+        mockMvc.put("/api/business/customers/$customerId") {
+            cookie(sessionCookie)
+            header("User-Agent", "customer-crm-test")
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"name":"김고객수정","phoneNumber":"010-1234-5678","preferenceNote":"룸 선호"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.name") { value("김고객수정") }
+            jsonPath("$.preferenceNote") { value("룸 선호") }
+        }
+
+        val noteResult = mockMvc.post("/api/business/customers/$customerId/notes") {
+            cookie(sessionCookie)
+            header("User-Agent", "customer-crm-test")
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"noteType":"GENERAL","content":"첫 방문 때 매운 음식 제외"}"""
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.customerId") { value(customerId.toInt()) }
+            jsonPath("$.content") { value("첫 방문 때 매운 음식 제외") }
+        }.andReturn()
+        val noteId = JsonPath.read<Int>(noteResult.response.contentAsString, "$.id").toLong()
+
+        mockMvc.put("/api/business/customer-notes/$noteId") {
+            cookie(sessionCookie)
+            header("User-Agent", "customer-crm-test")
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"noteType":"PRIVACY_REQUEST","content":"개인정보 정정 요청 응대"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.noteType") { value("PRIVACY_REQUEST") }
+            jsonPath("$.content") { value("개인정보 정정 요청 응대") }
+        }
+
+        mockMvc.get("/api/business/customers/$customerId") {
+            cookie(sessionCookie)
+            header("User-Agent", "customer-crm-test")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.notes.length()") { value(1) }
+            jsonPath("$.notes[0].id") { value(noteId.toInt()) }
+        }
+
+        mockMvc.delete("/api/business/customer-notes/$noteId") {
+            cookie(sessionCookie)
+            header("User-Agent", "customer-crm-test")
+        }.andExpect {
+            status { isNoContent() }
+        }
+
+        mockMvc.get("/api/business/customers/$customerId") {
+            cookie(sessionCookie)
+            header("User-Agent", "customer-crm-test")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.notes.length()") { value(0) }
+        }
+
+        mockMvc.post("/api/business/customers") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"name":"중복","phoneNumber":"01012345678"}"""
+        }.andExpect {
+            status { isConflict() }
+            jsonPath("$.code") { value("CONFLICT") }
+        }
+
+        val otherOwner = createBusinessUser("customer-crm-other@example.com")
+        val otherCookie = loginAndExtractSessionCookie(otherOwner.email)
+        createApprovedRestaurantForSettings(otherOwner, "Other Customer CRM Table", "customer-crm-other")
+        mockMvc.get("/api/business/customers/$customerId") {
+            cookie(otherCookie)
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+        mockMvc.put("/api/business/customer-notes/$noteId") {
+            cookie(otherCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"content":"타매장 접근"}"""
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("customer", customerId).map { it.action })
+            .contains("CUSTOMER_CREATED", "CUSTOMER_VIEWED", "CUSTOMER_UPDATED")
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("customer_note", noteId).map { it.action })
+            .contains("CUSTOMER_NOTE_CREATED", "CUSTOMER_NOTE_UPDATED", "CUSTOMER_NOTE_DELETED")
+    }
+
+    @Test
     fun publicReservationCreateMatchesCustomerAndReusesIdempotencyKey() {
         val fixture = createPublicReservationFixture(
             ownerEmail = "reservation-create-owner@example.com",
