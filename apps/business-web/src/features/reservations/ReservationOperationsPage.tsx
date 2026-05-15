@@ -1,21 +1,38 @@
 import { type ColumnDef } from "@tanstack/react-table";
-import { CalendarDays, ChevronLeft, ChevronRight, Eye, RotateCcw, Search, X } from "lucide-react";
+import {
+  Ban,
+  CalendarDays,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  Pencil,
+  RotateCcw,
+  Search,
+  UserX,
+  X,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { DataTable } from "@/components/table/DataTable";
 import { Alert, Button, Checkbox, DateInput, Field, Input, Select } from "@/components/ui";
 import { useReservationProductsQuery } from "@/features/products/reservationProductsQueries";
 import {
+  useCancelBusinessReservationMutation,
+  useCompleteBusinessReservationMutation,
   useCreateManualBusinessReservationMutation,
   useBusinessReservationCalendarQuery,
   useBusinessReservationDetailQuery,
   useBusinessReservationsQuery,
+  useMarkBusinessReservationNoShowMutation,
+  useUpdateBusinessReservationMutation,
 } from "@/features/reservations/reservationOperationsQueries";
 import {
   type BusinessManualReservationSource,
   type BusinessReservationCalendarDayResponse,
   type BusinessReservationDetailResponse,
   type BusinessReservationListItemResponse,
+  type BusinessReservationNoShowRequest,
   type BusinessReservationStatus,
 } from "@/shared/api/businessApiClient";
 
@@ -31,6 +48,22 @@ interface ManualReservationFormValues {
   customerPhone: string;
   customerRequest: string;
 }
+
+type ReservationActionKind = "edit" | "cancel" | "complete" | "no-show";
+
+interface ReservationEditFormValues {
+  productId: string;
+  visitDate: string;
+  startTime: string;
+  partySize: string;
+}
+
+const emptyReservationEditFormValues: ReservationEditFormValues = {
+  productId: "",
+  visitDate: "",
+  startTime: "",
+  partySize: "",
+};
 
 const emptyManualReservationFormValues: ManualReservationFormValues = {
   source: "MANUAL_PHONE",
@@ -90,6 +123,16 @@ export function ReservationOperationsPage() {
     emptyManualReservationFormValues,
   );
   const [manualFormError, setManualFormError] = useState<string | null>(null);
+  const [reservationAction, setReservationAction] = useState<ReservationActionKind | null>(null);
+  const [actionReservation, setActionReservation] =
+    useState<BusinessReservationDetailResponse | null>(null);
+  const [editFormValues, setEditFormValues] = useState<ReservationEditFormValues>(
+    emptyReservationEditFormValues,
+  );
+  const [cancelReason, setCancelReason] = useState("");
+  const [noShowReason, setNoShowReason] = useState("");
+  const [noShowForce, setNoShowForce] = useState(false);
+  const [actionFormError, setActionFormError] = useState<string | null>(null);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
   const calendarRange = useMemo(
     () => getCalendarRange(selectedDate, calendarMode),
@@ -123,6 +166,10 @@ export function ReservationOperationsPage() {
   const detailQuery = useBusinessReservationDetailQuery(selectedReservationId);
   const productsQuery = useReservationProductsQuery();
   const createManualReservation = useCreateManualBusinessReservationMutation();
+  const updateReservation = useUpdateBusinessReservationMutation();
+  const cancelReservation = useCancelBusinessReservationMutation();
+  const completeReservation = useCompleteBusinessReservationMutation();
+  const markReservationNoShow = useMarkBusinessReservationNoShowMutation();
   const productOptions = useMemo(
     () => buildProductOptions(productsQuery.data ?? [], reservationsQuery.data?.items ?? []),
     [productsQuery.data, reservationsQuery.data?.items],
@@ -270,6 +317,152 @@ export function ReservationOperationsPage() {
       // Mutation state renders the API error.
     }
   }
+
+  function resetReservationActionMutations() {
+    updateReservation.reset();
+    cancelReservation.reset();
+    completeReservation.reset();
+    markReservationNoShow.reset();
+  }
+
+  function openReservationAction(
+    action: ReservationActionKind,
+    reservation: BusinessReservationDetailResponse,
+  ) {
+    resetReservationActionMutations();
+    setReservationAction(action);
+    setActionReservation(reservation);
+    setActionFormError(null);
+    setResultMessage(null);
+
+    if (action === "edit") {
+      setEditFormValues({
+        productId: String(reservation.product.id),
+        visitDate: reservation.visitDate,
+        startTime: formatTime(reservation.startTime),
+        partySize: String(reservation.partySize),
+      });
+    }
+    if (action === "cancel") {
+      setCancelReason("");
+    }
+    if (action === "no-show") {
+      setNoShowReason("");
+      setNoShowForce(false);
+    }
+  }
+
+  function closeReservationAction() {
+    setReservationAction(null);
+    setActionReservation(null);
+    setActionFormError(null);
+    resetReservationActionMutations();
+  }
+
+  function updateEditForm(patch: Partial<ReservationEditFormValues>) {
+    setActionFormError(null);
+    updateReservation.reset();
+    setEditFormValues((current) => ({ ...current, ...patch }));
+  }
+
+  async function handleReservationActionSubmit() {
+    if (!reservationAction || !actionReservation) {
+      return;
+    }
+
+    setActionFormError(null);
+    setResultMessage(null);
+
+    try {
+      if (reservationAction === "edit") {
+        const request = toReservationUpdateRequest(editFormValues);
+
+        if (typeof request === "string") {
+          setActionFormError(request);
+          return;
+        }
+
+        const reservation = await updateReservation.mutateAsync({
+          reservationId: actionReservation.id,
+          request,
+        });
+        handleReservationActionSuccess(reservation, "예약이 변경되었습니다.");
+        return;
+      }
+
+      if (reservationAction === "cancel") {
+        const reason = cancelReason.trim();
+
+        if (!reason) {
+          setActionFormError("취소 사유를 입력해 주세요.");
+          return;
+        }
+        if (reason.length > 255) {
+          setActionFormError("취소 사유는 255자 이하여야 합니다.");
+          return;
+        }
+
+        const reservation = await cancelReservation.mutateAsync({
+          reservationId: actionReservation.id,
+          request: { reason },
+        });
+        handleReservationActionSuccess(reservation, "예약이 취소되었습니다.");
+        return;
+      }
+
+      if (reservationAction === "complete") {
+        const reservation = await completeReservation.mutateAsync(actionReservation.id);
+        handleReservationActionSuccess(reservation, "방문 완료 처리되었습니다.");
+        return;
+      }
+
+      const request: BusinessReservationNoShowRequest = {
+        reason: noShowReason.trim() || null,
+        force: noShowForce,
+      };
+
+      if ((request.reason?.length ?? 0) > 255) {
+        setActionFormError("노쇼 사유는 255자 이하여야 합니다.");
+        return;
+      }
+
+      const reservation = await markReservationNoShow.mutateAsync({
+        reservationId: actionReservation.id,
+        request,
+      });
+      handleReservationActionSuccess(reservation, "노쇼 처리되었습니다.");
+    } catch {
+      // Mutation state renders the API error.
+    }
+  }
+
+  function handleReservationActionSuccess(
+    reservation: BusinessReservationDetailResponse,
+    message: string,
+  ) {
+    setSelectedDate(reservation.visitDate);
+    setSelectedReservationId(reservation.id);
+    setReservationAction(null);
+    setActionReservation(null);
+    setActionFormError(null);
+    setResultMessage(message);
+  }
+
+  const actionApiError =
+    reservationAction === "edit"
+      ? updateReservation.error
+      : reservationAction === "cancel"
+        ? cancelReservation.error
+        : reservationAction === "complete"
+          ? completeReservation.error
+          : reservationAction === "no-show"
+            ? markReservationNoShow.error
+            : null;
+  const actionIsSaving =
+    updateReservation.isPending ||
+    cancelReservation.isPending ||
+    completeReservation.isPending ||
+    markReservationNoShow.isPending;
 
   return (
     <section className="grid gap-5">
@@ -420,6 +613,7 @@ export function ReservationOperationsPage() {
             isPending={detailQuery.isPending}
             reservationId={selectedReservationId}
             onClose={() => setSelectedReservationId(null)}
+            onOpenAction={openReservationAction}
           />
 
           <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
@@ -518,6 +712,39 @@ export function ReservationOperationsPage() {
           onCancel={() => setManualFormOpen(false)}
           onChange={updateManualForm}
           onSubmit={handleManualSubmit}
+        />
+      ) : null}
+
+      {reservationAction && actionReservation ? (
+        <ReservationActionDialog
+          action={reservationAction}
+          apiError={actionApiError}
+          cancelReason={cancelReason}
+          editValues={editFormValues}
+          formError={actionFormError}
+          isSaving={actionIsSaving}
+          noShowForce={noShowForce}
+          noShowReason={noShowReason}
+          productOptions={manualProductOptions}
+          reservation={actionReservation}
+          onCancel={closeReservationAction}
+          onCancelReasonChange={(value) => {
+            setActionFormError(null);
+            cancelReservation.reset();
+            setCancelReason(value);
+          }}
+          onEditChange={updateEditForm}
+          onNoShowForceChange={(value) => {
+            setActionFormError(null);
+            markReservationNoShow.reset();
+            setNoShowForce(value);
+          }}
+          onNoShowReasonChange={(value) => {
+            setActionFormError(null);
+            markReservationNoShow.reset();
+            setNoShowReason(value);
+          }}
+          onSubmit={handleReservationActionSubmit}
         />
       ) : null}
     </section>
@@ -683,6 +910,176 @@ function ManualReservationDialog({
   );
 }
 
+function ReservationActionDialog({
+  action,
+  reservation,
+  editValues,
+  productOptions,
+  cancelReason,
+  noShowReason,
+  noShowForce,
+  formError,
+  apiError,
+  isSaving,
+  onEditChange,
+  onCancelReasonChange,
+  onNoShowReasonChange,
+  onNoShowForceChange,
+  onSubmit,
+  onCancel,
+}: {
+  action: ReservationActionKind;
+  reservation: BusinessReservationDetailResponse;
+  editValues: ReservationEditFormValues;
+  productOptions: Array<{ label: string; value: string }>;
+  cancelReason: string;
+  noShowReason: string;
+  noShowForce: boolean;
+  formError: string | null;
+  apiError: unknown;
+  isSaving: boolean;
+  onEditChange: (patch: Partial<ReservationEditFormValues>) => void;
+  onCancelReasonChange: (value: string) => void;
+  onNoShowReasonChange: (value: string) => void;
+  onNoShowForceChange: (value: boolean) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}) {
+  const title = reservationActionTitle(action);
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 px-4 py-6">
+      <section
+        aria-modal="true"
+        className="grid max-h-[90vh] w-full max-w-2xl gap-4 overflow-y-auto rounded-lg border border-border bg-card p-5 shadow-xl"
+        role="dialog"
+        aria-labelledby="reservation-action-title"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold" id="reservation-action-title">
+              {title}
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {reservation.reservationNumber} · {reservation.customer.name} ·{" "}
+              {formatDateLabel(reservation.visitDate)} {formatTime(reservation.startTime)}
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={`${title} 닫기`}
+            onClick={onCancel}
+          >
+            <X aria-hidden className="size-4" />
+          </Button>
+        </div>
+
+        {action === "edit" ? (
+          <div className="grid gap-4 md:grid-cols-2">
+            <Field id="action-product" label="변경 상품">
+              <Select
+                id="action-product"
+                options={productOptions}
+                value={editValues.productId}
+                onChange={(event) => onEditChange({ productId: event.target.value })}
+              />
+            </Field>
+            <Field id="action-visit-date" label="변경 방문일">
+              <DateInput
+                id="action-visit-date"
+                value={editValues.visitDate}
+                onChange={(event) => onEditChange({ visitDate: event.target.value })}
+              />
+            </Field>
+            <Field id="action-start-time" label="변경 방문 시간">
+              <Input
+                id="action-start-time"
+                type="time"
+                value={editValues.startTime}
+                onChange={(event) => onEditChange({ startTime: event.target.value })}
+              />
+            </Field>
+            <Field id="action-party-size" label="변경 인원">
+              <Input
+                id="action-party-size"
+                inputMode="numeric"
+                value={editValues.partySize}
+                onChange={(event) => onEditChange({ partySize: event.target.value })}
+              />
+            </Field>
+            <div className="md:col-span-2">
+              <Alert>
+                변경 저장 시 영업시간과 재고를 다시 확인하고 예약 상태가 변경됨으로 갱신됩니다.
+              </Alert>
+            </div>
+          </div>
+        ) : null}
+
+        {action === "cancel" ? (
+          <div className="grid gap-3">
+            <Alert variant="danger">
+              매장 취소는 예약을 되돌릴 수 없습니다. 결제/환불 영향 확인은 후속 결제 화면에서
+              처리합니다.
+            </Alert>
+            <Field id="action-cancel-reason" label="취소 사유">
+              <textarea
+                className="min-h-24 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60"
+                id="action-cancel-reason"
+                value={cancelReason}
+                onChange={(event) => onCancelReasonChange(event.target.value)}
+              />
+            </Field>
+          </div>
+        ) : null}
+
+        {action === "complete" ? (
+          <Alert variant="success">
+            실제 방문이 확인된 예약만 방문 완료로 처리합니다. 완료 후에는 변경/취소 액션을 실행할 수
+            없습니다.
+          </Alert>
+        ) : null}
+
+        {action === "no-show" ? (
+          <div className="grid gap-3">
+            <Alert variant="danger">
+              노쇼 처리는 고객이 예약 시간에 방문하지 않은 경우에만 사용합니다. 카드 보증 청구와
+              환불 처리는 후속 결제 화면에서 확인합니다.
+            </Alert>
+            <Field id="action-no-show-reason" label="노쇼 사유">
+              <textarea
+                className="min-h-24 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60"
+                id="action-no-show-reason"
+                value={noShowReason}
+                onChange={(event) => onNoShowReasonChange(event.target.value)}
+              />
+            </Field>
+            <Checkbox
+              checked={noShowForce}
+              id="action-no-show-force"
+              label="예약 시작 전 처리 강제"
+              onChange={(event) => onNoShowForceChange(event.target.checked)}
+            />
+          </div>
+        ) : null}
+
+        {formError ? <Alert variant="danger">{formError}</Alert> : null}
+        {apiError ? <Alert variant="danger">{errorMessage(apiError)}</Alert> : null}
+
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onCancel}>
+            닫기
+          </Button>
+          <Button type="button" isLoading={isSaving} onClick={onSubmit}>
+            {reservationActionSubmitLabel(action)}
+          </Button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function ReservationDetailPanel({
   reservationId,
   detail,
@@ -690,6 +1087,7 @@ function ReservationDetailPanel({
   isError,
   error,
   onClose,
+  onOpenAction,
 }: {
   reservationId: number | null;
   detail: BusinessReservationDetailResponse | undefined;
@@ -697,6 +1095,10 @@ function ReservationDetailPanel({
   isError: boolean;
   error: unknown;
   onClose: () => void;
+  onOpenAction: (
+    action: ReservationActionKind,
+    reservation: BusinessReservationDetailResponse,
+  ) => void;
 }) {
   if (reservationId === null) {
     return (
@@ -742,6 +1144,8 @@ function ReservationDetailPanel({
     );
   }
 
+  const canRunActions = isActionableReservationStatus(detail.status);
+
   return (
     <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -776,6 +1180,49 @@ function ReservationDetailPanel({
             <DetailRow label="접수 경로" value={sourceLabels[detail.source] ?? detail.source} />
             <DetailRow label="액션 가능" value={actionAvailability(detail.status)} />
           </dl>
+        </section>
+
+        <section className="grid gap-3 border-t border-border pt-4">
+          <div>
+            <h3 className="text-sm font-semibold">상태 액션</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {actionAvailability(detail.status)}
+            </p>
+          </div>
+          {canRunActions ? (
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Button type="button" variant="outline" onClick={() => onOpenAction("edit", detail)}>
+                <Pencil aria-hidden className="size-4" />
+                예약 변경
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenAction("cancel", detail)}
+              >
+                <Ban aria-hidden className="size-4" />
+                매장 취소
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenAction("complete", detail)}
+              >
+                <CheckCircle2 aria-hidden className="size-4" />
+                방문 완료
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenAction("no-show", detail)}
+              >
+                <UserX aria-hidden className="size-4" />
+                노쇼
+              </Button>
+            </div>
+          ) : (
+            <Alert>현재 상태에서는 변경 액션을 실행할 수 없습니다.</Alert>
+          )}
         </section>
 
         <section className="grid gap-2 border-t border-border pt-4">
@@ -947,6 +1394,31 @@ function toManualReservationRequest(values: ManualReservationFormValues) {
   };
 }
 
+function toReservationUpdateRequest(values: ReservationEditFormValues) {
+  const productId = Number(values.productId);
+  const partySize = Number(values.partySize);
+
+  if (!Number.isInteger(productId) || productId < 1) {
+    return "예약 상품을 선택해 주세요.";
+  }
+  if (!values.visitDate) {
+    return "방문일을 입력해 주세요.";
+  }
+  if (!values.startTime) {
+    return "방문 시간을 입력해 주세요.";
+  }
+  if (!Number.isInteger(partySize) || partySize < 1) {
+    return "인원은 1명 이상이어야 합니다.";
+  }
+
+  return {
+    productId,
+    visitDate: values.visitDate,
+    startTime: values.startTime,
+    partySize,
+  };
+}
+
 function buildProductOptions(
   products: Array<{ id: number; name: string }>,
   reservations: BusinessReservationListItemResponse[],
@@ -1052,6 +1524,32 @@ function actionAvailability(status: BusinessReservationStatus) {
   }
 
   return "취소 처리됨";
+}
+
+function isActionableReservationStatus(status: BusinessReservationStatus) {
+  return status === "CONFIRMED" || status === "MODIFIED";
+}
+
+function reservationActionTitle(action: ReservationActionKind) {
+  const titles: Record<ReservationActionKind, string> = {
+    edit: "예약 변경",
+    cancel: "예약 취소",
+    complete: "방문 완료 처리",
+    "no-show": "노쇼 처리",
+  };
+
+  return titles[action];
+}
+
+function reservationActionSubmitLabel(action: ReservationActionKind) {
+  const labels: Record<ReservationActionKind, string> = {
+    edit: "변경 저장",
+    cancel: "취소 처리",
+    complete: "방문 완료 처리",
+    "no-show": "노쇼 처리",
+  };
+
+  return labels[action];
 }
 
 function auditActionLabel(action: string) {
