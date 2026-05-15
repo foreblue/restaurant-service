@@ -1,0 +1,2 @@
+ALTER TABLE reservations
+    ADD COLUMN source VARCHAR(50) NOT NULL DEFAULT 'ONLINE' AFTER status;

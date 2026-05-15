@@ -55,6 +55,10 @@ class ReservationEntity(
     @Column(nullable = false, length = 50)
     var status: ReservationStatus = ReservationStatus.CONFIRMED,
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 50)
+    val source: ReservationSource = ReservationSource.ONLINE,
+
     @Column(name = "customer_request", length = 500)
     val customerRequest: String? = null,
 

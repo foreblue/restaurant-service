@@ -2,10 +2,14 @@ package com.example.restaurant.reservation
 
 import com.example.restaurant.auth.BusinessAuthContext
 import jakarta.servlet.http.HttpServletRequest
+import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
+import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
+import org.springframework.web.bind.annotation.RequestBody
+import org.springframework.web.bind.annotation.ResponseStatus
 import org.springframework.web.bind.annotation.RestController
 
 @RestController
@@ -13,6 +17,18 @@ import org.springframework.web.bind.annotation.RestController
 class BusinessReservationController(
     private val businessReservationService: BusinessReservationService,
 ) {
+    @PostMapping("/manual")
+    @ResponseStatus(HttpStatus.CREATED)
+    fun createManual(
+        servletRequest: HttpServletRequest,
+        @RequestBody request: BusinessManualReservationCreateRequest,
+    ): BusinessReservationDetailResponse =
+        businessReservationService.createManual(
+            principal = BusinessAuthContext.principal(servletRequest),
+            request = request,
+            metadata = servletRequest.toMetadata(),
+        )
+
     @GetMapping
     fun list(
         servletRequest: HttpServletRequest,
@@ -71,5 +87,12 @@ class BusinessReservationController(
         businessReservationService.detail(
             principal = BusinessAuthContext.principal(servletRequest),
             reservationId = reservationId,
+        )
+
+    private fun HttpServletRequest.toMetadata(): BusinessReservationRequestMetadata =
+        BusinessReservationRequestMetadata(
+            ipAddress = getHeader("X-Forwarded-For")?.substringBefore(",")?.trim()
+                ?: remoteAddr,
+            userAgent = getHeader("User-Agent"),
         )
 }
