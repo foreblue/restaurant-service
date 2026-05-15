@@ -12,6 +12,7 @@ import com.example.restaurant.common.error.ErrorCode
 import com.example.restaurant.notification.NotificationService
 import com.example.restaurant.payment.PaymentRepository
 import com.example.restaurant.refund.RefundOperationResponse
+import com.example.restaurant.refund.RefundPreviewResponse
 import com.example.restaurant.refund.RefundRepository
 import com.example.restaurant.refund.RefundService
 import com.example.restaurant.reservationproduct.ReservationProductRepository
@@ -219,6 +220,20 @@ class BusinessReservationService(
         notificationService.recordReservationCancelled(reservation)
 
         return reservation.toDetail(refund)
+    }
+
+    @Transactional(readOnly = true)
+    fun refundPreview(
+        principal: BusinessPrincipal,
+        reservationId: Long,
+    ): RefundPreviewResponse {
+        val restaurant = ownedRestaurant(principal)
+        val reservation = reservationRepository.findBusinessReservationById(reservationId)
+            ?: throw ApiException(ErrorCode.NOT_FOUND, "예약을 찾을 수 없습니다.")
+        if (reservation.restaurant.id != restaurant.id) {
+            throw ApiException(ErrorCode.NOT_FOUND, "예약을 찾을 수 없습니다.")
+        }
+        return refundService.previewRestaurantCancellation(reservation)
     }
 
     @Transactional
