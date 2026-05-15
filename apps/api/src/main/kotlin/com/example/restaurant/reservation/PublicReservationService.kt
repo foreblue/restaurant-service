@@ -116,6 +116,7 @@ class PublicReservationService(
                 endTime = availableSlot.endTime,
                 partySize = normalized.partySize,
                 status = ReservationStatus.CONFIRMED,
+                source = ReservationSource.ONLINE,
                 customerRequest = normalized.customerRequest,
                 idempotencyKey = normalized.idempotencyKey,
                 idempotencyRequestHash = normalized.requestHash,

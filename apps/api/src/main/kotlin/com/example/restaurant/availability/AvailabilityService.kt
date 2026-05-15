@@ -100,6 +100,29 @@ class AvailabilityService(
         )
     }
 
+    @Transactional(readOnly = true)
+    fun businessAvailableTimes(
+        restaurantId: Long,
+        productId: Long,
+        dateValue: String,
+        partySizeValue: Int?,
+    ): AvailabilityTimesResponse {
+        val context = businessAvailabilityContext(restaurantId, productId, partySizeValue)
+        val date = dateValue.parseDate("date")
+            ?: throw ApiException(ErrorCode.VALIDATION_ERROR, "date가 필요합니다.")
+        val today = today(context.restaurant)
+        if (date.isBefore(today) || date.isAfter(today.plusDays(OPEN_DAYS_AHEAD))) {
+            return AvailabilityTimesResponse(restaurantId, productId, date, emptyList())
+        }
+
+        return AvailabilityTimesResponse(
+            restaurantId = restaurantId,
+            productId = productId,
+            date = date,
+            times = availableTimeSlots(context, date),
+        )
+    }
+
     private fun publicAvailabilityContext(
         restaurantId: Long,
         productId: Long,
@@ -117,6 +140,38 @@ class AvailabilityService(
             product.restaurant.id != restaurant.id ||
             product.status != ReservationProductStatus.ACTIVE ||
             !product.visible
+        ) {
+            throw ApiException(ErrorCode.NOT_FOUND, "예약 가능 정보를 찾을 수 없습니다.")
+        }
+        val partySize = partySizeValue ?: product.minPartySize
+        if (partySize < 1) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "partySize는 1 이상이어야 합니다.")
+        }
+
+        return AvailabilityContext(
+            restaurant = restaurant,
+            product = product,
+            partySize = partySize,
+            businessHours = businessHourRepository.findByRestaurantIdOrderByDayOfWeekAscSequenceAsc(restaurant.id),
+            holidayRules = holidayRuleRepository.findByRestaurantIdOrderByTypeAscDateAscDayOfWeekAscIdAsc(
+                restaurant.id,
+            ),
+        )
+    }
+
+    private fun businessAvailabilityContext(
+        restaurantId: Long,
+        productId: Long,
+        partySizeValue: Int?,
+    ): AvailabilityContext {
+        val restaurant = restaurantRepository.findById(restaurantId)
+            .orElseThrow { ApiException(ErrorCode.NOT_FOUND, "예약 가능 정보를 찾을 수 없습니다.") }
+        val product = reservationProductRepository.findById(productId)
+            .orElseThrow { ApiException(ErrorCode.NOT_FOUND, "예약 가능 정보를 찾을 수 없습니다.") }
+        if (
+            restaurant.status != RestaurantStatus.APPROVED ||
+            product.restaurant.id != restaurant.id ||
+            product.status != ReservationProductStatus.ACTIVE
         ) {
             throw ApiException(ErrorCode.NOT_FOUND, "예약 가능 정보를 찾을 수 없습니다.")
         }

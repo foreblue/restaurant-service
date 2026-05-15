@@ -20,6 +20,7 @@ import com.example.restaurant.notification.RESERVATION_CANCELLED_TEMPLATE
 import com.example.restaurant.notification.RESERVATION_CONFIRMED_TEMPLATE
 import com.example.restaurant.reservation.CustomerRepository
 import com.example.restaurant.reservation.ReservationRepository
+import com.example.restaurant.reservation.ReservationSource
 import com.example.restaurant.reservation.ReservationStatus
 import com.example.restaurant.reservationproduct.ReservationProductRepository
 import com.example.restaurant.reservationproduct.ReservationProductStatus
@@ -1943,6 +1944,193 @@ class RestaurantApiApplicationTests {
             cookie(ownerCookie)
             param("date", fixture.targetDate.toString())
             param("status", "UNKNOWN")
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("VALIDATION_ERROR") }
+        }
+    }
+
+    @Test
+    fun businessOwnerCanCreateManualReservationWithSourceAndAuditLog() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "business-manual-reservation-owner@example.com",
+            restaurantName = "Business Manual Reservation Table",
+            slug = "business-manual-reservation",
+            slotCapacity = 6,
+        )
+        val ownerCookie = loginAndExtractSessionCookie("business-manual-reservation-owner@example.com")
+
+        val createResult = mockMvc.post("/api/business/reservations/manual") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            header("X-Forwarded-For", "203.0.113.16")
+            header("User-Agent", "manual-reservation-test")
+            content = """
+            {
+              "source": "manual_phone",
+              "productId": ${fixture.productId},
+              "visitDate": "${fixture.targetDate}",
+              "startTime": "11:00:00",
+              "partySize": 2,
+              "customerName": "이전화",
+              "customerPhone": "010-2222-3333",
+              "customerRequest": "유아 의자 요청"
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.status") { value("CONFIRMED") }
+            jsonPath("$.source") { value("MANUAL_PHONE") }
+            jsonPath("$.product.id") { value(fixture.productId.toInt()) }
+            jsonPath("$.customer.name") { value("이전화") }
+            jsonPath("$.customer.phoneNumber") { value("01022223333") }
+            jsonPath("$.customerRequest") { value("유아 의자 요청") }
+        }.andReturn()
+        val reservationId = JsonPath.read<Int>(createResult.response.contentAsString, "$.id").toLong()
+        val customerId = JsonPath.read<Int>(createResult.response.contentAsString, "$.customer.id")
+
+        val savedReservation = reservationRepository.findById(reservationId).orElseThrow()
+        assertThat(savedReservation.source).isEqualTo(ReservationSource.MANUAL_PHONE)
+
+        val auditLog = auditLogRepository.findByTargetTypeAndTargetId("reservation", reservationId).single()
+        assertThat(auditLog.action).isEqualTo("RESERVATION_CREATED_MANUAL")
+        assertThat(auditLog.ipAddress).isEqualTo("203.0.113.16")
+        assertThat(auditLog.userAgent).isEqualTo("manual-reservation-test")
+        assertThat(auditLog.afterValue)
+            .contains("\"source\": \"MANUAL_PHONE\"")
+            .contains(savedReservation.reservationNumber)
+
+        val secondResult = mockMvc.post("/api/business/reservations/manual") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "source": "manual_walk_in",
+              "productId": ${fixture.productId},
+              "visitDate": "${fixture.targetDate}",
+              "startTime": "11:30:00",
+              "partySize": 1,
+              "customerName": "이재방문",
+              "customerPhone": "01022223333"
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.source") { value("MANUAL_WALK_IN") }
+            jsonPath("$.customer.id") { value(customerId) }
+            jsonPath("$.customer.name") { value("이재방문") }
+        }.andReturn()
+        val secondReservationId = JsonPath.read<Int>(secondResult.response.contentAsString, "$.id").toLong()
+        assertThat(reservationRepository.findById(secondReservationId).orElseThrow().source)
+            .isEqualTo(ReservationSource.MANUAL_WALK_IN)
+        assertThat(customerRepository.countByRestaurantId(fixture.restaurant.id)).isEqualTo(1)
+
+        mockMvc.get("/api/business/reservations") {
+            cookie(ownerCookie)
+            param("date", fixture.targetDate.toString())
+            param("includeCancelled", "true")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.summary.totalReservations") { value(2) }
+            jsonPath("$.items[0].source") { value("MANUAL_PHONE") }
+            jsonPath("$.items[1].source") { value("MANUAL_WALK_IN") }
+        }
+
+        val hiddenProductResult = mockMvc.post("/api/business/reservation-products") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "숨김 전화 예약 코스",
+              "visible": false,
+              "minPartySize": 1,
+              "maxPartySize": 4,
+              "availableDays": ["${fixture.targetDate.dayOfWeek.name}"],
+              "availableStartTime": "11:00:00",
+              "availableEndTime": "13:00:00",
+              "slotCapacity": 2
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val hiddenProductId = JsonPath.read<Int>(hiddenProductResult.response.contentAsString, "$.id").toLong()
+        mockMvc.post("/api/business/reservations/manual") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "source": "manual_phone",
+              "productId": $hiddenProductId,
+              "visitDate": "${fixture.targetDate}",
+              "startTime": "12:00:00",
+              "partySize": 1,
+              "customerName": "숨김상품",
+              "customerPhone": "010-3333-4444"
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.product.id") { value(hiddenProductId.toInt()) }
+            jsonPath("$.source") { value("MANUAL_PHONE") }
+        }
+
+        mockMvc.post("/api/business/reservations/manual") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "productId": ${fixture.productId},
+              "visitDate": "${fixture.targetDate}",
+              "startTime": "11:00:00",
+              "partySize": 5,
+              "customerName": "초과예약",
+              "customerPhone": "010-4444-5555"
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isConflict() }
+            jsonPath("$.code") { value("CONFLICT") }
+        }
+
+        val otherFixture = createPublicReservationFixture(
+            ownerEmail = "business-manual-reservation-other@example.com",
+            restaurantName = "Other Manual Reservation Table",
+            slug = "business-manual-reservation-other",
+        )
+        val otherCookie = loginAndExtractSessionCookie("business-manual-reservation-other@example.com")
+        mockMvc.post("/api/business/reservations/manual") {
+            cookie(otherCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "productId": ${fixture.productId},
+              "visitDate": "${otherFixture.targetDate}",
+              "startTime": "11:00:00",
+              "partySize": 1,
+              "customerName": "타매장",
+              "customerPhone": "010-7777-8888"
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+
+        mockMvc.post("/api/business/reservations/manual") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "source": "ONLINE",
+              "productId": ${fixture.productId},
+              "visitDate": "${fixture.targetDate}",
+              "startTime": "12:00:00",
+              "partySize": 1,
+              "customerName": "출처오류",
+              "customerPhone": "010-8888-9999"
+            }
+            """.trimIndent()
         }.andExpect {
             status { isBadRequest() }
             jsonPath("$.code") { value("VALIDATION_ERROR") }
