@@ -13,10 +13,14 @@ export const emptyRestaurantApplicationValues: RestaurantApplicationFormValues =
   addressLine2: "",
   postalCode: "",
   cuisineTypesCsv: "",
+  coverImageFileId: null,
+  coverImageFilename: "",
   businessRegistrationNo: "",
   businessName: "",
   representativeName: "",
   businessAddress: "",
+  businessLicenseFileId: null,
+  businessLicenseFilename: "",
   managerName: "",
   managerPhone: "",
   managerEmail: "",
@@ -37,18 +41,27 @@ export function toFormValues(
     addressLine2: application.restaurant.addressLine2 ?? "",
     postalCode: application.restaurant.postalCode ?? "",
     cuisineTypesCsv: application.restaurant.cuisineTypes.join(", "),
+    coverImageFileId: application.restaurant.coverImageFileId,
+    coverImageFilename: fileLabel(application.restaurant.coverImageFileId),
     businessRegistrationNo: application.businessRegistrationNo ?? "",
     businessName: application.businessName ?? "",
     representativeName: application.representativeName ?? "",
     businessAddress: application.businessAddress ?? "",
+    businessLicenseFileId: application.businessLicenseFileId,
+    businessLicenseFilename: fileLabel(application.businessLicenseFileId),
     managerName: application.managerName ?? "",
     managerPhone: application.managerPhone ?? "",
     managerEmail: application.managerEmail ?? "",
   };
 }
 
+interface SaveRequestOptions {
+  contactVerified?: boolean;
+}
+
 export function toSaveRequest(
   values: RestaurantApplicationFormValues,
+  options: SaveRequestOptions = {},
 ): RestaurantApplicationSaveRequest {
   return {
     restaurantName: blankToNull(values.restaurantName),
@@ -61,18 +74,24 @@ export function toSaveRequest(
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean),
+    coverImageFileId: values.coverImageFileId ?? null,
     businessRegistrationNo: blankToNull(values.businessRegistrationNo),
     businessName: blankToNull(values.businessName),
     representativeName: blankToNull(values.representativeName),
     businessAddress: blankToNull(values.businessAddress),
+    businessLicenseFileId: values.businessLicenseFileId ?? null,
     managerName: blankToNull(values.managerName),
     managerPhone: blankToNull(values.managerPhone),
     managerEmail: blankToNull(values.managerEmail),
-    contactVerified: false,
+    ...(options.contactVerified !== undefined ? { contactVerified: options.contactVerified } : {}),
   };
 }
 
 function blankToNull(value: string | undefined) {
   const trimmed = value?.trim() ?? "";
   return trimmed ? trimmed : null;
+}
+
+function fileLabel(fileId: number | null) {
+  return fileId ? `파일 ID ${fileId}` : "";
 }
