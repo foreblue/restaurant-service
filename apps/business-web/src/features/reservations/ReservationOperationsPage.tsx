@@ -1,5 +1,5 @@
 import { type ColumnDef } from "@tanstack/react-table";
-import { CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Search } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, Eye, RotateCcw, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { DataTable } from "@/components/table/DataTable";
@@ -7,10 +7,12 @@ import { Alert, Button, Checkbox, DateInput, Field, Input, Select } from "@/comp
 import { useReservationProductsQuery } from "@/features/products/reservationProductsQueries";
 import {
   useBusinessReservationCalendarQuery,
+  useBusinessReservationDetailQuery,
   useBusinessReservationsQuery,
 } from "@/features/reservations/reservationOperationsQueries";
 import {
   type BusinessReservationCalendarDayResponse,
+  type BusinessReservationDetailResponse,
   type BusinessReservationListItemResponse,
   type BusinessReservationStatus,
 } from "@/shared/api/businessApiClient";
@@ -53,6 +55,7 @@ export function ReservationOperationsPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [includeCancelled, setIncludeCancelled] = useState(false);
   const [calendarMode, setCalendarMode] = useState<CalendarMode>("week");
+  const [selectedReservationId, setSelectedReservationId] = useState<number | null>(null);
   const calendarRange = useMemo(
     () => getCalendarRange(selectedDate, calendarMode),
     [selectedDate, calendarMode],
@@ -82,6 +85,7 @@ export function ReservationOperationsPage() {
   );
   const reservationsQuery = useBusinessReservationsQuery(listQuery);
   const calendarQueryResult = useBusinessReservationCalendarQuery(calendarQuery);
+  const detailQuery = useBusinessReservationDetailQuery(selectedReservationId);
   const productsQuery = useReservationProductsQuery();
   const productOptions = useMemo(
     () => buildProductOptions(productsQuery.data ?? [], reservationsQuery.data?.items ?? []),
@@ -145,6 +149,22 @@ export function ReservationOperationsPage() {
             <Flag label={paymentStatusLabel(row.original.paymentStatus)} />
             {row.original.paymentActionRequired ? <Flag label="결제 확인" tone="danger" /> : null}
           </div>
+        ),
+      },
+      {
+        id: "detail",
+        header: "상세",
+        cell: ({ row }) => (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            aria-label={`${row.original.customer.name} 상세 열기`}
+            onClick={() => setSelectedReservationId(row.original.id)}
+          >
+            <Eye aria-hidden className="size-4" />
+            보기
+          </Button>
         ),
       },
     ],
@@ -305,87 +325,100 @@ export function ReservationOperationsPage() {
           )}
         </section>
 
-        <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="text-lg font-semibold">
-                {calendarMode === "week" ? "주간 캘린더" : "월간 캘린더"}
-              </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {formatDateLabel(calendarRange.from)} - {formatDateLabel(calendarRange.to)}
-              </p>
-            </div>
-            <div className="inline-flex rounded-md border border-input bg-background p-1">
-              <ModeButton
-                active={calendarMode === "week"}
-                label="주"
-                onClick={() => setCalendarMode("week")}
-              />
-              <ModeButton
-                active={calendarMode === "month"}
-                label="월"
-                onClick={() => setCalendarMode("month")}
-              />
-            </div>
-          </div>
+        <aside className="grid gap-5">
+          <ReservationDetailPanel
+            detail={detailQuery.data}
+            error={detailQuery.error}
+            isError={detailQuery.isError}
+            isPending={detailQuery.isPending}
+            reservationId={selectedReservationId}
+            onClose={() => setSelectedReservationId(null)}
+          />
 
-          {calendarQueryResult.isPending ? (
-            <div className="mt-4">
-              <Panel title="캘린더를 불러오는 중입니다." />
+          <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">
+                  {calendarMode === "week" ? "주간 캘린더" : "월간 캘린더"}
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {formatDateLabel(calendarRange.from)} - {formatDateLabel(calendarRange.to)}
+                </p>
+              </div>
+              <div className="inline-flex rounded-md border border-input bg-background p-1">
+                <ModeButton
+                  active={calendarMode === "week"}
+                  label="주"
+                  onClick={() => setCalendarMode("week")}
+                />
+                <ModeButton
+                  active={calendarMode === "month"}
+                  label="월"
+                  onClick={() => setCalendarMode("month")}
+                />
+              </div>
             </div>
-          ) : calendarQueryResult.isError ? (
-            <div className="mt-4">
-              <Alert variant="danger">{errorMessage(calendarQueryResult.error)}</Alert>
-            </div>
-          ) : (
-            <div className="mt-4 grid grid-cols-7 gap-1.5">
-              {weekdayLabels.map((label) => (
-                <div
-                  className="px-1 py-1 text-center text-xs font-medium text-muted-foreground"
-                  key={label}
-                >
-                  {label}
-                </div>
-              ))}
-              {calendarCells.map((cell, index) =>
-                cell ? (
-                  <button
-                    aria-label={`${cell.date} 예약 ${cell.reservationCount}건`}
-                    className={
-                      cell.date === selectedDate
-                        ? "grid min-h-24 gap-1 rounded-md border border-primary bg-primary/5 p-2 text-left"
-                        : "grid min-h-24 gap-1 rounded-md border border-border bg-background p-2 text-left transition hover:bg-muted"
-                    }
-                    key={cell.date}
-                    type="button"
-                    onClick={() => setSelectedDate(cell.date)}
-                  >
-                    <span className="flex items-center justify-between gap-1">
-                      <span className="font-mono text-sm font-medium">{dayOfMonth(cell.date)}</span>
-                      {cell.isOpen ? (
-                        <CalendarDays aria-hidden className="size-3.5 text-muted-foreground" />
-                      ) : null}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {cell.reservationCount}건 · {cell.partySizeTotal}명
-                    </span>
-                    <span className="grid gap-0.5 text-[11px] leading-4 text-muted-foreground">
-                      <span>완료 {cell.completedCount}</span>
-                      <span>취소 {cell.cancelledCount}</span>
-                      <span>노쇼 {cell.noShowCount}</span>
-                    </span>
-                  </button>
-                ) : (
+
+            {calendarQueryResult.isPending ? (
+              <div className="mt-4">
+                <Panel title="캘린더를 불러오는 중입니다." />
+              </div>
+            ) : calendarQueryResult.isError ? (
+              <div className="mt-4">
+                <Alert variant="danger">{errorMessage(calendarQueryResult.error)}</Alert>
+              </div>
+            ) : (
+              <div className="mt-4 grid grid-cols-7 gap-1.5">
+                {weekdayLabels.map((label) => (
                   <div
-                    aria-hidden
-                    className="min-h-24 rounded-md border border-transparent"
-                    key={`blank-${index}`}
-                  />
-                ),
-              )}
-            </div>
-          )}
-        </section>
+                    className="px-1 py-1 text-center text-xs font-medium text-muted-foreground"
+                    key={label}
+                  >
+                    {label}
+                  </div>
+                ))}
+                {calendarCells.map((cell, index) =>
+                  cell ? (
+                    <button
+                      aria-label={`${cell.date} 예약 ${cell.reservationCount}건`}
+                      className={
+                        cell.date === selectedDate
+                          ? "grid min-h-24 gap-1 rounded-md border border-primary bg-primary/5 p-2 text-left"
+                          : "grid min-h-24 gap-1 rounded-md border border-border bg-background p-2 text-left transition hover:bg-muted"
+                      }
+                      key={cell.date}
+                      type="button"
+                      onClick={() => setSelectedDate(cell.date)}
+                    >
+                      <span className="flex items-center justify-between gap-1">
+                        <span className="font-mono text-sm font-medium">
+                          {dayOfMonth(cell.date)}
+                        </span>
+                        {cell.isOpen ? (
+                          <CalendarDays aria-hidden className="size-3.5 text-muted-foreground" />
+                        ) : null}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {cell.reservationCount}건 · {cell.partySizeTotal}명
+                      </span>
+                      <span className="grid gap-0.5 text-[11px] leading-4 text-muted-foreground">
+                        <span>완료 {cell.completedCount}</span>
+                        <span>취소 {cell.cancelledCount}</span>
+                        <span>노쇼 {cell.noShowCount}</span>
+                      </span>
+                    </button>
+                  ) : (
+                    <div
+                      aria-hidden
+                      className="min-h-24 rounded-md border border-transparent"
+                      key={`blank-${index}`}
+                    />
+                  ),
+                )}
+              </div>
+            )}
+          </section>
+        </aside>
       </section>
     </section>
   );
@@ -404,6 +437,169 @@ function Panel({ title }: { title: string }) {
   return (
     <div className="rounded-lg border border-border bg-card p-5 text-sm text-muted-foreground shadow-sm">
       {title}
+    </div>
+  );
+}
+
+function ReservationDetailPanel({
+  reservationId,
+  detail,
+  isPending,
+  isError,
+  error,
+  onClose,
+}: {
+  reservationId: number | null;
+  detail: BusinessReservationDetailResponse | undefined;
+  isPending: boolean;
+  isError: boolean;
+  error: unknown;
+  onClose: () => void;
+}) {
+  if (reservationId === null) {
+    return (
+      <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
+        <h2 className="text-lg font-semibold">예약 상세</h2>
+        <div className="mt-4">
+          <Alert>예약을 선택하면 고객 정보와 요청사항이 표시됩니다.</Alert>
+        </div>
+      </section>
+    );
+  }
+
+  if (isPending) {
+    return (
+      <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
+        <h2 className="text-lg font-semibold">예약 상세</h2>
+        <div className="mt-4">
+          <Panel title="예약 상세를 불러오는 중입니다." />
+        </div>
+      </section>
+    );
+  }
+
+  if (isError || !detail) {
+    return (
+      <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">예약 상세</h2>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="상세 닫기"
+            onClick={onClose}
+          >
+            <X aria-hidden className="size-4" />
+          </Button>
+        </div>
+        <div className="mt-4">
+          <Alert variant="danger">{errorMessage(error)}</Alert>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">예약 상세</h2>
+          <p className="mt-1 font-mono text-xs text-muted-foreground">{detail.reservationNumber}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <StatusBadge label={detail.statusLabel} tone={detail.statusTone} />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="상세 닫기"
+            onClick={onClose}
+          >
+            <X aria-hidden className="size-4" />
+          </Button>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-4">
+        <section className="grid gap-2">
+          <h3 className="text-sm font-semibold">예약 정보</h3>
+          <dl className="grid gap-2 text-sm">
+            <DetailRow
+              label="일시"
+              value={`${formatDateLabel(detail.visitDate)} ${formatTime(detail.startTime)}-${formatTime(detail.endTime)}`}
+            />
+            <DetailRow label="상품" value={detail.product.name} />
+            <DetailRow label="인원" value={`${detail.partySize}명`} />
+            <DetailRow label="접수 경로" value={sourceLabels[detail.source] ?? detail.source} />
+            <DetailRow label="액션 가능" value={actionAvailability(detail.status)} />
+          </dl>
+        </section>
+
+        <section className="grid gap-2 border-t border-border pt-4">
+          <h3 className="text-sm font-semibold">고객 정보</h3>
+          <dl className="grid gap-2 text-sm">
+            <DetailRow label="이름" value={detail.customer.name} />
+            <DetailRow label="전화번호" value={detail.customer.phoneNumber} />
+            <DetailRow
+              label="방문/노쇼"
+              value={`방문 ${detail.customer.visitCount}회 · 노쇼 ${detail.customer.noShowCount}회`}
+            />
+          </dl>
+          <Alert>VIP/주의 고객 표시는 CRM 단계에서 연결됩니다.</Alert>
+        </section>
+
+        <section className="grid gap-2 border-t border-border pt-4">
+          <h3 className="text-sm font-semibold">요청사항</h3>
+          <p className="rounded-md bg-muted px-3 py-2 text-sm text-foreground">
+            {detail.customerRequest ?? "등록된 고객 요청사항이 없습니다."}
+          </p>
+        </section>
+
+        <section className="grid gap-2 border-t border-border pt-4">
+          <h3 className="text-sm font-semibold">결제 연계</h3>
+          <div className="flex flex-wrap gap-2">
+            <Flag label={paymentStatusLabel(detail.paymentStatus)} />
+            {detail.paymentActionRequired ? <Flag label="후속 확인 필요" tone="danger" /> : null}
+          </div>
+        </section>
+
+        <section className="grid gap-2 border-t border-border pt-4">
+          <h3 className="text-sm font-semibold">운영 메모</h3>
+          <p className="rounded-md bg-muted px-3 py-2 text-sm text-foreground">
+            {detail.ownerNote ?? "등록된 운영 메모가 없습니다."}
+          </p>
+        </section>
+
+        <section className="grid gap-2 border-t border-border pt-4">
+          <h3 className="text-sm font-semibold">감사 로그</h3>
+          {detail.auditLogs.length > 0 ? (
+            <ul className="grid gap-2 text-sm">
+              {detail.auditLogs.map((log) => (
+                <li className="rounded-md bg-muted px-3 py-2" key={log.id}>
+                  <span className="font-medium">{auditActionLabel(log.action)}</span>
+                  <span className="ml-2 text-muted-foreground">
+                    {formatDateTime(log.createdAt)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
+              표시할 변경 이력이 없습니다.
+            </p>
+          )}
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid grid-cols-[88px_1fr] gap-3">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 break-words font-medium">{value}</dd>
     </div>
   );
 }
@@ -560,6 +756,47 @@ function formatTime(value: string) {
 
 function paymentStatusLabel(value: string) {
   return paymentStatusLabels[value] ?? value;
+}
+
+function actionAvailability(status: BusinessReservationStatus) {
+  if (status === "PENDING") {
+    return "확정 후 변경/취소 액션 가능";
+  }
+  if (status === "CONFIRMED" || status === "MODIFIED") {
+    return "변경, 취소, 방문 완료, 노쇼 처리 가능";
+  }
+  if (status === "COMPLETED") {
+    return "방문 완료 처리됨";
+  }
+  if (status === "NO_SHOW") {
+    return "노쇼 처리됨";
+  }
+
+  return "취소 처리됨";
+}
+
+function auditActionLabel(action: string) {
+  const labels: Record<string, string> = {
+    "reservation.owner_note_updated": "운영 메모 수정",
+    "reservation.updated": "예약 변경",
+    "reservation.cancelled_by_customer": "고객 취소",
+    "reservation.cancelled_by_restaurant": "매장 취소",
+    "reservation.completed": "방문 완료",
+    "reservation.no_show": "노쇼",
+  };
+
+  return labels[action] ?? action;
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) {
+    return "-";
+  }
+
+  return new Intl.DateTimeFormat("ko-KR", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
 }
 
 function errorMessage(error: unknown) {
