@@ -430,12 +430,54 @@ describe("App routing", () => {
     fireEvent.change(screen.getByLabelText("상품 설명"), {
       target: { value: "계절 메뉴 코스" },
     });
+    fireEvent.change(screen.getByLabelText("최소 인원"), {
+      target: { value: "6" },
+    });
+    fireEvent.change(screen.getByLabelText("최대 인원"), {
+      target: { value: "2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "상품 저장" }));
+
+    expect(
+      await screen.findByText("최소 인원은 최대 인원보다 클 수 없습니다."),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("최소 인원"), {
+      target: { value: "2" },
+    });
+    fireEvent.change(screen.getByLabelText("최대 인원"), {
+      target: { value: "6" },
+    });
+    fireEvent.change(screen.getByLabelText("예약 가능 시작"), {
+      target: { value: "21:00" },
+    });
+    fireEvent.change(screen.getByLabelText("예약 가능 종료"), {
+      target: { value: "18:00" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "상품 저장" }));
+
+    expect(
+      await screen.findByText("예약 가능 시작 시간은 종료 시간보다 빨라야 합니다."),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("예약 가능 시작"), {
+      target: { value: "18:00" },
+    });
+    fireEvent.change(screen.getByLabelText("예약 가능 종료"), {
+      target: { value: "21:00" },
+    });
+    fireEvent.change(screen.getByLabelText("슬롯 재고"), {
+      target: { value: "8" },
+    });
+    expect(screen.getByLabelText("월요일 가능")).toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: "상품 저장" }));
 
     expect(await screen.findByText("상품이 생성되었습니다.")).toBeInTheDocument();
     expect(await screen.findByText("디너 코스")).toBeInTheDocument();
     expect(screen.getByText("80,000원")).toBeInTheDocument();
     expect(screen.getAllByText("노출").length).toBeGreaterThan(0);
+    expect(screen.getByText("2-6명")).toBeInTheDocument();
+    expect(screen.getByText("18:00-21:00 · 재고 8")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "디너 코스 수정" }));
     fireEvent.change(await screen.findByLabelText("상품명"), {
