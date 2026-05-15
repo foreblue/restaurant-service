@@ -14,8 +14,13 @@ import com.example.restaurant.audit.AuditLogRepository
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
 import com.example.restaurant.common.trace.TraceContext
+import com.example.restaurant.notification.NotificationRepository
+import com.example.restaurant.notification.NotificationStatus
+import com.example.restaurant.notification.RESERVATION_CANCELLED_TEMPLATE
+import com.example.restaurant.notification.RESERVATION_CONFIRMED_TEMPLATE
 import com.example.restaurant.reservation.CustomerRepository
 import com.example.restaurant.reservation.ReservationRepository
+import com.example.restaurant.reservation.ReservationStatus
 import com.example.restaurant.reservationproduct.ReservationProductRepository
 import com.example.restaurant.reservationproduct.ReservationProductStatus
 import com.example.restaurant.restaurant.FileStorage
@@ -123,6 +128,9 @@ class RestaurantApiApplicationTests {
 
     @Autowired
     private lateinit var reservationRepository: ReservationRepository
+
+    @Autowired
+    private lateinit var notificationRepository: NotificationRepository
 
     @Autowired
     private lateinit var fileStorage: FileStorage
@@ -1662,6 +1670,154 @@ class RestaurantApiApplicationTests {
         }
 
         assertThat(reservationRepository.countByRestaurantId(fixture.restaurant.id)).isEqualTo(1)
+    }
+
+    @Test
+    fun publicReservationDetailAndCancelUseLookupTokenAndRecordNotifications() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "reservation-detail-owner@example.com",
+            restaurantName = "Reservation Detail Table",
+            slug = "reservation-detail",
+            slotCapacity = 4,
+        )
+        val createResult = mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "public-reserve-detail-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = publicReservationRequestJson(
+                fixture = fixture,
+                startTime = "11:00:00",
+                partySize = 4,
+                customerName = "정상세",
+                customerPhone = "010-1000-2000",
+                customerRequest = "조용한 자리",
+            )
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val reservationId = JsonPath.read<Int>(createResult.response.contentAsString, "$.id").toLong()
+        val lookupToken = JsonPath.read<String>(createResult.response.contentAsString, "$.lookupToken")
+        val reservationNumber = JsonPath.read<String>(createResult.response.contentAsString, "$.reservationNumber")
+
+        val confirmedNotifications = notificationRepository.findByReservationIdOrderByCreatedAtAsc(reservationId)
+        assertThat(confirmedNotifications).hasSize(1)
+        assertThat(confirmedNotifications.single().templateKey).isEqualTo(RESERVATION_CONFIRMED_TEMPLATE)
+        assertThat(confirmedNotifications.single().status).isEqualTo(NotificationStatus.QUEUED)
+
+        mockMvc.get("/api/public/reservations/$reservationId").andExpect {
+            status { isUnauthorized() }
+            jsonPath("$.code") { value("AUTHENTICATION_REQUIRED") }
+        }
+
+        mockMvc.get("/api/public/reservations/$reservationId") {
+            param("lookupToken", "wrong-token")
+        }.andExpect {
+            status { isForbidden() }
+            jsonPath("$.code") { value("ACCESS_DENIED") }
+        }
+
+        mockMvc.get("/api/public/reservations/$reservationId") {
+            param("lookupToken", lookupToken)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.reservationNumber") { value(reservationNumber) }
+            jsonPath("$.status") { value("CONFIRMED") }
+            jsonPath("$.restaurantName") { value("Reservation Detail Table") }
+            jsonPath("$.productName") { value("공개 예약 코스") }
+            jsonPath("$.customerPhoneLast4") { value("2000") }
+            jsonPath("$.customerRequest") { value("조용한 자리") }
+            jsonPath("$.cancelable") { value(true) }
+            jsonPath("$.cancelDeadline") { isNotEmpty() }
+        }
+
+        mockMvc.post("/api/public/reservations/$reservationId/cancel") {
+            header("X-Reservation-Lookup-Token", lookupToken)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reason": "고객 일정 변경"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("CANCELLED_BY_CUSTOMER") }
+            jsonPath("$.cancelable") { value(false) }
+            jsonPath("$.cancelledAt") { isNotEmpty() }
+            jsonPath("$.cancelReason") { value("고객 일정 변경") }
+        }
+
+        assertThat(reservationRepository.findById(reservationId).orElseThrow().status)
+            .isEqualTo(ReservationStatus.CANCELLED_BY_CUSTOMER)
+        val cancelledNotifications = notificationRepository.findByReservationIdOrderByCreatedAtAsc(reservationId)
+        assertThat(cancelledNotifications.map { it.templateKey })
+            .containsExactly(RESERVATION_CONFIRMED_TEMPLATE, RESERVATION_CANCELLED_TEMPLATE)
+        assertThat(cancelledNotifications.map { it.status }).containsOnly(NotificationStatus.QUEUED)
+
+        mockMvc.post("/api/public/reservations/$reservationId/cancel") {
+            header("X-Reservation-Lookup-Token", lookupToken)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("CANCELLED_BY_CUSTOMER") }
+        }
+        assertThat(notificationRepository.findByReservationIdOrderByCreatedAtAsc(reservationId)).hasSize(2)
+
+        mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "public-reserve-detail-2")
+            contentType = MediaType.APPLICATION_JSON
+            content = publicReservationRequestJson(
+                fixture = fixture,
+                startTime = "11:00:00",
+                partySize = 4,
+                customerName = "재예약",
+                customerPhone = "010-3000-4000",
+            )
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.status") { value("CONFIRMED") }
+        }
+    }
+
+    @Test
+    fun publicReservationCancelRejectsVisitStartPassed() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "reservation-past-cancel-owner@example.com",
+            restaurantName = "Reservation Past Cancel Table",
+            slug = "reservation-past-cancel",
+        )
+        val createResult = mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "public-reserve-past-cancel-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = publicReservationRequestJson(
+                fixture = fixture,
+                startTime = "11:00:00",
+                partySize = 1,
+                customerName = "지난예약",
+                customerPhone = "010-9000-1000",
+            )
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val reservationId = JsonPath.read<Int>(createResult.response.contentAsString, "$.id").toLong()
+        val lookupToken = JsonPath.read<String>(createResult.response.contentAsString, "$.lookupToken")
+        val pastDate = LocalDate.now(ZoneId.of("Asia/Seoul")).minusDays(1)
+
+        jdbcTemplate.update(
+            "update reservations set visit_date = ?, start_time = ?, end_time = ? where id = ?",
+            java.sql.Date.valueOf(pastDate),
+            java.sql.Time.valueOf("09:00:00"),
+            java.sql.Time.valueOf("09:30:00"),
+            reservationId,
+        )
+
+        mockMvc.post("/api/public/reservations/$reservationId/cancel") {
+            header("X-Reservation-Lookup-Token", lookupToken)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reason": "늦은 취소"}"""
+        }.andExpect {
+            status { isConflict() }
+            jsonPath("$.code") { value("CONFLICT") }
+            jsonPath("$.message") { value("방문 시작 이후에는 고객 취소를 할 수 없습니다.") }
+        }
+
+        assertThat(reservationRepository.findById(reservationId).orElseThrow().status)
+            .isEqualTo(ReservationStatus.CONFIRMED)
+        assertThat(notificationRepository.countByReservationIdAndTemplateKey(reservationId, RESERVATION_CANCELLED_TEMPLATE))
+            .isEqualTo(0)
     }
 
     @Test

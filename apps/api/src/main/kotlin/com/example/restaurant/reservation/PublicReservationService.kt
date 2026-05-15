@@ -6,6 +6,7 @@ import com.example.restaurant.auth.TokenHash
 import com.example.restaurant.availability.AvailabilityService
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.example.restaurant.notification.NotificationService
 import com.example.restaurant.reservationproduct.ReservationProductRepository
 import com.example.restaurant.reservationproduct.ReservationProductStatus
 import com.example.restaurant.restaurant.ReservationPageRepository
@@ -14,14 +15,19 @@ import com.example.restaurant.restaurant.RestaurantStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.security.SecureRandom
+import java.time.Clock
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 
 private const val MAX_IDEMPOTENCY_KEY_LENGTH = 128
 private const val MAX_CUSTOMER_NAME_LENGTH = 80
 private const val MAX_CUSTOMER_REQUEST_LENGTH = 500
+private const val MAX_CANCEL_REASON_LENGTH = 255
 
 @Service
 class PublicReservationService(
@@ -31,6 +37,8 @@ class PublicReservationService(
     private val customerRepository: CustomerRepository,
     private val reservationRepository: ReservationRepository,
     private val lookupTokenService: ReservationLookupTokenService,
+    private val notificationService: NotificationService,
+    private val clock: Clock,
 ) {
     private val secureRandom = SecureRandom()
 
@@ -112,8 +120,47 @@ class PublicReservationService(
                 idempotencyRequestHash = normalized.requestHash,
             ),
         )
+        notificationService.recordReservationConfirmed(reservation)
 
         return reservation.toResponse()
+    }
+
+    @Transactional
+    fun detail(
+        reservationId: Long,
+        lookupToken: String?,
+    ): PublicReservationDetailResponse {
+        val reservation = reservationRepository.findById(reservationId)
+            .orElseThrow { ApiException(ErrorCode.NOT_FOUND, "예약을 찾을 수 없습니다.") }
+        reservation.requireLookupAccess(lookupToken)
+        return reservation.toDetailResponse()
+    }
+
+    @Transactional
+    fun cancel(
+        reservationId: Long,
+        lookupToken: String?,
+        request: PublicReservationCancelRequest?,
+    ): PublicReservationDetailResponse {
+        val reservation = reservationRepository.findByIdForUpdate(reservationId)
+            ?: throw ApiException(ErrorCode.NOT_FOUND, "예약을 찾을 수 없습니다.")
+        reservation.requireLookupAccess(lookupToken)
+        if (reservation.status == ReservationStatus.CANCELLED_BY_CUSTOMER) {
+            return reservation.toDetailResponse()
+        }
+        if (reservation.status != ReservationStatus.CONFIRMED) {
+            throw ApiException(ErrorCode.CONFLICT, "취소할 수 없는 예약입니다.")
+        }
+        if (!reservation.isCancelableNow()) {
+            throw ApiException(ErrorCode.CONFLICT, "방문 시작 이후에는 고객 취소를 할 수 없습니다.")
+        }
+
+        reservation.status = ReservationStatus.CANCELLED_BY_CUSTOMER
+        reservation.cancelledAt = Instant.now(clock)
+        reservation.cancelReason = request.normalizedCancelReason()
+        notificationService.recordReservationCancelled(reservation)
+
+        return reservation.toDetailResponse()
     }
 
     private fun PublicReservationCreateRequest.normalized(
@@ -221,6 +268,53 @@ class PublicReservationService(
             lookupToken = token.lookupToken,
             lookupTokenExpiresAt = token.expiresAt,
         )
+    }
+
+    private fun ReservationEntity.toDetailResponse(): PublicReservationDetailResponse =
+        PublicReservationDetailResponse(
+            id = id,
+            reservationNumber = reservationNumber,
+            status = status,
+            restaurantId = restaurant.id,
+            restaurantName = restaurant.name,
+            productId = reservationProduct.id,
+            productName = reservationProduct.name,
+            customerId = customer.id,
+            visitDate = visitDate,
+            startTime = startTime,
+            endTime = endTime,
+            partySize = partySize,
+            customerName = customer.name,
+            customerPhoneLast4 = customer.phoneNumber.takeLast(4),
+            customerRequest = customerRequest,
+            cancelable = isCancelableNow(),
+            cancelDeadline = cancelDeadline(),
+            cancelledAt = cancelledAt,
+            cancelReason = cancelReason,
+        )
+
+    private fun ReservationEntity.requireLookupAccess(lookupToken: String?) {
+        val token = lookupToken?.trim().orEmpty()
+        if (token.isBlank()) {
+            throw ApiException(ErrorCode.AUTHENTICATION_REQUIRED, "예약 조회 토큰이 필요합니다.")
+        }
+        if (!lookupTokenService.hasLookupAccess(reservationNumber, token)) {
+            throw ApiException(ErrorCode.ACCESS_DENIED, "예약 조회 권한이 없습니다.")
+        }
+    }
+
+    private fun ReservationEntity.isCancelableNow(): Boolean =
+        status == ReservationStatus.CONFIRMED && Instant.now(clock).isBefore(cancelDeadline())
+
+    private fun ReservationEntity.cancelDeadline(): Instant =
+        ZonedDateTime.of(visitDate, startTime, ZoneId.of(restaurant.timezone)).toInstant()
+
+    private fun PublicReservationCancelRequest?.normalizedCancelReason(): String? {
+        val normalized = this?.reason?.trim()?.takeIf { it.isNotBlank() }
+        if ((normalized?.length ?: 0) > MAX_CANCEL_REASON_LENGTH) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "취소 사유는 255자 이하여야 합니다.")
+        }
+        return normalized
     }
 
     private fun generateReservationNumber(visitDate: LocalDate): String {

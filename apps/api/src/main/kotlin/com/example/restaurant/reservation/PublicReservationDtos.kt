@@ -16,6 +16,10 @@ data class PublicReservationCreateRequest(
     val idempotencyKey: String? = null,
 )
 
+data class PublicReservationCancelRequest(
+    val reason: String? = null,
+)
+
 data class PublicReservationResponse(
     val id: Long,
     val reservationNumber: String,
@@ -31,4 +35,26 @@ data class PublicReservationResponse(
     val customerPhoneLast4: String,
     val lookupToken: String,
     val lookupTokenExpiresAt: Instant,
+)
+
+data class PublicReservationDetailResponse(
+    val id: Long,
+    val reservationNumber: String,
+    val status: ReservationStatus,
+    val restaurantId: Long,
+    val restaurantName: String?,
+    val productId: Long,
+    val productName: String,
+    val customerId: Long,
+    val visitDate: LocalDate,
+    val startTime: LocalTime,
+    val endTime: LocalTime,
+    val partySize: Int,
+    val customerName: String,
+    val customerPhoneLast4: String,
+    val customerRequest: String?,
+    val cancelable: Boolean,
+    val cancelDeadline: Instant,
+    val cancelledAt: Instant?,
+    val cancelReason: String?,
 )
