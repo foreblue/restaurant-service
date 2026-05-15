@@ -2389,6 +2389,136 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun businessOwnerCanListPaymentsAndRefundsWithFiltersAndReservationSummary() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "business-payment-owner@example.com",
+            restaurantName = "Business Payment Table",
+            slug = "business-payment",
+        )
+        val sessionCookie = loginAndExtractSessionCookie(fixture.restaurant.owner.email)
+        val created = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "business-payment-list-reservation-1",
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "목록고객",
+            customerPhone = "010-8282-0001",
+        )
+        val reservation = reservationRepository.findById(created.id).orElseThrow()
+        reservation.paymentStatus = PaymentStatus.PARTIALLY_REFUNDED
+        val payment = paymentRepository.saveAndFlush(
+            PaymentEntity(
+                restaurant = fixture.restaurant,
+                reservation = reservation,
+                customer = reservation.customer,
+                paymentType = PaymentType.DEPOSIT,
+                status = PaymentStatus.PAID,
+                amount = 30_000,
+                refundedAmount = 10_000,
+                pgProviderKey = "fake-pg",
+                pgPaymentId = "pg-business-payment-list-1",
+                pgOrderId = "order-business-payment-list-1",
+                idempotencyKey = "business-payment-list-payment-1",
+                paidAt = Instant.parse("2026-05-15T00:10:00Z"),
+            ),
+        )
+        val refund = refundRepository.saveAndFlush(
+            RefundEntity(
+                payment = payment,
+                reservation = reservation,
+                restaurant = fixture.restaurant,
+                status = RefundStatus.SUCCEEDED,
+                refundAmount = 10_000,
+                nonRefundableAmount = 20_000,
+                reason = RefundReason.CUSTOMER_CANCEL,
+                pgRefundId = "pg-business-refund-list-1",
+                idempotencyKey = "business-payment-list-refund-1",
+                requestedByRole = RefundRequesterRole.CUSTOMER,
+                succeededAt = Instant.parse("2026-05-15T00:20:00Z"),
+            ),
+        )
+        reservationRepository.saveAndFlush(reservation)
+
+        val otherFixture = createPublicReservationFixture(
+            ownerEmail = "business-payment-other@example.com",
+            restaurantName = "Other Business Payment Table",
+            slug = "business-payment-other",
+        )
+        val otherCookie = loginAndExtractSessionCookie(otherFixture.restaurant.owner.email)
+        val today = LocalDate.now(ZoneId.of("Asia/Seoul"))
+
+        mockMvc.get("/api/business/payments") {
+            cookie(sessionCookie)
+            param("status", "PAID")
+            param("from", today.toString())
+            param("to", today.toString())
+            param("query", "목록고객")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.totalCount") { value(1) }
+            jsonPath("$.items[0].paymentId") { value(payment.id.toInt()) }
+            jsonPath("$.items[0].reservationNumber") { value(created.reservationNumber) }
+            jsonPath("$.items[0].customerPhoneMasked") { value("010-****-0001") }
+            jsonPath("$.items[0].paymentType") { value("DEPOSIT") }
+            jsonPath("$.items[0].status") { value("PAID") }
+            jsonPath("$.items[0].amount") { value(30000) }
+            jsonPath("$.items[0].refundedAmount") { value(10000) }
+        }
+
+        mockMvc.get("/api/business/payments") {
+            cookie(sessionCookie)
+            param("status", "FAILED")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.totalCount") { value(0) }
+            jsonPath("$.items.length()") { value(0) }
+        }
+
+        mockMvc.get("/api/business/payments") {
+            cookie(otherCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.totalCount") { value(0) }
+        }
+
+        mockMvc.get("/api/business/refunds") {
+            cookie(sessionCookie)
+            param("status", "SUCCEEDED")
+            param("query", "공개 예약 코스")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.totalCount") { value(1) }
+            jsonPath("$.items[0].refundId") { value(refund.id.toInt()) }
+            jsonPath("$.items[0].paymentId") { value(payment.id.toInt()) }
+            jsonPath("$.items[0].status") { value("SUCCEEDED") }
+            jsonPath("$.items[0].refundAmount") { value(10000) }
+            jsonPath("$.items[0].nonRefundableAmount") { value(20000) }
+            jsonPath("$.items[0].currency") { value("KRW") }
+        }
+
+        mockMvc.get("/api/business/refunds") {
+            cookie(sessionCookie)
+            param("from", today.plusDays(1).toString())
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.totalCount") { value(0) }
+            jsonPath("$.items.length()") { value(0) }
+        }
+
+        mockMvc.get("/api/business/reservations/${reservation.id}") {
+            cookie(sessionCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.paymentSummary.reservationPaymentStatus") { value("PARTIALLY_REFUNDED") }
+            jsonPath("$.paymentSummary.latestPaymentId") { value(payment.id.toInt()) }
+            jsonPath("$.paymentSummary.latestPaymentStatus") { value("PAID") }
+            jsonPath("$.paymentSummary.latestRefundId") { value(refund.id.toInt()) }
+            jsonPath("$.paymentSummary.latestRefundStatus") { value("SUCCEEDED") }
+            jsonPath("$.paymentSummary.refundedAmount") { value(10000) }
+        }
+    }
+
+    @Test
     fun publicAvailabilityUsesHoursHolidaysProductPolicyAndCapacity() {
         val owner = createBusinessUser("availability-owner@example.com")
         val sessionCookie = loginAndExtractSessionCookie(owner.email)
