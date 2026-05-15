@@ -522,6 +522,54 @@ export interface ReservationProductSeatRulesResponse {
   updatedAt: string;
 }
 
+export type BusinessTimeSlotStatus = "AVAILABLE" | "CLOSED" | "TEMP_CLOSED";
+
+export interface BusinessTimeSlotListQuery {
+  date?: string | null;
+  productId?: number | null;
+  seatType?: BusinessSeatType | null;
+}
+
+export interface BusinessTimeSlotActionRequest {
+  date?: string | null;
+  productId?: number | null;
+  seatType?: BusinessSeatType | null;
+  startTime?: string | null;
+  reason?: string | null;
+}
+
+export interface BusinessTimeSlotResponse {
+  id: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  productId: number;
+  productName: string;
+  seatType: BusinessSeatType;
+  seatTypeLabel: string;
+  capacity: number;
+  reservedCount: number;
+  availableCount: number;
+  status: BusinessTimeSlotStatus;
+  statusLabel: string;
+  statusTone: string;
+  duplicateGuarded: boolean;
+  customerAvailabilityAffected: boolean;
+  lastUpdatedAt: string;
+}
+
+export interface BusinessTimeSlotListResponse {
+  date: string;
+  summary: {
+    totalCount: number;
+    availableCount: number;
+    closedCount: number;
+    tempClosedCount: number;
+    duplicateGuardedCount: number;
+  };
+  items: BusinessTimeSlotResponse[];
+}
+
 export interface BusinessAuditLogListQuery {
   targetType?: string | null;
   targetId?: number | null;
@@ -750,6 +798,9 @@ export interface BusinessApiClient {
     productId: number,
     request: ReservationProductSeatRulesRequest,
   ): Promise<ReservationProductSeatRulesResponse>;
+  listBusinessTimeSlots(query: BusinessTimeSlotListQuery): Promise<BusinessTimeSlotListResponse>;
+  closeBusinessTimeSlot(request: BusinessTimeSlotActionRequest): Promise<BusinessTimeSlotResponse>;
+  reopenBusinessTimeSlot(request: BusinessTimeSlotActionRequest): Promise<BusinessTimeSlotResponse>;
   listBusinessAuditLogs(query: BusinessAuditLogListQuery): Promise<BusinessAuditLogListResponse>;
   listBusinessPayments(query: BusinessPaymentListQuery): Promise<BusinessPaymentListResponse>;
   listBusinessRefunds(query: BusinessRefundListQuery): Promise<BusinessRefundListResponse>;
@@ -1057,6 +1108,26 @@ class HttpBusinessApiClient implements BusinessApiClient {
     );
   }
 
+  listBusinessTimeSlots(query: BusinessTimeSlotListQuery) {
+    return this.request<BusinessTimeSlotListResponse>(
+      `/api/business/time-slots${queryString(query)}`,
+    );
+  }
+
+  closeBusinessTimeSlot(request: BusinessTimeSlotActionRequest) {
+    return this.request<BusinessTimeSlotResponse>("/api/business/time-slots/close", {
+      method: "POST",
+      body: request,
+    });
+  }
+
+  reopenBusinessTimeSlot(request: BusinessTimeSlotActionRequest) {
+    return this.request<BusinessTimeSlotResponse>("/api/business/time-slots/reopen", {
+      method: "POST",
+      body: request,
+    });
+  }
+
   listBusinessAuditLogs(query: BusinessAuditLogListQuery) {
     return this.request<BusinessAuditLogListResponse>(
       `/api/business/audit-logs${queryString(query)}`,
@@ -1117,6 +1188,7 @@ class MockBusinessApiClient implements BusinessApiClient {
     "restaurant-business-web.mock-reservation-products";
   private readonly businessTablesStorageKey = "restaurant-business-web.mock-business-tables";
   private readonly productSeatRulesStorageKey = "restaurant-business-web.mock-product-seat-rules";
+  private readonly timeSlotClosuresStorageKey = "restaurant-business-web.mock-time-slot-closures";
   private readonly manualReservationsStorageKey =
     "restaurant-business-web.mock-manual-reservations";
   private readonly reservationOverridesStorageKey =
@@ -1128,6 +1200,7 @@ class MockBusinessApiClient implements BusinessApiClient {
   private memoryReservationProducts: ReservationProductResponse[] | null = null;
   private memoryBusinessTables: BusinessTableResponse[] | null = null;
   private memoryProductSeatRules: Record<string, ReservationProductSeatRulesResponse> | null = null;
+  private memoryTimeSlotClosures: Record<string, string> | null = null;
   private memoryManualReservations: BusinessReservationListItemResponse[] | null = null;
   private memoryReservationOverrides: BusinessReservationListItemResponse[] | null = null;
   private memoryReservationNotes: Record<string, string | null> | null = null;
@@ -1780,6 +1853,65 @@ class MockBusinessApiClient implements BusinessApiClient {
     return rules;
   }
 
+  async listBusinessTimeSlots(query: BusinessTimeSlotListQuery) {
+    const date = normalizeBusinessTimeSlotDate(query.date);
+    const productId = query.productId ?? null;
+    const seatType = query.seatType ?? null;
+    const slots = this.buildBusinessTimeSlots({ date, productId, seatType });
+
+    return toBusinessTimeSlotListResponse(date, slots);
+  }
+
+  async closeBusinessTimeSlot(request: BusinessTimeSlotActionRequest) {
+    const normalized = normalizeBusinessTimeSlotActionRequest(request);
+    const slots = this.buildBusinessTimeSlots({
+      date: normalized.date,
+      productId: normalized.productId,
+      seatType: normalized.seatType,
+    });
+    const slot = slots.find((item) => item.startTime === normalized.startTime);
+
+    if (!slot) {
+      throw new ApiError("임시 마감할 타임슬롯을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    this.writeTimeSlotClosures({
+      ...this.readTimeSlotClosures(),
+      [timeSlotClosureKey(normalized)]: normalized.reason ?? "OWNER_TEMP_CLOSE",
+    });
+
+    return {
+      ...slot,
+      availableCount: 0,
+      status: "TEMP_CLOSED",
+      statusLabel: "임시마감",
+      statusTone: "warning",
+      customerAvailabilityAffected: true,
+      lastUpdatedAt: new Date().toISOString(),
+    } satisfies BusinessTimeSlotResponse;
+  }
+
+  async reopenBusinessTimeSlot(request: BusinessTimeSlotActionRequest) {
+    const normalized = normalizeBusinessTimeSlotActionRequest(request);
+    const closures = this.readTimeSlotClosures();
+
+    delete closures[timeSlotClosureKey(normalized)];
+    this.writeTimeSlotClosures(closures);
+
+    const slots = this.buildBusinessTimeSlots({
+      date: normalized.date,
+      productId: normalized.productId,
+      seatType: normalized.seatType,
+    });
+    const slot = slots.find((item) => item.startTime === normalized.startTime);
+
+    if (!slot) {
+      throw new ApiError("해제할 타임슬롯을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    return slot;
+  }
+
   async listBusinessAuditLogs(query: BusinessAuditLogListQuery) {
     const targetType = query.targetType ?? null;
     const targetId = query.targetId ?? null;
@@ -2159,6 +2291,96 @@ class MockBusinessApiClient implements BusinessApiClient {
       storage.setItem(this.businessTablesStorageKey, JSON.stringify(tables));
     } else {
       this.memoryBusinessTables = tables;
+    }
+  }
+
+  private buildBusinessTimeSlots({
+    date,
+    productId,
+    seatType,
+  }: {
+    date: string;
+    productId?: number | null;
+    seatType?: BusinessSeatType | null;
+  }) {
+    const products = businessTimeSlotProducts(this.readReservationProducts()).filter((product) => {
+      if (productId && product.id !== productId) {
+        return false;
+      }
+
+      return product.status === "ACTIVE";
+    });
+    const seatTypes = activeBusinessSeatTypes(this.readBusinessTables()).filter(
+      (item) => !seatType || item === seatType,
+    );
+    const reservations = this.readBusinessReservations().filter(
+      (reservation) =>
+        reservation.visitDate === date &&
+        reservation.status !== "CANCELLED_BY_CUSTOMER" &&
+        reservation.status !== "CANCELLED_BY_RESTAURANT",
+    );
+    const closures = this.readTimeSlotClosures();
+
+    return products
+      .flatMap((product) =>
+        seatTypes.flatMap((slotSeatType) =>
+          businessTimeSlotStartTimes(product).map((startTime) =>
+            toBusinessTimeSlotResponse({
+              date,
+              product,
+              seatType: slotSeatType,
+              startTime,
+              reservations,
+              closures,
+            }),
+          ),
+        ),
+      )
+      .sort((a, b) => {
+        const timeDiff = a.startTime.localeCompare(b.startTime);
+
+        if (timeDiff !== 0) {
+          return timeDiff;
+        }
+
+        const productDiff = a.productName.localeCompare(b.productName);
+
+        if (productDiff !== 0) {
+          return productDiff;
+        }
+
+        return a.seatTypeLabel.localeCompare(b.seatTypeLabel);
+      });
+  }
+
+  private readTimeSlotClosures() {
+    const storage = getBrowserStorage();
+
+    if (!storage) {
+      return this.memoryTimeSlotClosures ?? {};
+    }
+
+    const raw = storage.getItem(this.timeSlotClosuresStorageKey);
+
+    if (!raw) {
+      return {};
+    }
+
+    try {
+      return JSON.parse(raw) as Record<string, string>;
+    } catch {
+      storage.removeItem(this.timeSlotClosuresStorageKey);
+      return {};
+    }
+  }
+
+  private writeTimeSlotClosures(closures: Record<string, string>) {
+    const storage = getBrowserStorage();
+
+    if (storage) {
+      storage.setItem(this.timeSlotClosuresStorageKey, JSON.stringify(closures));
+    } else {
+      this.memoryTimeSlotClosures = closures;
     }
   }
 
@@ -2712,6 +2934,169 @@ function productSeatRulesCombinationSummary(tables: BusinessTableResponse[]) {
   return `테이블 조합 가능 범위: ${policyLabels.join(", ")} · 단일 테이블 최대 ${maxSingleTableSize}명`;
 }
 
+function toBusinessTimeSlotListResponse(
+  date: string,
+  items: BusinessTimeSlotResponse[],
+): BusinessTimeSlotListResponse {
+  return {
+    date,
+    summary: {
+      totalCount: items.length,
+      availableCount: items.filter((item) => item.status === "AVAILABLE").length,
+      closedCount: items.filter((item) => item.status === "CLOSED").length,
+      tempClosedCount: items.filter((item) => item.status === "TEMP_CLOSED").length,
+      duplicateGuardedCount: items.filter((item) => item.duplicateGuarded).length,
+    },
+    items,
+  };
+}
+
+function toBusinessTimeSlotResponse({
+  date,
+  product,
+  seatType,
+  startTime,
+  reservations,
+  closures,
+}: {
+  date: string;
+  product: ReservationProductResponse;
+  seatType: BusinessSeatType;
+  startTime: string;
+  reservations: BusinessReservationListItemResponse[];
+  closures: Record<string, string>;
+}): BusinessTimeSlotResponse {
+  const key = timeSlotClosureKey({ date, productId: product.id, seatType, startTime });
+  const reservedCount = reservations
+    .filter(
+      (reservation) => reservation.productId === product.id && reservation.startTime === startTime,
+    )
+    .reduce((total, reservation) => total + reservation.partySize, 0);
+  const isTemporarilyClosed = Boolean(closures[key]);
+  const availableCount = isTemporarilyClosed
+    ? 0
+    : Math.max(product.slotCapacity - reservedCount, 0);
+  const status: BusinessTimeSlotStatus = isTemporarilyClosed
+    ? "TEMP_CLOSED"
+    : availableCount === 0
+      ? "CLOSED"
+      : "AVAILABLE";
+
+  return {
+    id: key,
+    date,
+    startTime,
+    endTime: addMinutes(startTime, 90),
+    productId: product.id,
+    productName: product.name,
+    seatType,
+    seatTypeLabel: businessSeatTypeLabel(seatType),
+    capacity: product.slotCapacity,
+    reservedCount,
+    availableCount,
+    status,
+    statusLabel: businessTimeSlotStatusLabel(status),
+    statusTone: businessTimeSlotStatusTone(status),
+    duplicateGuarded: true,
+    customerAvailabilityAffected: status !== "AVAILABLE",
+    lastUpdatedAt: new Date().toISOString(),
+  };
+}
+
+function normalizeBusinessTimeSlotDate(value: string | null | undefined) {
+  const date = value?.trim() || todayDateString();
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new ApiError("조회 날짜를 다시 선택해 주세요.", 400, "VALIDATION_ERROR");
+  }
+
+  return date;
+}
+
+function normalizeBusinessTimeSlotActionRequest(request: BusinessTimeSlotActionRequest) {
+  const date = normalizeBusinessTimeSlotDate(request.date);
+  const productId = request.productId ?? 0;
+  const seatType = request.seatType ?? "";
+  const startTime = normalizeTime(request.startTime) ?? "";
+  const reason = request.reason?.trim() || "OWNER_TEMP_CLOSE";
+
+  if (!Number.isInteger(productId) || productId < 1) {
+    throw new ApiError("예약 상품을 선택해 주세요.", 400, "VALIDATION_ERROR");
+  }
+  if (!isBusinessSeatType(seatType)) {
+    throw new ApiError("좌석 유형을 선택해 주세요.", 400, "VALIDATION_ERROR");
+  }
+  if (!/^\d{2}:\d{2}:\d{2}$/.test(startTime)) {
+    throw new ApiError("타임슬롯 시간을 다시 선택해 주세요.", 400, "VALIDATION_ERROR");
+  }
+
+  return {
+    date,
+    productId,
+    seatType,
+    startTime,
+    reason,
+  };
+}
+
+function timeSlotClosureKey({
+  date,
+  productId,
+  seatType,
+  startTime,
+}: {
+  date: string;
+  productId: number;
+  seatType: BusinessSeatType;
+  startTime: string;
+}) {
+  return `${date}:${productId}:${seatType}:${startTime}`;
+}
+
+function businessTimeSlotProducts(products: ReservationProductResponse[]) {
+  return products.length > 0 ? products : defaultBusinessTimeSlotProducts();
+}
+
+function activeBusinessSeatTypes(tables: BusinessTableResponse[]) {
+  return Array.from(
+    new Set(tables.filter((table) => table.isActive).map((table) => table.seatType)),
+  );
+}
+
+function businessTimeSlotStartTimes(product: ReservationProductResponse) {
+  const start = normalizeTime(product.availableStartTime) ?? "11:30:00";
+  const end = normalizeTime(product.availableEndTime) ?? "21:00:00";
+  const times: string[] = [];
+  let current = start;
+
+  while (current < end && times.length < 20) {
+    times.push(current);
+    current = addMinutes(current, 30);
+  }
+
+  return times;
+}
+
+function businessTimeSlotStatusLabel(status: BusinessTimeSlotStatus) {
+  const labels: Record<BusinessTimeSlotStatus, string> = {
+    AVAILABLE: "예약 가능",
+    CLOSED: "마감",
+    TEMP_CLOSED: "임시마감",
+  };
+
+  return labels[status];
+}
+
+function businessTimeSlotStatusTone(status: BusinessTimeSlotStatus) {
+  const tones: Record<BusinessTimeSlotStatus, string> = {
+    AVAILABLE: "success",
+    CLOSED: "danger",
+    TEMP_CLOSED: "warning",
+  };
+
+  return tones[status];
+}
+
 function nextBusinessTableId(tables: BusinessTableResponse[]) {
   return tables.reduce((maxId, table) => Math.max(maxId, table.id), 4000) + 1;
 }
@@ -2925,6 +3310,51 @@ function defaultMockReservationProducts() {
       id: 6002,
       name: "런치 코스",
       maxPartySize: 8,
+    },
+  ];
+}
+
+function defaultBusinessTimeSlotProducts(): ReservationProductResponse[] {
+  const now = new Date().toISOString();
+
+  return [
+    {
+      id: 6001,
+      restaurantId: 1,
+      name: "디너 코스",
+      description: "계절 메뉴 코스",
+      priceAmount: 80000,
+      visible: true,
+      status: "ACTIVE",
+      minPartySize: 1,
+      maxPartySize: 6,
+      availableDays: defaultReservationProductDays,
+      availableStartTime: "18:00",
+      availableEndTime: "21:00",
+      slotCapacity: 8,
+      paymentPolicyType: "NONE",
+      paymentAmount: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 6002,
+      restaurantId: 1,
+      name: "런치 코스",
+      description: "점심 코스",
+      priceAmount: 50000,
+      visible: true,
+      status: "ACTIVE",
+      minPartySize: 1,
+      maxPartySize: 8,
+      availableDays: defaultReservationProductDays,
+      availableStartTime: "11:30",
+      availableEndTime: "14:00",
+      slotCapacity: 10,
+      paymentPolicyType: "NONE",
+      paymentAmount: null,
+      createdAt: now,
+      updatedAt: now,
     },
   ];
 }

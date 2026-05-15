@@ -2,11 +2,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   type BusinessTableSaveRequest,
+  type BusinessTimeSlotActionRequest,
+  type BusinessTimeSlotListQuery,
   type ReservationProductSeatRulesRequest,
 } from "@/shared/api/businessApiClient";
 import { useBusinessApiClient } from "@/shared/api/useBusinessApiClient";
 
 export const businessTablesQueryKey = ["business", "tables"] as const;
+export const businessTimeSlotsQueryKey = ["business", "time-slots"] as const;
 
 export function useBusinessTablesQuery() {
   const apiClient = useBusinessApiClient();
@@ -49,5 +52,36 @@ export function useSaveReservationProductSeatRulesMutation() {
       productId: number;
       request: ReservationProductSeatRulesRequest;
     }) => apiClient.saveReservationProductSeatRules(productId, request),
+  });
+}
+
+export function useBusinessTimeSlotsQuery(query: BusinessTimeSlotListQuery) {
+  const apiClient = useBusinessApiClient();
+
+  return useQuery({
+    queryKey: [...businessTimeSlotsQueryKey, query],
+    queryFn: () => apiClient.listBusinessTimeSlots(query),
+  });
+}
+
+export function useCloseBusinessTimeSlotMutation() {
+  const apiClient = useBusinessApiClient();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (request: BusinessTimeSlotActionRequest) =>
+      apiClient.closeBusinessTimeSlot(request),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: businessTimeSlotsQueryKey }),
+  });
+}
+
+export function useReopenBusinessTimeSlotMutation() {
+  const apiClient = useBusinessApiClient();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (request: BusinessTimeSlotActionRequest) =>
+      apiClient.reopenBusinessTimeSlot(request),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: businessTimeSlotsQueryKey }),
   });
 }

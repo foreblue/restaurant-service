@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import {
+  createBusinessApiClient,
   type BusinessApiClient,
   type RestaurantApplicationResponse,
   type ReservationProductResponse,
@@ -328,6 +329,23 @@ describe("App routing", () => {
         summary: "디너 코스: 홀 좌석, 기본 90분, 30분 간격.",
         updatedAt: "2026-05-15T00:00:00.000Z",
       }),
+      listBusinessTimeSlots: async () => ({
+        date: "2026-05-15",
+        summary: {
+          totalCount: 0,
+          availableCount: 0,
+          closedCount: 0,
+          tempClosedCount: 0,
+          duplicateGuardedCount: 0,
+        },
+        items: [],
+      }),
+      closeBusinessTimeSlot: async () => {
+        throw new Error("not implemented in this test");
+      },
+      reopenBusinessTimeSlot: async () => {
+        throw new Error("not implemented in this test");
+      },
       listBusinessReservations: async () => ({
         date: "2026-05-15",
         from: "2026-05-15",
@@ -753,7 +771,7 @@ describe("App routing", () => {
     expect(await screen.findByText("등록된 예약 상품이 없습니다.")).toBeInTheDocument();
   });
 
-  it("connects reservation products to seat rules with the mock adapter", async () => {
+  it("closes and reopens time slot inventory with the mock adapter", async () => {
     render(<App />);
 
     fireEvent.change(await screen.findByLabelText("이메일"), {
@@ -765,42 +783,88 @@ describe("App routing", () => {
     fireEvent.click(screen.getByRole("button", { name: "로그인" }));
 
     await screen.findByRole("heading", { name: "운영 현황" });
-    fireEvent.click(screen.getByRole("link", { name: "예약 상품" }));
+    fireEvent.click(screen.getByRole("link", { name: "좌석/재고" }));
 
-    expect(await screen.findByRole("heading", { name: "예약 상품" })).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("button", { name: "상품 추가" }));
-    fireEvent.change(screen.getByLabelText("상품명"), {
-      target: { value: "디너 코스" },
-    });
-    fireEvent.change(screen.getByLabelText("가격"), {
-      target: { value: "80000" },
-    });
-    fireEvent.change(screen.getByLabelText("상품 설명"), {
-      target: { value: "계절 메뉴 코스" },
-    });
-    fireEvent.change(screen.getByLabelText("최소 인원"), {
-      target: { value: "1" },
-    });
-    fireEvent.change(screen.getByLabelText("최대 인원"), {
-      target: { value: "4" },
-    });
-    fireEvent.change(screen.getByLabelText("예약 가능 시작"), {
-      target: { value: "18:00" },
-    });
-    fireEvent.change(screen.getByLabelText("예약 가능 종료"), {
-      target: { value: "21:00" },
-    });
-    fireEvent.change(screen.getByLabelText("슬롯 재고"), {
-      target: { value: "8" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "상품 저장" }));
+    expect(
+      await screen.findByRole("heading", { name: "시간대별 재고와 임시 마감" }),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("중복 예약 방지 적용")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText("디너 코스").length).toBeGreaterThan(0));
+    expect(screen.getByText(/고객 예약 가능 시간 후보에 반영됩니다/)).toBeInTheDocument();
 
-    expect(await screen.findByText("상품이 생성되었습니다.")).toBeInTheDocument();
+    const closeButton = (await screen.findAllByRole("button", { name: "임시 마감" })).find(
+      (button) => !button.hasAttribute("disabled"),
+    );
 
+    expect(closeButton).toBeDefined();
+    fireEvent.click(closeButton!);
+
+    expect(await screen.findByText(/슬롯을 임시 마감했습니다/)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "마감 해제" }));
+
+    expect(await screen.findByText(/슬롯을 다시 열었습니다/)).toBeInTheDocument();
+  });
+
+  it("connects reservation products to seat rules with the mock adapter", async () => {
+    const apiClient = createBusinessApiClient();
+
+    apiClient.listReservationProducts = async () => [mockReservationProduct];
+    apiClient.saveReservationProductSeatRules = async (_productId, request) => {
+      const labels = (request.allowedSeatTypes ?? []).map((seatType) =>
+        seatType === "ROOM" ? "룸" : "홀",
+      );
+
+      return {
+        productId: mockReservationProduct.id,
+        allowedSeatTypes: request.allowedSeatTypes ?? [],
+        allowedSeatTypeLabels: labels,
+        allowedTableIds: request.allowedTableIds ?? [],
+        allowedTables: [
+          {
+            id: 4001,
+            name: "홀 A1",
+            seatTypeLabel: "홀",
+            maxPartySize: 2,
+            combinationPolicyLabel: "인접 테이블 조합",
+          },
+          {
+            id: 4003,
+            name: "룸 1",
+            seatTypeLabel: "룸",
+            maxPartySize: 6,
+            combinationPolicyLabel: "같은 좌석 유형 조합",
+          },
+        ],
+        defaultDurationMinutes: request.defaultDurationMinutes ?? 90,
+        slotIntervalMinutes: request.slotIntervalMinutes ?? 30,
+        tableCombinationSummary: "테이블 조합 가능 범위: 인접 테이블 조합, 같은 좌석 유형 조합",
+        summary: `디너 코스: ${labels.join(", ")} 좌석, 기본 ${request.defaultDurationMinutes ?? 90}분, ${request.slotIntervalMinutes ?? 30}분 간격.`,
+        updatedAt: "2026-05-15T00:00:00.000Z",
+      };
+    };
+
+    render(<App apiClient={apiClient} />);
+
+    fireEvent.change(await screen.findByLabelText("이메일"), {
+      target: { value: "owner@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("비밀번호"), {
+      target: { value: "password123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "로그인" }));
+
+    await screen.findByRole("heading", { name: "운영 현황" });
     fireEvent.click(screen.getByRole("link", { name: "좌석/재고" }));
 
     expect(await screen.findByRole("heading", { name: "상품별 좌석 연결" })).toBeInTheDocument();
-    const productSelect = (await screen.findByLabelText("예약 상품")) as HTMLSelectElement;
+    await waitFor(() => {
+      const productSelect = document.getElementById("seat-rules-product") as HTMLSelectElement;
+
+      expect(
+        Array.from(productSelect.options).some((option) => option.textContent === "디너 코스"),
+      ).toBe(true);
+    });
+    const productSelect = document.getElementById("seat-rules-product") as HTMLSelectElement;
     const productOption = Array.from(productSelect.options).find(
       (option) => option.textContent === "디너 코스",
     );
@@ -1075,7 +1139,7 @@ describe("App routing", () => {
     fireEvent.change(screen.getByLabelText("테이블명"), {
       target: { value: "테라스 1" },
     });
-    fireEvent.change(screen.getByLabelText("좌석 유형"), {
+    fireEvent.change(document.getElementById("table-seat-type") as HTMLSelectElement, {
       target: { value: "TERRACE" },
     });
     fireEvent.change(screen.getByLabelText("최소 수용 인원"), {
@@ -1100,7 +1164,7 @@ describe("App routing", () => {
 
     expect(await screen.findByText("테이블이 생성되었습니다.")).toBeInTheDocument();
     expect(await screen.findByText("테라스 1")).toBeInTheDocument();
-    expect(screen.getByText("테라스")).toBeInTheDocument();
+    expect(screen.getAllByText("테라스").length).toBeGreaterThan(0);
     expect(screen.getByText("5-6명")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "테라스 1 수정" }));

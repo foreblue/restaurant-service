@@ -1,12 +1,26 @@
 import { type ColumnDef } from "@tanstack/react-table";
-import { Armchair, Link2, Pencil, Plus, Power, Save } from "lucide-react";
+import {
+  Armchair,
+  CalendarDays,
+  Link2,
+  Lock,
+  Pencil,
+  Plus,
+  Power,
+  RotateCcw,
+  Save,
+  ShieldCheck,
+} from "lucide-react";
 import { useState } from "react";
 
 import { DataTable } from "@/components/table/DataTable";
-import { Alert, Button, Checkbox, Field, Input, Select } from "@/components/ui";
+import { Alert, Button, Checkbox, DateInput, Field, Input, Select } from "@/components/ui";
 import {
   useBusinessTablesQuery,
+  useBusinessTimeSlotsQuery,
+  useCloseBusinessTimeSlotMutation,
   useCreateBusinessTableMutation,
+  useReopenBusinessTimeSlotMutation,
   useSaveReservationProductSeatRulesMutation,
   useUpdateBusinessTableMutation,
 } from "@/features/inventory/seatTableQueries";
@@ -15,6 +29,7 @@ import {
   type BusinessSeatType,
   type BusinessTableCombinationPolicy,
   type BusinessTableResponse,
+  type BusinessTimeSlotResponse,
   type ReservationProductResponse,
   type ReservationProductSeatRulesRequest,
   type ReservationProductSeatRulesResponse,
@@ -35,6 +50,12 @@ interface SeatRulesFormValues {
   allowedTableIds: number[];
   defaultDurationMinutes: string;
   slotIntervalMinutes: string;
+}
+
+interface TimeSlotFilters {
+  date: string;
+  productId: string;
+  seatType: string;
 }
 
 const emptyTableFormValues: TableFormValues = {
@@ -73,23 +94,38 @@ const slotIntervalOptions = [
   { label: "60분", value: "60" },
 ];
 
+const emptyTimeSlotFilters: TimeSlotFilters = {
+  date: todayInputValue(),
+  productId: "",
+  seatType: "",
+};
+
 export function SeatTablesPage() {
   const tablesQuery = useBusinessTablesQuery();
   const productsQuery = useReservationProductsQuery();
   const createTable = useCreateBusinessTableMutation();
   const updateTable = useUpdateBusinessTableMutation();
   const saveSeatRules = useSaveReservationProductSeatRulesMutation();
+  const closeTimeSlot = useCloseBusinessTimeSlotMutation();
+  const reopenTimeSlot = useReopenBusinessTimeSlotMutation();
   const [formOpen, setFormOpen] = useState(false);
   const [editingTable, setEditingTable] = useState<BusinessTableResponse | null>(null);
   const [formValues, setFormValues] = useState<TableFormValues>(emptyTableFormValues);
   const [formError, setFormError] = useState<string | null>(null);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
+  const [timeSlotFilters, setTimeSlotFilters] = useState<TimeSlotFilters>(emptyTimeSlotFilters);
+  const [timeSlotResult, setTimeSlotResult] = useState<string | null>(null);
   const [seatRulesForm, setSeatRulesForm] = useState<SeatRulesFormValues>(emptySeatRulesFormValues);
   const [seatRulesError, setSeatRulesError] = useState<string | null>(null);
   const [seatRulesResult, setSeatRulesResult] = useState<string | null>(null);
   const [savedSeatRules, setSavedSeatRules] = useState<ReservationProductSeatRulesResponse | null>(
     null,
   );
+  const timeSlotsQuery = useBusinessTimeSlotsQuery({
+    date: timeSlotFilters.date,
+    productId: timeSlotFilters.productId ? Number(timeSlotFilters.productId) : null,
+    seatType: timeSlotFilters.seatType ? (timeSlotFilters.seatType as BusinessSeatType) : null,
+  });
   const products = productsQuery.data ?? [];
   const activeTables = (tablesQuery.data?.items ?? []).filter((table) => table.isActive);
   const selectedProduct =
@@ -99,6 +135,8 @@ export function SeatTablesPage() {
   );
   const seatRulesApiError = saveSeatRules.error;
   const seatRulesLoadError = productsQuery.error ?? tablesQuery.error;
+  const timeSlotApiError = closeTimeSlot.error ?? reopenTimeSlot.error;
+  const timeSlotIsSaving = closeTimeSlot.isPending || reopenTimeSlot.isPending;
   const columns: Array<ColumnDef<BusinessTableResponse>> = [
     {
       accessorKey: "name",
@@ -196,6 +234,52 @@ export function SeatTablesPage() {
     createTable.reset();
     updateTable.reset();
     setFormValues((current) => ({ ...current, ...patch }));
+  }
+
+  function updateTimeSlotFilters(patch: Partial<TimeSlotFilters>) {
+    setTimeSlotResult(null);
+    closeTimeSlot.reset();
+    reopenTimeSlot.reset();
+    setTimeSlotFilters((current) => ({ ...current, ...patch }));
+  }
+
+  async function closeTimeSlotInventory(slot: BusinessTimeSlotResponse) {
+    setTimeSlotResult(null);
+    reopenTimeSlot.reset();
+
+    try {
+      await closeTimeSlot.mutateAsync({
+        date: slot.date,
+        productId: slot.productId,
+        seatType: slot.seatType,
+        startTime: slot.startTime,
+        reason: "OWNER_TEMP_CLOSE",
+      });
+      setTimeSlotResult(
+        `${formatTime(slot.startTime)} ${slot.productName} 슬롯을 임시 마감했습니다.`,
+      );
+    } catch {
+      // Mutation state renders the API error.
+    }
+  }
+
+  async function reopenTimeSlotInventory(slot: BusinessTimeSlotResponse) {
+    setTimeSlotResult(null);
+    closeTimeSlot.reset();
+
+    try {
+      await reopenTimeSlot.mutateAsync({
+        date: slot.date,
+        productId: slot.productId,
+        seatType: slot.seatType,
+        startTime: slot.startTime,
+      });
+      setTimeSlotResult(
+        `${formatTime(slot.startTime)} ${slot.productName} 슬롯을 다시 열었습니다.`,
+      );
+    } catch {
+      // Mutation state renders the API error.
+    }
   }
 
   function selectSeatRulesProduct(productId: string) {
@@ -374,6 +458,101 @@ export function SeatTablesPage() {
       </section>
 
       {resultMessage ? <Alert variant="success">{resultMessage}</Alert> : null}
+
+      <section className="grid gap-4 rounded-lg border border-border bg-card p-4 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <CalendarDays aria-hidden className="size-4" />
+              타임슬롯 재고
+            </p>
+            <h2 className="mt-1 text-base font-semibold">시간대별 재고와 임시 마감</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              날짜, 상품, 좌석 유형별 예약 가능 수량과 마감 상태를 확인합니다.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
+            <ShieldCheck aria-hidden className="size-4" />
+            중복 예약 방지 적용
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          <Field id="time-slot-date" label="조회 날짜">
+            <DateInput
+              id="time-slot-date"
+              value={timeSlotFilters.date}
+              onChange={(event) => updateTimeSlotFilters({ date: event.target.value })}
+            />
+          </Field>
+          <Field id="time-slot-product" label="예약 상품">
+            <Select
+              id="time-slot-product"
+              options={products.map((product) => ({
+                label: product.name,
+                value: String(product.id),
+              }))}
+              placeholder="전체 상품"
+              value={timeSlotFilters.productId}
+              onChange={(event) => updateTimeSlotFilters({ productId: event.target.value })}
+            />
+          </Field>
+          <Field id="time-slot-seat-type" label="좌석 유형">
+            <Select
+              id="time-slot-seat-type"
+              options={seatTypeOptions}
+              placeholder="전체 좌석"
+              value={timeSlotFilters.seatType}
+              onChange={(event) => updateTimeSlotFilters({ seatType: event.target.value })}
+            />
+          </Field>
+        </div>
+
+        {timeSlotsQuery.isPending ? (
+          <Panel title="타임슬롯 재고를 불러오는 중입니다." />
+        ) : timeSlotsQuery.isError ? (
+          <Alert variant="danger">{errorMessage(timeSlotsQuery.error)}</Alert>
+        ) : (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              <Metric label="전체 슬롯" value={`${timeSlotsQuery.data.summary.totalCount}개`} />
+              <Metric label="예약 가능" value={`${timeSlotsQuery.data.summary.availableCount}개`} />
+              <Metric label="마감" value={`${timeSlotsQuery.data.summary.closedCount}개`} />
+              <Metric label="임시마감" value={`${timeSlotsQuery.data.summary.tempClosedCount}개`} />
+              <Metric
+                label="중복 방지"
+                value={`${timeSlotsQuery.data.summary.duplicateGuardedCount}개`}
+              />
+            </div>
+
+            <Alert>
+              임시 마감 또는 해제 결과는 고객 예약 가능 시간 후보에 반영됩니다. 이미 확정된 예약은
+              이 액션으로 취소되지 않습니다.
+            </Alert>
+
+            {timeSlotApiError ? (
+              <Alert variant="danger">{errorMessage(timeSlotApiError)}</Alert>
+            ) : null}
+            {timeSlotResult ? <Alert variant="success">{timeSlotResult}</Alert> : null}
+
+            <div className="grid gap-2">
+              {timeSlotsQuery.data.items.length === 0 ? (
+                <Panel title="조회 조건에 맞는 타임슬롯이 없습니다." />
+              ) : (
+                timeSlotsQuery.data.items.map((slot) => (
+                  <TimeSlotRow
+                    key={slot.id}
+                    slot={slot}
+                    isSaving={timeSlotIsSaving}
+                    onClose={() => closeTimeSlotInventory(slot)}
+                    onReopen={() => reopenTimeSlotInventory(slot)}
+                  />
+                ))
+              )}
+            </div>
+          </>
+        )}
+      </section>
 
       <section className="grid gap-4 rounded-lg border border-border bg-card p-4 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -796,6 +975,76 @@ function formatSeatRulesCombinationPreview(tables: BusinessTableResponse[]) {
   return `테이블 조합 가능 범위: ${policyLabels.join(", ")} · 단일 테이블 최대 ${maxSingleTableSize}명 · 연결 수용 합계 ${totalCapacity}명`;
 }
 
+function TimeSlotRow({
+  slot,
+  isSaving,
+  onClose,
+  onReopen,
+}: {
+  slot: BusinessTimeSlotResponse;
+  isSaving: boolean;
+  onClose: () => void;
+  onReopen: () => void;
+}) {
+  return (
+    <div className="grid gap-3 rounded-md border border-border px-3 py-3 text-sm lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+      <div className="grid gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="font-medium">
+            {formatTime(slot.startTime)}-{formatTime(slot.endTime)}
+          </p>
+          <StatusBadge label={slot.statusLabel} tone={slot.statusTone} />
+          {slot.duplicateGuarded ? <Flag label="중복 방지" /> : null}
+          {slot.customerAvailabilityAffected ? (
+            <Flag label="고객 시간 반영" tone="warning" />
+          ) : null}
+        </div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground">
+          <span>{slot.productName}</span>
+          <span>{slot.seatTypeLabel}</span>
+          <span>
+            잔여 {slot.availableCount}/{slot.capacity}
+          </span>
+          <span>예약 {slot.reservedCount}명</span>
+        </div>
+      </div>
+      <div className="flex justify-end gap-2">
+        {slot.status === "TEMP_CLOSED" ? (
+          <Button type="button" variant="outline" size="sm" isLoading={isSaving} onClick={onReopen}>
+            <RotateCcw aria-hidden className="size-4" />
+            마감 해제
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            variant="danger"
+            size="sm"
+            isLoading={isSaving}
+            disabled={slot.status === "CLOSED"}
+            onClick={onClose}
+          >
+            <Lock aria-hidden className="size-4" />
+            임시 마감
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function todayInputValue() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const date = String(now.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${date}`;
+}
+
+function formatTime(value: string) {
+  return value.slice(0, 5);
+}
+
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
@@ -817,7 +1066,13 @@ function StatusBadge({ label, tone }: { label: string; tone: string }) {
   const className =
     tone === "success"
       ? "border-teal-200 bg-teal-50 text-teal-700"
-      : "border-border bg-muted text-muted-foreground";
+      : tone === "warning"
+        ? "border-amber-200 bg-amber-50 text-amber-700"
+        : tone === "danger"
+          ? "border-destructive/30 bg-destructive/5 text-destructive"
+          : tone === "info"
+            ? "border-sky-200 bg-sky-50 text-sky-700"
+            : "border-border bg-muted text-muted-foreground";
 
   return (
     <span
@@ -828,9 +1083,14 @@ function StatusBadge({ label, tone }: { label: string; tone: string }) {
   );
 }
 
-function Flag({ label }: { label: string }) {
+function Flag({ label, tone = "default" }: { label: string; tone?: "default" | "warning" }) {
+  const className =
+    tone === "warning"
+      ? "border-amber-200 bg-amber-50 text-amber-700"
+      : "border-border bg-muted text-muted-foreground";
+
   return (
-    <span className="inline-flex rounded-md border border-border bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
+    <span className={`inline-flex rounded-md border px-2 py-1 text-xs font-medium ${className}`}>
       {label}
     </span>
   );
