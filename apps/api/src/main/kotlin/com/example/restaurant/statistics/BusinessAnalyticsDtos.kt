@@ -13,6 +13,32 @@ data class BusinessAnalyticsTimeSlotQuery(
     val date: String?,
 )
 
+data class BusinessAnalyticsExportRequest(
+    val type: String? = null,
+    val from: String? = null,
+    val to: String? = null,
+    val date: String? = null,
+)
+
+data class BusinessAnalyticsExportResponse(
+    val id: Long,
+    val restaurantId: Long,
+    val type: BusinessAnalyticsExportType,
+    val status: BusinessAnalyticsExportStatus,
+    val fileName: String,
+    val contentType: String,
+    val rowCount: Int,
+    val csvContent: String,
+    val requestedAt: Instant,
+    val completedAt: Instant?,
+    val privacyNotice: String,
+)
+
+data class BusinessAnalyticsExportRequestMetadata(
+    val ipAddress: String?,
+    val userAgent: String?,
+)
+
 data class BusinessAnalyticsPeriodResponse(
     val from: LocalDate,
     val to: LocalDate,

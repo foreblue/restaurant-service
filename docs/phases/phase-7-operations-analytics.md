@@ -359,7 +359,7 @@ GET /api/business/restaurants/{restaurantId}/analytics/products?from=2026-05-01&
 ### 8.4 CSV 내보내기 요청
 
 ```http
-POST /owner/restaurants/{restaurantId}/analytics/exports
+POST /api/business/restaurants/{restaurantId}/analytics/exports
 ```
 
 요청:
@@ -376,10 +376,28 @@ POST /owner/restaurants/{restaurantId}/analytics/exports
 
 ```json
 {
-  "exportId": "export_123",
-  "status": "processing"
+  "id": 123,
+  "restaurantId": 1,
+  "type": "RESERVATION_SUMMARY",
+  "status": "COMPLETED",
+  "fileName": "analytics-reservation_summary-2026-05-01_2026-05-31.csv",
+  "contentType": "text/csv; charset=utf-8",
+  "rowCount": 11,
+  "csvContent": "metric,value,basis\n...",
+  "privacyNotice": "기본 CSV에는 고객 전화번호 전체, 이메일, 상세 요청사항을 포함하지 않습니다."
 }
 ```
+
+지원 타입:
+
+- `reservation_summary`
+- `payment_refund_summary`
+- `product_performance`
+- `time_slot_reservation_rate`
+
+초기 구현은 동기식으로 CSV를 생성하되 `analytics_export_requests`에 요청 상태와 결과를 남겨
+향후 비동기 작업 큐와 파일 스토리지 보관으로 확장할 수 있게 한다. 요청은
+`ANALYTICS_CSV_EXPORT_REQUESTED` 감사 로그로 기록한다.
 
 ## 9. 지표 정의와 계산식
 
