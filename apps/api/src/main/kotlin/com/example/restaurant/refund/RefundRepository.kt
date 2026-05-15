@@ -40,4 +40,23 @@ interface RefundRepository : JpaRepository<RefundEntity, Long> {
         @Param("fromCreatedAt") fromCreatedAt: Instant?,
         @Param("toCreatedAtExclusive") toCreatedAtExclusive: Instant?,
     ): List<RefundEntity>
+
+    @Query(
+        """
+        select r from RefundEntity r
+        join fetch r.payment p
+        join fetch r.reservation rv
+        join fetch rv.reservationProduct
+        where r.restaurant.id = :restaurantId
+          and r.succeededAt is not null
+          and r.succeededAt >= :fromSucceededAt
+          and r.succeededAt < :toSucceededAtExclusive
+        order by r.succeededAt asc, r.id asc
+        """,
+    )
+    fun findAnalyticsSucceededRefunds(
+        @Param("restaurantId") restaurantId: Long,
+        @Param("fromSucceededAt") fromSucceededAt: Instant,
+        @Param("toSucceededAtExclusive") toSucceededAtExclusive: Instant,
+    ): List<RefundEntity>
 }
