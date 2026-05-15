@@ -3,6 +3,7 @@ import { createBrowserRouter, Navigate } from "react-router-dom";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { PasswordResetRequestPage } from "@/features/auth/PasswordResetRequestPage";
 import { DashboardPage } from "@/features/dashboard/DashboardPage";
+import { RestaurantApplicationPage } from "@/features/onboarding/RestaurantApplicationPage";
 import { AppShell } from "@/layout/AppShell";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { PlaceholderPage } from "@/pages/PlaceholderPage";
@@ -31,6 +32,10 @@ export function createBusinessRouter() {
             {
               path: "dashboard",
               element: <Navigate to="/" replace />,
+            },
+            {
+              path: "onboarding",
+              element: <RestaurantApplicationPage />,
             },
             {
               path: "reservations",

@@ -29,6 +29,56 @@ export interface PasswordResetRequestResult {
   expiresAt?: string | null;
 }
 
+export interface RestaurantApplicationSaveRequest {
+  restaurantName?: string | null;
+  restaurantDescription?: string | null;
+  restaurantPhone?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  postalCode?: string | null;
+  cuisineTypes?: string[] | null;
+  businessRegistrationNo?: string | null;
+  businessName?: string | null;
+  representativeName?: string | null;
+  businessAddress?: string | null;
+  managerName?: string | null;
+  managerPhone?: string | null;
+  managerEmail?: string | null;
+  contactVerified?: boolean | null;
+}
+
+export interface RestaurantApplicationResponse {
+  id: number;
+  status: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED" | "CANCELLED";
+  restaurant: {
+    id: number;
+    status: string;
+    name: string | null;
+    slug: string | null;
+    description: string | null;
+    phone: string | null;
+    addressLine1: string | null;
+    addressLine2: string | null;
+    postalCode: string | null;
+    cuisineTypes: string[];
+    coverImageFileId: number | null;
+    timezone: string;
+  };
+  businessRegistrationNo: string | null;
+  businessName: string | null;
+  representativeName: string | null;
+  businessAddress: string | null;
+  businessLicenseFileId: number | null;
+  managerName: string | null;
+  managerPhone: string | null;
+  managerEmail: string | null;
+  contactVerified: boolean;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  reviewNote: string | null;
+  rejectionReason: string | null;
+}
+
 interface BusinessLoginResponse {
   user: BusinessUser;
 }
@@ -61,6 +111,14 @@ export interface BusinessApiClient {
   login(request: BusinessLoginRequest): Promise<BusinessUser>;
   logout(): Promise<void>;
   requestPasswordReset(request: PasswordResetRequest): Promise<PasswordResetRequestResult>;
+  getCurrentRestaurantApplication(): Promise<RestaurantApplicationResponse | null>;
+  createRestaurantApplication(
+    request: RestaurantApplicationSaveRequest,
+  ): Promise<RestaurantApplicationResponse>;
+  updateRestaurantApplication(
+    applicationId: number,
+    request: RestaurantApplicationSaveRequest,
+  ): Promise<RestaurantApplicationResponse>;
 }
 
 export function createBusinessQueryClient() {
@@ -109,6 +167,37 @@ class HttpBusinessApiClient implements BusinessApiClient {
     });
   }
 
+  async getCurrentRestaurantApplication() {
+    try {
+      return await this.request<RestaurantApplicationResponse>(
+        "/api/business/restaurant-applications/current",
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        return null;
+      }
+
+      throw error;
+    }
+  }
+
+  createRestaurantApplication(request: RestaurantApplicationSaveRequest) {
+    return this.request<RestaurantApplicationResponse>("/api/business/restaurant-applications", {
+      method: "POST",
+      body: request,
+    });
+  }
+
+  updateRestaurantApplication(applicationId: number, request: RestaurantApplicationSaveRequest) {
+    return this.request<RestaurantApplicationResponse>(
+      `/api/business/restaurant-applications/${applicationId}`,
+      {
+        method: "PUT",
+        body: request,
+      },
+    );
+  }
+
   private async request<T>(path: string, init: { method?: string; body?: unknown } = {}) {
     const requestInit: RequestInit = {
       method: init.method ?? "GET",
@@ -147,7 +236,9 @@ class HttpBusinessApiClient implements BusinessApiClient {
 
 class MockBusinessApiClient implements BusinessApiClient {
   private readonly storageKey = "restaurant-business-web.mock-session";
+  private readonly applicationStorageKey = "restaurant-business-web.mock-application";
   private memoryUser: BusinessUser | null = null;
+  private memoryApplication: RestaurantApplicationResponse | null = null;
 
   async getCurrentUser() {
     const user = this.readUser();
@@ -208,6 +299,29 @@ class MockBusinessApiClient implements BusinessApiClient {
     };
   }
 
+  async getCurrentRestaurantApplication() {
+    return this.readApplication();
+  }
+
+  async createRestaurantApplication(request: RestaurantApplicationSaveRequest) {
+    const application = toMockApplication(1001, request);
+    this.writeApplication(application);
+    return application;
+  }
+
+  async updateRestaurantApplication(
+    applicationId: number,
+    request: RestaurantApplicationSaveRequest,
+  ) {
+    const previous = this.readApplication();
+    const application = toMockApplication(applicationId, {
+      ...fromApplication(previous),
+      ...request,
+    });
+    this.writeApplication(application);
+    return application;
+  }
+
   private readUser() {
     const storage = getBrowserStorage();
 
@@ -226,6 +340,37 @@ class MockBusinessApiClient implements BusinessApiClient {
     } catch {
       storage.removeItem(this.storageKey);
       return null;
+    }
+  }
+
+  private readApplication() {
+    const storage = getBrowserStorage();
+
+    if (!storage) {
+      return this.memoryApplication;
+    }
+
+    const raw = storage.getItem(this.applicationStorageKey);
+
+    if (!raw) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(raw) as RestaurantApplicationResponse;
+    } catch {
+      storage.removeItem(this.applicationStorageKey);
+      return null;
+    }
+  }
+
+  private writeApplication(application: RestaurantApplicationResponse) {
+    const storage = getBrowserStorage();
+
+    if (storage) {
+      storage.setItem(this.applicationStorageKey, JSON.stringify(application));
+    } else {
+      this.memoryApplication = application;
     }
   }
 }
@@ -263,4 +408,67 @@ function getBrowserStorage() {
   }
 
   return null;
+}
+
+function toMockApplication(
+  id: number,
+  request: RestaurantApplicationSaveRequest,
+): RestaurantApplicationResponse {
+  return {
+    id,
+    status: "DRAFT",
+    restaurant: {
+      id: 2001,
+      status: "DRAFT",
+      name: request.restaurantName ?? null,
+      slug: null,
+      description: request.restaurantDescription ?? null,
+      phone: request.restaurantPhone ?? null,
+      addressLine1: request.addressLine1 ?? null,
+      addressLine2: request.addressLine2 ?? null,
+      postalCode: request.postalCode ?? null,
+      cuisineTypes: request.cuisineTypes ?? [],
+      coverImageFileId: null,
+      timezone: "Asia/Seoul",
+    },
+    businessRegistrationNo: request.businessRegistrationNo ?? null,
+    businessName: request.businessName ?? null,
+    representativeName: request.representativeName ?? null,
+    businessAddress: request.businessAddress ?? null,
+    businessLicenseFileId: null,
+    managerName: request.managerName ?? null,
+    managerPhone: request.managerPhone ?? null,
+    managerEmail: request.managerEmail ?? null,
+    contactVerified: request.contactVerified ?? false,
+    submittedAt: null,
+    reviewedAt: null,
+    reviewNote: null,
+    rejectionReason: null,
+  };
+}
+
+function fromApplication(
+  application: RestaurantApplicationResponse | null,
+): RestaurantApplicationSaveRequest {
+  if (!application) {
+    return {};
+  }
+
+  return {
+    restaurantName: application.restaurant.name,
+    restaurantDescription: application.restaurant.description,
+    restaurantPhone: application.restaurant.phone,
+    addressLine1: application.restaurant.addressLine1,
+    addressLine2: application.restaurant.addressLine2,
+    postalCode: application.restaurant.postalCode,
+    cuisineTypes: application.restaurant.cuisineTypes,
+    businessRegistrationNo: application.businessRegistrationNo,
+    businessName: application.businessName,
+    representativeName: application.representativeName,
+    businessAddress: application.businessAddress,
+    managerName: application.managerName,
+    managerPhone: application.managerPhone,
+    managerEmail: application.managerEmail,
+    contactVerified: application.contactVerified,
+  };
 }
