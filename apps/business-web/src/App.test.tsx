@@ -411,6 +411,24 @@ describe("App routing", () => {
       updateBusinessReservationOperationNote: async () => {
         throw new Error("not implemented in this test");
       },
+      listBusinessPayments: async () => ({
+        summary: {
+          totalCount: 0,
+          paidAmount: 0,
+          cardGuaranteeCount: 0,
+          actionRequiredCount: 0,
+        },
+        items: [],
+      }),
+      listBusinessRefunds: async () => ({
+        summary: {
+          totalCount: 0,
+          refundAmount: 0,
+          failedCount: 0,
+          actionRequiredCount: 0,
+        },
+        items: [],
+      }),
       listBusinessAuditLogs: async () => ({ items: [] }),
     };
     window.history.pushState({}, "", "/onboarding");
@@ -799,5 +817,54 @@ describe("App routing", () => {
     fireEvent.click(screen.getByRole("button", { name: "월" }));
 
     expect(await screen.findByRole("heading", { name: "월간 캘린더" })).toBeInTheDocument();
+  });
+
+  it("shows payment and refund operations with the mock adapter", async () => {
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText("이메일"), {
+      target: { value: "owner@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("비밀번호"), {
+      target: { value: "password123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "로그인" }));
+
+    await screen.findByRole("heading", { name: "운영 현황" });
+    fireEvent.click(screen.getByRole("link", { name: "결제/환불" }));
+
+    expect(await screen.findByRole("heading", { name: "결제/환불 내역" })).toBeInTheDocument();
+    expect(await screen.findByText("PAY-9101")).toBeInTheDocument();
+    expect(screen.getByText("김예약")).toBeInTheDocument();
+    expect(screen.getAllByText("결제 완료").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("카드 보증").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "PAY-9101 상세 보기" }));
+    expect(await screen.findByRole("heading", { name: "결제 상세" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "결제 상세 닫기" }));
+
+    fireEvent.change(screen.getByLabelText("결제 상태"), {
+      target: { value: "CARD_GUARANTEE" },
+    });
+
+    expect(await screen.findByText("PAY-9103")).toBeInTheDocument();
+    expect(screen.getByText("오민준")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "환불" }));
+
+    expect(await screen.findByText("REF-9201")).toBeInTheDocument();
+    expect(screen.getAllByText("환불 처리중").length).toBeGreaterThan(0);
+
+    fireEvent.change(screen.getByLabelText("환불 상태"), {
+      target: { value: "FAILED" },
+    });
+
+    expect(await screen.findByText("REF-9203")).toBeInTheDocument();
+    expect(screen.getByText("PG 승인 거절")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "REF-9203 상세 보기" }));
+    expect(await screen.findByRole("heading", { name: "환불 상세" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "필터 초기화" }));
+
+    expect(await screen.findByText("REF-9202")).toBeInTheDocument();
   });
 });
