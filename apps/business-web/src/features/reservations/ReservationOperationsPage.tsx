@@ -6,11 +6,13 @@ import { DataTable } from "@/components/table/DataTable";
 import { Alert, Button, Checkbox, DateInput, Field, Input, Select } from "@/components/ui";
 import { useReservationProductsQuery } from "@/features/products/reservationProductsQueries";
 import {
+  useCreateManualBusinessReservationMutation,
   useBusinessReservationCalendarQuery,
   useBusinessReservationDetailQuery,
   useBusinessReservationsQuery,
 } from "@/features/reservations/reservationOperationsQueries";
 import {
+  type BusinessManualReservationSource,
   type BusinessReservationCalendarDayResponse,
   type BusinessReservationDetailResponse,
   type BusinessReservationListItemResponse,
@@ -18,6 +20,28 @@ import {
 } from "@/shared/api/businessApiClient";
 
 type CalendarMode = "week" | "month";
+
+interface ManualReservationFormValues {
+  source: BusinessManualReservationSource;
+  productId: string;
+  visitDate: string;
+  startTime: string;
+  partySize: string;
+  customerName: string;
+  customerPhone: string;
+  customerRequest: string;
+}
+
+const emptyManualReservationFormValues: ManualReservationFormValues = {
+  source: "MANUAL_PHONE",
+  productId: "",
+  visitDate: "",
+  startTime: "12:00",
+  partySize: "2",
+  customerName: "",
+  customerPhone: "",
+  customerRequest: "",
+};
 
 const statusFilterOptions = [
   { label: "전체 상태", value: "" },
@@ -28,6 +52,11 @@ const statusFilterOptions = [
   { label: "고객 취소", value: "CANCELLED_BY_CUSTOMER" },
   { label: "매장 취소", value: "CANCELLED_BY_RESTAURANT" },
   { label: "노쇼", value: "NO_SHOW" },
+];
+
+const manualSourceOptions = [
+  { label: "전화 예약", value: "MANUAL_PHONE" },
+  { label: "현장 예약", value: "MANUAL_WALK_IN" },
 ];
 
 const sourceLabels: Record<string, string> = {
@@ -56,6 +85,12 @@ export function ReservationOperationsPage() {
   const [includeCancelled, setIncludeCancelled] = useState(false);
   const [calendarMode, setCalendarMode] = useState<CalendarMode>("week");
   const [selectedReservationId, setSelectedReservationId] = useState<number | null>(null);
+  const [manualFormOpen, setManualFormOpen] = useState(false);
+  const [manualFormValues, setManualFormValues] = useState<ManualReservationFormValues>(
+    emptyManualReservationFormValues,
+  );
+  const [manualFormError, setManualFormError] = useState<string | null>(null);
+  const [resultMessage, setResultMessage] = useState<string | null>(null);
   const calendarRange = useMemo(
     () => getCalendarRange(selectedDate, calendarMode),
     [selectedDate, calendarMode],
@@ -87,9 +122,14 @@ export function ReservationOperationsPage() {
   const calendarQueryResult = useBusinessReservationCalendarQuery(calendarQuery);
   const detailQuery = useBusinessReservationDetailQuery(selectedReservationId);
   const productsQuery = useReservationProductsQuery();
+  const createManualReservation = useCreateManualBusinessReservationMutation();
   const productOptions = useMemo(
     () => buildProductOptions(productsQuery.data ?? [], reservationsQuery.data?.items ?? []),
     [productsQuery.data, reservationsQuery.data?.items],
+  );
+  const manualProductOptions = useMemo(
+    () => productOptions.filter((option) => option.value),
+    [productOptions],
   );
   const columns = useMemo<Array<ColumnDef<BusinessReservationListItemResponse>>>(
     () => [
@@ -189,6 +229,48 @@ export function ReservationOperationsPage() {
     setIncludeCancelled(false);
   }
 
+  function openManualForm() {
+    const firstProductId = manualProductOptions[0]?.value ?? "";
+
+    setManualFormValues({
+      ...emptyManualReservationFormValues,
+      productId: firstProductId,
+      visitDate: selectedDate,
+    });
+    setManualFormError(null);
+    createManualReservation.reset();
+    setManualFormOpen(true);
+  }
+
+  function updateManualForm(patch: Partial<ManualReservationFormValues>) {
+    setManualFormError(null);
+    createManualReservation.reset();
+    setManualFormValues((current) => ({ ...current, ...patch }));
+  }
+
+  async function handleManualSubmit() {
+    const request = toManualReservationRequest(manualFormValues);
+
+    setManualFormError(null);
+    setResultMessage(null);
+
+    if (typeof request === "string") {
+      setManualFormError(request);
+      return;
+    }
+
+    try {
+      const reservation = await createManualReservation.mutateAsync(request);
+      setSelectedDate(reservation.visitDate);
+      setSelectedReservationId(reservation.id);
+      setManualFormOpen(false);
+      setManualFormValues(emptyManualReservationFormValues);
+      setResultMessage("수동 예약이 등록되었습니다.");
+    } catch {
+      // Mutation state renders the API error.
+    }
+  }
+
   return (
     <section className="grid gap-5">
       <header className="flex flex-col gap-3 border-b border-border pb-4 xl:flex-row xl:items-end xl:justify-between">
@@ -199,6 +281,9 @@ export function ReservationOperationsPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" size="sm" onClick={openManualForm}>
+            수동 예약 등록
+          </Button>
           <Button type="button" variant="outline" size="sm" onClick={() => moveDate(-1)}>
             <ChevronLeft aria-hidden className="size-4" />
             이전
@@ -289,6 +374,8 @@ export function ReservationOperationsPage() {
           </Button>
         </div>
       </section>
+
+      {resultMessage ? <Alert variant="success">{resultMessage}</Alert> : null}
 
       {summary ? (
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6" aria-label="예약 요약">
@@ -420,6 +507,19 @@ export function ReservationOperationsPage() {
           </section>
         </aside>
       </section>
+
+      {manualFormOpen ? (
+        <ManualReservationDialog
+          apiError={createManualReservation.error}
+          formError={manualFormError}
+          isSaving={createManualReservation.isPending}
+          productOptions={manualProductOptions}
+          values={manualFormValues}
+          onCancel={() => setManualFormOpen(false)}
+          onChange={updateManualForm}
+          onSubmit={handleManualSubmit}
+        />
+      ) : null}
     </section>
   );
 }
@@ -437,6 +537,148 @@ function Panel({ title }: { title: string }) {
   return (
     <div className="rounded-lg border border-border bg-card p-5 text-sm text-muted-foreground shadow-sm">
       {title}
+    </div>
+  );
+}
+
+function ManualReservationDialog({
+  values,
+  productOptions,
+  formError,
+  apiError,
+  isSaving,
+  onChange,
+  onSubmit,
+  onCancel,
+}: {
+  values: ManualReservationFormValues;
+  productOptions: Array<{ label: string; value: string }>;
+  formError: string | null;
+  apiError: unknown;
+  isSaving: boolean;
+  onChange: (patch: Partial<ManualReservationFormValues>) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}) {
+  const canCheckAvailability =
+    Boolean(values.productId) &&
+    Boolean(values.visitDate) &&
+    Boolean(values.startTime) &&
+    Boolean(values.partySize);
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 px-4 py-6">
+      <section
+        aria-modal="true"
+        className="grid max-h-[90vh] w-full max-w-3xl gap-4 overflow-y-auto rounded-lg border border-border bg-card p-5 shadow-xl"
+        role="dialog"
+        aria-labelledby="manual-reservation-title"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold" id="manual-reservation-title">
+              수동 예약 등록
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              전화 또는 현장 예약을 운영 화면에 추가합니다.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="등록 닫기"
+            onClick={onCancel}
+          >
+            <X aria-hidden className="size-4" />
+          </Button>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field id="manual-source" label="등록 경로">
+            <Select
+              id="manual-source"
+              options={manualSourceOptions}
+              value={values.source}
+              onChange={(event) =>
+                onChange({ source: event.target.value as BusinessManualReservationSource })
+              }
+            />
+          </Field>
+          <Field id="manual-product" label="예약 상품">
+            <Select
+              id="manual-product"
+              options={productOptions}
+              {...(productOptions.length === 0 ? { placeholder: "등록된 상품 없음" } : {})}
+              value={values.productId}
+              onChange={(event) => onChange({ productId: event.target.value })}
+            />
+          </Field>
+          <Field id="manual-visit-date" label="방문일">
+            <DateInput
+              id="manual-visit-date"
+              value={values.visitDate}
+              onChange={(event) => onChange({ visitDate: event.target.value })}
+            />
+          </Field>
+          <Field id="manual-start-time" label="방문 시간">
+            <Input
+              id="manual-start-time"
+              type="time"
+              value={values.startTime}
+              onChange={(event) => onChange({ startTime: event.target.value })}
+            />
+          </Field>
+          <Field id="manual-party-size" label="인원">
+            <Input
+              id="manual-party-size"
+              inputMode="numeric"
+              value={values.partySize}
+              onChange={(event) => onChange({ partySize: event.target.value })}
+            />
+          </Field>
+          <Field id="manual-customer-name" label="고객명">
+            <Input
+              id="manual-customer-name"
+              value={values.customerName}
+              onChange={(event) => onChange({ customerName: event.target.value })}
+            />
+          </Field>
+          <Field id="manual-customer-phone" label="고객 전화번호">
+            <Input
+              id="manual-customer-phone"
+              inputMode="tel"
+              value={values.customerPhone}
+              onChange={(event) => onChange({ customerPhone: event.target.value })}
+            />
+          </Field>
+          <Field id="manual-customer-request" label="고객 요청사항" className="md:col-span-2">
+            <textarea
+              className="min-h-24 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60"
+              id="manual-customer-request"
+              value={values.customerRequest}
+              onChange={(event) => onChange({ customerRequest: event.target.value })}
+            />
+          </Field>
+        </div>
+
+        <Alert>
+          {canCheckAvailability
+            ? "등록 시 영업시간과 재고를 확인합니다."
+            : "상품, 방문일, 시간, 인원을 입력하면 예약 가능 여부를 확인합니다."}
+        </Alert>
+        {formError ? <Alert variant="danger">{formError}</Alert> : null}
+        {apiError ? <Alert variant="danger">{errorMessage(apiError)}</Alert> : null}
+
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onCancel}>
+            취소
+          </Button>
+          <Button type="button" isLoading={isSaving} onClick={onSubmit}>
+            등록
+          </Button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -666,6 +908,43 @@ function ModeButton({
 
 function normalizeStatus(value: string) {
   return value ? (value as BusinessReservationStatus) : null;
+}
+
+function toManualReservationRequest(values: ManualReservationFormValues) {
+  const productId = Number(values.productId);
+  const partySize = Number(values.partySize);
+  const customerName = values.customerName.trim();
+  const customerPhone = values.customerPhone.replace(/\D/g, "");
+
+  if (!Number.isInteger(productId) || productId < 1) {
+    return "예약 상품을 선택해 주세요.";
+  }
+  if (!values.visitDate) {
+    return "방문일을 입력해 주세요.";
+  }
+  if (!values.startTime) {
+    return "방문 시간을 입력해 주세요.";
+  }
+  if (!Number.isInteger(partySize) || partySize < 1) {
+    return "인원은 1명 이상이어야 합니다.";
+  }
+  if (!customerName) {
+    return "고객명을 입력해 주세요.";
+  }
+  if (customerPhone.length < 8 || customerPhone.length > 20) {
+    return "고객 전화번호를 확인해 주세요.";
+  }
+
+  return {
+    source: values.source,
+    productId,
+    visitDate: values.visitDate,
+    startTime: values.startTime,
+    partySize,
+    customerName,
+    customerPhone,
+    customerRequest: values.customerRequest.trim() || null,
+  };
 }
 
 function buildProductOptions(
