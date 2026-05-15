@@ -39,14 +39,14 @@ class TimeSlotEntity(
     val startTime: LocalTime,
 
     @Column(name = "end_time", nullable = false)
-    val endTime: LocalTime,
+    var endTime: LocalTime,
 
     @Column(nullable = false)
-    val capacity: Int,
+    var capacity: Int,
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 50)
-    val status: TimeSlotStatus = TimeSlotStatus.OPEN,
+    var status: TimeSlotStatus = TimeSlotStatus.OPEN,
 
     @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
     val createdAt: Instant? = null,

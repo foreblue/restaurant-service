@@ -2746,6 +2746,182 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun businessOwnerCanGenerateCloseAndReopenTimeSlots() {
+        val owner = createBusinessUser("time-slot-owner@example.com")
+        val sessionCookie = loginAndExtractSessionCookie(owner.email)
+        val restaurant = createApprovedRestaurantForSettings(owner, "Time Slot Table", "time-slot-table")
+        val targetDate = LocalDate.now(ZoneId.of("Asia/Seoul")).plusDays(4)
+        val targetDay = targetDate.dayOfWeek.name
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/business-hours") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "hours": [
+                {"dayOfWeek": "$targetDay", "opensAt": "11:00:00", "closesAt": "15:00:00"}
+              ]
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+        }
+
+        mockMvc.put("/api/business/restaurants/${restaurant.id}/reservation-page") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"slug": "time-slot-table", "status": "PUBLIC"}"""
+        }.andExpect {
+            status { isOk() }
+        }
+
+        val productResult = mockMvc.post("/api/business/reservation-products") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "타임슬롯 코스",
+              "priceAmount": 80000,
+              "visible": true,
+              "minPartySize": 1,
+              "maxPartySize": 4,
+              "availableDays": ["$targetDay"],
+              "availableStartTime": "11:00:00",
+              "availableEndTime": "15:00:00",
+              "slotCapacity": 2
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val productId = JsonPath.read<Int>(productResult.response.contentAsString, "$.id").toLong()
+
+        val hallTableResult = mockMvc.post("/api/business/tables") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"name":"슬롯홀","seatType":"HALL","minPartySize":1,"maxPartySize":4}"""
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val hallTableId = JsonPath.read<Int>(hallTableResult.response.contentAsString, "$.id").toLong()
+
+        mockMvc.post("/api/business/tables") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"name":"슬롯룸","seatType":"ROOM","minPartySize":1,"maxPartySize":4}"""
+        }.andExpect {
+            status { isCreated() }
+        }
+
+        mockMvc.post("/api/business/reservation-products/$productId/seat-rules") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "allowedTableIds": [$hallTableId],
+              "defaultDurationMinutes": 120,
+              "slotIntervalMinutes": 60,
+              "inventoryPolicy": "TABLE"
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+        }
+
+        mockMvc.post("/api/business/time-slots") {
+            cookie(sessionCookie)
+            header("User-Agent", "time-slot-test")
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"productId":$productId,"from":"$targetDate","to":"$targetDate"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.createdCount") { value(3) }
+            jsonPath("$.updatedCount") { value(0) }
+            jsonPath("$.slots.length()") { value(3) }
+            jsonPath("$.slots[0].startTime") { value("11:00:00") }
+            jsonPath("$.slots[0].endTime") { value("13:00:00") }
+            jsonPath("$.slots[0].capacity") { value(4) }
+            jsonPath("$.slots[1].startTime") { value("12:00:00") }
+            jsonPath("$.slots[2].startTime") { value("13:00:00") }
+        }
+
+        mockMvc.get("/api/business/time-slots") {
+            cookie(sessionCookie)
+            param("productId", productId.toString())
+            param("date", targetDate.toString())
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.slots.length()") { value(3) }
+            jsonPath("$.slots[1].status") { value("OPEN") }
+        }
+
+        mockMvc.get("/api/public/restaurants/${restaurant.id}/availability/times") {
+            param("productId", productId.toString())
+            param("date", targetDate.toString())
+            param("partySize", "2")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.times.length()") { value(3) }
+            jsonPath("$.times[0].endTime") { value("13:00:00") }
+        }
+
+        val closeResult = mockMvc.post("/api/business/time-slots/close") {
+            cookie(sessionCookie)
+            header("User-Agent", "time-slot-test")
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "productId": $productId,
+              "date": "$targetDate",
+              "startTime": "12:00:00",
+              "reason": "단체 준비"
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("BLOCKED") }
+            jsonPath("$.available") { value(false) }
+        }.andReturn()
+        val closedSlotId = JsonPath.read<Int>(closeResult.response.contentAsString, "$.id").toLong()
+
+        mockMvc.get("/api/public/restaurants/${restaurant.id}/availability/times") {
+            param("productId", productId.toString())
+            param("date", targetDate.toString())
+            param("partySize", "2")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.times.length()") { value(2) }
+            jsonPath("$.times[0].startTime") { value("11:00:00") }
+            jsonPath("$.times[1].startTime") { value("13:00:00") }
+        }
+
+        mockMvc.post("/api/business/time-slots/reopen") {
+            cookie(sessionCookie)
+            header("User-Agent", "time-slot-test")
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"timeSlotId":$closedSlotId,"reason":"운영 재개"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("OPEN") }
+            jsonPath("$.available") { value(true) }
+        }
+
+        mockMvc.get("/api/public/restaurants/${restaurant.id}/availability/times") {
+            param("productId", productId.toString())
+            param("date", targetDate.toString())
+            param("partySize", "2")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.times.length()") { value(3) }
+        }
+
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("reservation_product", productId).map { it.action })
+            .contains("TIME_SLOTS_GENERATED")
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("time_slot", closedSlotId).map { it.action })
+            .contains("TIME_SLOT_TEMPORARILY_CLOSED", "TIME_SLOT_REOPENED")
+    }
+
+    @Test
     fun publicAvailabilityUsesHoursHolidaysProductPolicyAndCapacity() {
         val owner = createBusinessUser("availability-owner@example.com")
         val sessionCookie = loginAndExtractSessionCookie(owner.email)
