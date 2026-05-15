@@ -1777,6 +1777,179 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun businessOwnerCanListCalendarAndReadOwnReservations() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "business-reservation-owner@example.com",
+            restaurantName = "Business Reservation Table",
+            slug = "business-reservation",
+            slotCapacity = 6,
+        )
+        val ownerCookie = loginAndExtractSessionCookie("business-reservation-owner@example.com")
+        val first = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "business-reserve-list-1",
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "김조회",
+            customerPhone = "010-1234-5678",
+            customerRequest = "창가 좌석",
+        )
+        val second = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "business-reserve-list-2",
+            startTime = "11:30:00",
+            partySize = 1,
+            customerName = "박취소",
+            customerPhone = "010-9999-0000",
+        )
+        mockMvc.post("/api/public/reservations/${second.id}/cancel") {
+            header("X-Reservation-Lookup-Token", second.lookupToken)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reason": "고객 요청"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("CANCELLED_BY_CUSTOMER") }
+        }
+
+        val otherFixture = createPublicReservationFixture(
+            ownerEmail = "business-reservation-other@example.com",
+            restaurantName = "Other Business Reservation Table",
+            slug = "business-reservation-other",
+        )
+        val otherOwnerCookie = loginAndExtractSessionCookie("business-reservation-other@example.com")
+        createPublicReservationForFixture(
+            fixture = otherFixture,
+            idempotencyKey = "business-reserve-list-other",
+            startTime = "11:00:00",
+            partySize = 4,
+            customerName = "타매장",
+            customerPhone = "010-1111-9999",
+        )
+
+        mockMvc.get("/api/business/reservations") {
+            cookie(ownerCookie)
+            param("date", fixture.targetDate.toString())
+            param("query", "1234")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.date") { value(fixture.targetDate.toString()) }
+            jsonPath("$.summary.totalReservations") { value(1) }
+            jsonPath("$.summary.totalPartySize") { value(2) }
+            jsonPath("$.summary.confirmedCount") { value(1) }
+            jsonPath("$.summary.cancelledCount") { value(0) }
+            jsonPath("$.items.length()") { value(1) }
+            jsonPath("$.items[0].id") { value(first.id.toInt()) }
+            jsonPath("$.items[0].status") { value("CONFIRMED") }
+            jsonPath("$.items[0].statusLabel") { value("확정") }
+            jsonPath("$.items[0].statusTone") { value("success") }
+            jsonPath("$.items[0].source") { value("ONLINE") }
+            jsonPath("$.items[0].reservedStartAt") { isNotEmpty() }
+            jsonPath("$.items[0].productId") { value(fixture.productId.toInt()) }
+            jsonPath("$.items[0].productName") { value("공개 예약 코스") }
+            jsonPath("$.items[0].customer.name") { value("김조회") }
+            jsonPath("$.items[0].customer.phoneMasked") { value("010-****-5678") }
+            jsonPath("$.items[0].hasCustomerRequest") { value(true) }
+            jsonPath("$.items[0].hasOwnerNote") { value(false) }
+            jsonPath("$.items[0].paymentStatus") { value("NOT_REQUIRED") }
+            jsonPath("$.items[0].paymentActionRequired") { value(false) }
+        }
+
+        mockMvc.get("/api/business/reservations") {
+            cookie(ownerCookie)
+            param("date", fixture.targetDate.toString())
+            param("includeCancelled", "true")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.summary.totalReservations") { value(2) }
+            jsonPath("$.summary.totalPartySize") { value(3) }
+            jsonPath("$.summary.cancelledCount") { value(1) }
+            jsonPath("$.items.length()") { value(2) }
+        }
+
+        mockMvc.get("/api/business/reservations") {
+            cookie(ownerCookie)
+            param("date", fixture.targetDate.toString())
+            param("status", "CANCELLED_BY_CUSTOMER")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.summary.totalReservations") { value(1) }
+            jsonPath("$.items[0].id") { value(second.id.toInt()) }
+            jsonPath("$.items[0].statusLabel") { value("고객 취소") }
+        }
+
+        mockMvc.get("/api/business/reservations") {
+            cookie(ownerCookie)
+            param("date", fixture.targetDate.toString())
+            param("productId", fixture.productId.toString())
+            param("startTime", "11:00:00")
+            param("endTime", "11:30:00")
+            param("includeCancelled", "true")
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.items.length()") { value(1) }
+            jsonPath("$.items[0].id") { value(first.id.toInt()) }
+        }
+
+        mockMvc.get("/api/business/reservations/calendar") {
+            cookie(ownerCookie)
+            param("from", fixture.targetDate.toString())
+            param("to", fixture.targetDate.toString())
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.days.length()") { value(1) }
+            jsonPath("$.days[0].date") { value(fixture.targetDate.toString()) }
+            jsonPath("$.days[0].isOpen") { value(true) }
+            jsonPath("$.days[0].reservationCount") { value(2) }
+            jsonPath("$.days[0].partySizeTotal") { value(3) }
+            jsonPath("$.days[0].confirmedCount") { value(1) }
+            jsonPath("$.days[0].cancelledCount") { value(1) }
+        }
+
+        mockMvc.get("/api/business/reservations/${first.id}") {
+            cookie(ownerCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.id") { value(first.id.toInt()) }
+            jsonPath("$.reservationNumber") { value(first.reservationNumber) }
+            jsonPath("$.status") { value("CONFIRMED") }
+            jsonPath("$.product.id") { value(fixture.productId.toInt()) }
+            jsonPath("$.product.name") { value("공개 예약 코스") }
+            jsonPath("$.customer.name") { value("김조회") }
+            jsonPath("$.customer.phoneNumber") { value("01012345678") }
+            jsonPath("$.customer.visitCount") { value(1) }
+            jsonPath("$.customer.noShowCount") { value(0) }
+            jsonPath("$.customerRequest") { value("창가 좌석") }
+            jsonPath("$.ownerNote") { value(org.hamcrest.Matchers.nullValue()) }
+            jsonPath("$.paymentStatus") { value("NOT_REQUIRED") }
+            jsonPath("$.auditLogs.length()") { value(0) }
+        }
+
+        mockMvc.get("/api/business/reservations/${first.id}") {
+            cookie(otherOwnerCookie)
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+
+        mockMvc.get("/api/business/reservations") {
+            cookie(ownerCookie)
+            param("date", "not-a-date")
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("VALIDATION_ERROR") }
+        }
+
+        mockMvc.get("/api/business/reservations") {
+            cookie(ownerCookie)
+            param("date", fixture.targetDate.toString())
+            param("status", "UNKNOWN")
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("VALIDATION_ERROR") }
+        }
+    }
+
+    @Test
     fun publicReservationCancelRejectsVisitStartPassed() {
         val fixture = createPublicReservationFixture(
             ownerEmail = "reservation-past-cancel-owner@example.com",
@@ -2320,10 +2493,46 @@ class RestaurantApiApplicationTests {
         """.trimIndent()
     }
 
+    private fun createPublicReservationForFixture(
+        fixture: PublicReservationFixture,
+        idempotencyKey: String,
+        startTime: String,
+        partySize: Int,
+        customerName: String,
+        customerPhone: String,
+        customerRequest: String? = null,
+    ): PublicReservationCreated {
+        val result = mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", idempotencyKey)
+            contentType = MediaType.APPLICATION_JSON
+            content = publicReservationRequestJson(
+                fixture = fixture,
+                startTime = startTime,
+                partySize = partySize,
+                customerName = customerName,
+                customerPhone = customerPhone,
+                customerRequest = customerRequest,
+            )
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        return PublicReservationCreated(
+            id = JsonPath.read<Int>(result.response.contentAsString, "$.id").toLong(),
+            reservationNumber = JsonPath.read<String>(result.response.contentAsString, "$.reservationNumber"),
+            lookupToken = JsonPath.read<String>(result.response.contentAsString, "$.lookupToken"),
+        )
+    }
+
     private data class PublicReservationFixture(
         val restaurant: RestaurantEntity,
         val productId: Long,
         val targetDate: LocalDate,
+    )
+
+    private data class PublicReservationCreated(
+        val id: Long,
+        val reservationNumber: String,
+        val lookupToken: String,
     )
 
     private fun runConcurrentReservationCreates(

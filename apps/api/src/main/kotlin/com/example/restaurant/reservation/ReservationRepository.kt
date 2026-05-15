@@ -15,6 +15,40 @@ interface ReservationRepository : JpaRepository<ReservationEntity, Long> {
 
     fun countByRestaurantId(restaurantId: Long): Long
 
+    fun countByCustomerId(customerId: Long): Long
+
+    fun countByCustomerIdAndStatus(customerId: Long, status: ReservationStatus): Long
+
+    @Query(
+        """
+        select r from ReservationEntity r
+        join fetch r.restaurant
+        join fetch r.reservationProduct
+        join fetch r.customer
+        where r.restaurant.id = :restaurantId
+          and r.visitDate between :fromDate and :toDate
+        order by r.visitDate asc, r.startTime asc, r.id asc
+        """,
+    )
+    fun findBusinessReservations(
+        @Param("restaurantId") restaurantId: Long,
+        @Param("fromDate") fromDate: LocalDate,
+        @Param("toDate") toDate: LocalDate,
+    ): List<ReservationEntity>
+
+    @Query(
+        """
+        select r from ReservationEntity r
+        join fetch r.restaurant
+        join fetch r.reservationProduct
+        join fetch r.customer
+        where r.id = :id
+        """,
+    )
+    fun findBusinessReservationById(
+        @Param("id") id: Long,
+    ): ReservationEntity?
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select r from ReservationEntity r where r.id = :id")
     fun findByIdForUpdate(
