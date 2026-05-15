@@ -1,6 +1,7 @@
 package com.example.restaurant.reservation
 
 import com.example.restaurant.auth.BusinessAuthContext
+import com.example.restaurant.refund.RefundPreviewResponse
 import jakarta.servlet.http.HttpServletRequest
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping
@@ -82,6 +83,16 @@ class BusinessReservationController(
             reservationId = reservationId,
             request = request,
             metadata = servletRequest.toMetadata(),
+        )
+
+    @GetMapping("/{reservationId}/refund-preview")
+    fun refundPreview(
+        servletRequest: HttpServletRequest,
+        @PathVariable reservationId: Long,
+    ): RefundPreviewResponse =
+        businessReservationService.refundPreview(
+            principal = BusinessAuthContext.principal(servletRequest),
+            reservationId = reservationId,
         )
 
     @PostMapping("/{reservationId}/complete")

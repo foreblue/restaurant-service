@@ -839,6 +839,16 @@ class RestaurantApiApplicationTests {
             jsonPath("$.nonRefundableAmount") { value(0) }
         }
 
+        mockMvc.get("/api/business/reservations/${created.id}/refund-preview") {
+            cookie(loginAndExtractSessionCookie("refund-onsite-owner@example.com"))
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.paymentStatus") { value("PAY_ON_SITE") }
+            jsonPath("$.refundRequired") { value(false) }
+            jsonPath("$.refundableAmount") { value(0) }
+            jsonPath("$.message") { value("환불이 필요한 온라인 결제가 없습니다.") }
+        }
+
         mockMvc.post("/api/public/reservations/${created.id}/cancel") {
             header("X-Reservation-Lookup-Token", created.lookupToken)
             contentType = MediaType.APPLICATION_JSON
@@ -878,6 +888,49 @@ class RestaurantApiApplicationTests {
             amount = 30_000,
             expectedPaymentStatus = "PAID",
         )
+        val reservation = reservationRepository.findById(started.reservation.id).orElseThrow()
+        reservation.cancellationPolicySnapshotJson = """
+        {
+          "rules": [
+            {"id": "rule_customer_no_refund", "beforeVisitHours": 0, "refundRate": 0}
+          ],
+          "restaurantCancelRefundRate": 100
+        }
+        """.trimIndent()
+        reservationRepository.saveAndFlush(reservation)
+
+        mockMvc.get("/api/public/reservations/${started.reservation.id}/refund-preview") {
+            header("X-Reservation-Lookup-Token", started.reservation.lookupToken)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.reason") { value("CUSTOMER_CANCEL") }
+            jsonPath("$.refundRequired") { value(false) }
+            jsonPath("$.refundableAmount") { value(0) }
+            jsonPath("$.nonRefundableAmount") { value(30000) }
+            jsonPath("$.policyRuleId") { value("rule_customer_no_refund") }
+        }
+
+        mockMvc.get("/api/business/reservations/${started.reservation.id}/refund-preview") {
+            cookie(ownerCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.reason") { value("RESTAURANT_CANCEL") }
+            jsonPath("$.refundRequired") { value(true) }
+            jsonPath("$.refundableAmount") { value(30000) }
+            jsonPath("$.nonRefundableAmount") { value(0) }
+            jsonPath("$.policyRuleId") { value("restaurant_cancel_100") }
+            jsonPath("$.message") { value("매장 취소로 전액 환불 요청 대상입니다.") }
+        }
+
+        val otherOwner = createBusinessUser("business-refund-other-owner@example.com")
+        val otherCookie = loginAndExtractSessionCookie(otherOwner.email)
+        createApprovedRestaurantForSettings(otherOwner, "Other Business Refund Table", "business-refund-other")
+        mockMvc.get("/api/business/reservations/${started.reservation.id}/refund-preview") {
+            cookie(otherCookie)
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
 
         mockMvc.post("/api/business/reservations/${started.reservation.id}/cancel") {
             cookie(ownerCookie)

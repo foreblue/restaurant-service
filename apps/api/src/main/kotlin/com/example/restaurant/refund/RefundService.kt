@@ -57,6 +57,11 @@ class RefundService(
         return calculateRefund(reservation, RefundReason.CUSTOMER_CANCEL).toPreviewResponse(reservation)
     }
 
+    fun previewRestaurantCancellation(reservation: ReservationEntity): RefundPreviewResponse {
+        reservation.requireRestaurantCancellationPreviewable()
+        return calculateRefund(reservation, RefundReason.RESTAURANT_CANCEL).toPreviewResponse(reservation)
+    }
+
     @Transactional
     fun requestCustomerCancellationRefund(reservation: ReservationEntity): RefundOperationResponse =
         requestRefund(
@@ -424,6 +429,12 @@ class RefundService(
         }
         if (!Instant.now(clock).isBefore(reservedInstant())) {
             throw ApiException(ErrorCode.CONFLICT, "방문 시작 이후에는 고객 취소를 할 수 없습니다.")
+        }
+    }
+
+    private fun ReservationEntity.requireRestaurantCancellationPreviewable() {
+        if (status !in ACTIVE_RESERVATION_STATUSES) {
+            throw ApiException(ErrorCode.CONFLICT, "취소할 수 없는 예약입니다.")
         }
     }
 
