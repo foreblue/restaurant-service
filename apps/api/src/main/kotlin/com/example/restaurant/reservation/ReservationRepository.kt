@@ -24,6 +24,11 @@ interface ReservationRepository : JpaRepository<ReservationEntity, Long> {
         statuses: Collection<ReservationStatus>,
     ): Long
 
+    fun findByRestaurantIdAndCustomerIdOrderByVisitDateDescStartTimeDescIdDesc(
+        restaurantId: Long,
+        customerId: Long,
+    ): List<ReservationEntity>
+
     fun findByCustomerIdOrderByVisitDateDescStartTimeDescIdDesc(customerId: Long): List<ReservationEntity>
 
     @Query(

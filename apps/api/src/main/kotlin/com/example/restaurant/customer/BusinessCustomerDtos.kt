@@ -56,6 +56,28 @@ data class BusinessCustomerStatsResponse(
     val noShowCount: Long,
 )
 
+data class BusinessCustomerReservationsResponse(
+    val customer: BusinessCustomerHistoryCustomerResponse,
+    val stats: BusinessCustomerStatsResponse,
+    val items: List<BusinessCustomerReservationSummaryResponse>,
+)
+
+data class BusinessCustomerHistoryCustomerResponse(
+    val id: Long,
+    val name: String,
+    val phoneMasked: String,
+    val email: String?,
+    val allergyNote: String?,
+    val anniversaryType: String?,
+    val anniversaryDate: String?,
+    val preferenceNote: String?,
+    val vip: Boolean,
+    val caution: Boolean,
+    val cautionReason: String?,
+    val blocked: Boolean,
+    val blockedReason: String?,
+)
+
 data class BusinessCustomerReservationSummaryResponse(
     val id: Long,
     val reservationNumber: String,
@@ -68,6 +90,10 @@ data class BusinessCustomerReservationSummaryResponse(
     val status: String,
     val source: String,
     val customerRequest: String?,
+    val completedAt: Instant?,
+    val noShowAt: Instant?,
+    val cancelledAt: Instant?,
+    val cancelReason: String?,
 )
 
 data class BusinessCustomerSaveRequest(
@@ -79,6 +105,24 @@ data class BusinessCustomerSaveRequest(
     val anniversaryDate: String? = null,
     val preferenceNote: String? = null,
     val internalNote: String? = null,
+)
+
+data class BusinessCustomerFlagUpdateRequest(
+    val vip: Boolean? = null,
+    val caution: Boolean? = null,
+    val cautionReason: String? = null,
+    val blocked: Boolean? = null,
+    val blockedReason: String? = null,
+)
+
+data class BusinessCustomerFlagsResponse(
+    val customerId: Long,
+    val vip: Boolean,
+    val caution: Boolean,
+    val cautionReason: String?,
+    val blocked: Boolean,
+    val blockedReason: String?,
+    val updatedAt: Instant?,
 )
 
 data class BusinessCustomerNoteSaveRequest(

@@ -53,6 +53,9 @@ data class BusinessReservationCustomerSummaryResponse(
     val id: Long,
     val name: String,
     val phoneMasked: String,
+    val vip: Boolean,
+    val caution: Boolean,
+    val blocked: Boolean,
 )
 
 data class BusinessReservationCalendarResponse(
@@ -111,6 +114,18 @@ data class BusinessReservationCustomerDetailResponse(
     val id: Long,
     val name: String,
     val phoneNumber: String,
+    val phoneMasked: String,
+    val email: String?,
+    val allergyNote: String?,
+    val anniversaryType: String?,
+    val anniversaryDate: String?,
+    val preferenceNote: String?,
+    val vip: Boolean,
+    val caution: Boolean,
+    val cautionReason: String?,
+    val blocked: Boolean,
+    val blockedReason: String?,
+    val reservationCount: Long,
     val visitCount: Long,
     val noShowCount: Long,
 )

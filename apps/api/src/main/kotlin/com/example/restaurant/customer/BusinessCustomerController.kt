@@ -40,6 +40,17 @@ class BusinessCustomerController(
             metadata = servletRequest.toMetadata(),
         )
 
+    @GetMapping("/customers/{customerId}/reservations")
+    fun reservations(
+        servletRequest: HttpServletRequest,
+        @PathVariable customerId: Long,
+    ): BusinessCustomerReservationsResponse =
+        businessCustomerService.reservations(
+            principal = BusinessAuthContext.principal(servletRequest),
+            customerId = customerId,
+            metadata = servletRequest.toMetadata(),
+        )
+
     @PostMapping("/customers")
     @ResponseStatus(HttpStatus.CREATED)
     fun create(
@@ -59,6 +70,19 @@ class BusinessCustomerController(
         @RequestBody request: BusinessCustomerSaveRequest,
     ): BusinessCustomerDetailResponse =
         businessCustomerService.update(
+            principal = BusinessAuthContext.principal(servletRequest),
+            customerId = customerId,
+            request = request,
+            metadata = servletRequest.toMetadata(),
+        )
+
+    @PostMapping("/customers/{customerId}/flags")
+    fun updateFlags(
+        servletRequest: HttpServletRequest,
+        @PathVariable customerId: Long,
+        @RequestBody request: BusinessCustomerFlagUpdateRequest,
+    ): BusinessCustomerFlagsResponse =
+        businessCustomerService.updateFlags(
             principal = BusinessAuthContext.principal(servletRequest),
             customerId = customerId,
             request = request,

@@ -23,6 +23,7 @@ private const val MAX_CUSTOMER_NAME_LENGTH = 80
 private const val MAX_CUSTOMER_EMAIL_LENGTH = 255
 private const val MAX_CUSTOMER_SHORT_FIELD_LENGTH = 40
 private const val MAX_CUSTOMER_NOTE_LENGTH = 1000
+private const val MAX_CUSTOMER_FLAG_REASON_LENGTH = 500
 
 @Service
 class BusinessCustomerService(
@@ -68,6 +69,33 @@ class BusinessCustomerService(
             metadata = metadata,
         )
         return customer.toDetail()
+    }
+
+    @Transactional
+    fun reservations(
+        principal: BusinessPrincipal,
+        customerId: Long,
+        metadata: BusinessCustomerRequestMetadata,
+    ): BusinessCustomerReservationsResponse {
+        val owner = owner(principal)
+        val restaurant = ownedRestaurant(principal)
+        val customer = ownedCustomer(restaurant.id, customerId)
+        audit(
+            actor = owner,
+            action = "CUSTOMER_RESERVATIONS_VIEWED",
+            targetType = "customer",
+            targetId = customer.id,
+            before = null,
+            after = mapOf("customerId" to customer.id),
+            metadata = metadata,
+        )
+        return BusinessCustomerReservationsResponse(
+            customer = customer.toHistoryCustomer(),
+            stats = customer.stats(),
+            items = reservationRepository
+                .findByRestaurantIdAndCustomerIdOrderByVisitDateDescStartTimeDescIdDesc(restaurant.id, customer.id)
+                .map { it.toCustomerReservationSummary() },
+        )
     }
 
     @Transactional
@@ -122,6 +150,29 @@ class BusinessCustomerService(
 
         audit(owner, "CUSTOMER_UPDATED", "customer", customer.id, before, customer.snapshot(), metadata)
         return customer.toDetail()
+    }
+
+    @Transactional
+    fun updateFlags(
+        principal: BusinessPrincipal,
+        customerId: Long,
+        request: BusinessCustomerFlagUpdateRequest,
+        metadata: BusinessCustomerRequestMetadata,
+    ): BusinessCustomerFlagsResponse {
+        val owner = owner(principal)
+        val restaurant = ownedRestaurant(principal)
+        val customer = ownedCustomer(restaurant.id, customerId)
+        val before = customer.snapshot()
+        val normalized = request.normalizedFlags(customer)
+
+        customer.vip = normalized.vip
+        customer.caution = normalized.caution
+        customer.cautionReason = normalized.cautionReason
+        customer.blocked = normalized.blocked
+        customer.blockedReason = normalized.blockedReason
+
+        audit(owner, "CUSTOMER_FLAGS_UPDATED", "customer", customer.id, before, customer.snapshot(), metadata)
+        return customer.toFlagsResponse()
     }
 
     @Transactional
@@ -265,12 +316,60 @@ class BusinessCustomerService(
         )
     }
 
+    private fun BusinessCustomerFlagUpdateRequest.normalizedFlags(
+        existing: CustomerEntity,
+    ): NormalizedCustomerFlags {
+        val normalizedVip = vip ?: existing.vip
+        val normalizedCaution = caution ?: existing.caution
+        val normalizedBlocked = blocked ?: existing.blocked
+        val normalizedCautionReason = if (normalizedCaution) {
+            cautionReason.normalizedOptionalText(
+                maxLength = MAX_CUSTOMER_FLAG_REASON_LENGTH,
+                fieldName = "cautionReason",
+                existing = existing.cautionReason,
+            )
+        } else {
+            null
+        }
+        val normalizedBlockedReason = if (normalizedBlocked) {
+            blockedReason.normalizedOptionalText(
+                maxLength = MAX_CUSTOMER_FLAG_REASON_LENGTH,
+                fieldName = "blockedReason",
+                existing = existing.blockedReason,
+            )
+        } else {
+            null
+        }
+        return NormalizedCustomerFlags(
+            vip = normalizedVip,
+            caution = normalizedCaution,
+            cautionReason = normalizedCautionReason,
+            blocked = normalizedBlocked,
+            blockedReason = normalizedBlockedReason,
+        )
+    }
+
     private fun String?.normalizedText(
         maxLength: Int,
         fieldName: String,
     ): String? {
         val normalized = this?.trim()?.takeIf { it.isNotBlank() } ?: return null
         if (normalized.length > maxLength) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "${fieldName}은 ${maxLength}자 이하여야 합니다.")
+        }
+        return normalized
+    }
+
+    private fun String?.normalizedOptionalText(
+        maxLength: Int,
+        fieldName: String,
+        existing: String?,
+    ): String? {
+        if (this == null) {
+            return existing
+        }
+        val normalized = trim().takeIf { it.isNotBlank() }
+        if ((normalized?.length ?: 0) > maxLength) {
             throw ApiException(ErrorCode.VALIDATION_ERROR, "${fieldName}은 ${maxLength}자 이하여야 합니다.")
         }
         return normalized
@@ -306,6 +405,23 @@ class BusinessCustomerService(
         )
     }
 
+    private fun CustomerEntity.toHistoryCustomer(): BusinessCustomerHistoryCustomerResponse =
+        BusinessCustomerHistoryCustomerResponse(
+            id = id,
+            name = name,
+            phoneMasked = phoneNumber.maskedPhone(),
+            email = email,
+            allergyNote = allergyNote,
+            anniversaryType = anniversaryType,
+            anniversaryDate = anniversaryDate,
+            preferenceNote = preferenceNote,
+            vip = vip,
+            caution = caution,
+            cautionReason = cautionReason,
+            blocked = blocked,
+            blockedReason = blockedReason,
+        )
+
     private fun CustomerEntity.toDetail(): BusinessCustomerDetailResponse =
         BusinessCustomerDetailResponse(
             id = id,
@@ -335,6 +451,17 @@ class BusinessCustomerService(
             updatedAt = updatedAt,
         )
 
+    private fun CustomerEntity.toFlagsResponse(): BusinessCustomerFlagsResponse =
+        BusinessCustomerFlagsResponse(
+            customerId = id,
+            vip = vip,
+            caution = caution,
+            cautionReason = cautionReason,
+            blocked = blocked,
+            blockedReason = blockedReason,
+            updatedAt = updatedAt,
+        )
+
     private fun CustomerEntity.stats(): BusinessCustomerStatsResponse =
         BusinessCustomerStatsResponse(
             reservationCount = reservationRepository.countByCustomerId(id),
@@ -359,6 +486,10 @@ class BusinessCustomerService(
             status = status.name,
             source = source.name,
             customerRequest = customerRequest,
+            completedAt = completedAt,
+            noShowAt = noShowAt,
+            cancelledAt = cancelledAt,
+            cancelReason = cancelReason,
         )
 
     private fun CustomerNoteEntity.toResponse(): BusinessCustomerNoteResponse =
@@ -385,7 +516,9 @@ class BusinessCustomerService(
             "internalNote" to internalNote,
             "vip" to vip,
             "caution" to caution,
+            "cautionReason" to cautionReason,
             "blocked" to blocked,
+            "blockedReason" to blockedReason,
         )
 
     private fun CustomerNoteEntity.snapshot(): Map<String, Any?> =
@@ -441,4 +574,12 @@ private data class NormalizedCustomer(
 private data class NormalizedCustomerNote(
     val noteType: CustomerNoteType,
     val content: String,
+)
+
+private data class NormalizedCustomerFlags(
+    val vip: Boolean,
+    val caution: Boolean,
+    val cautionReason: String?,
+    val blocked: Boolean,
+    val blockedReason: String?,
 )
