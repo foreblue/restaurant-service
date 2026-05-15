@@ -3,6 +3,7 @@ package com.example.restaurant.payment
 import com.example.restaurant.audit.AuditLogService
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.example.restaurant.notification.NotificationService
 import com.example.restaurant.reservation.ReservationEntity
 import com.example.restaurant.reservation.ReservationStatus
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
@@ -25,6 +26,7 @@ class PgWebhookService(
     private val paymentRepository: PaymentRepository,
     private val signatureVerifier: PgWebhookSignatureVerifier,
     private val auditLogService: AuditLogService,
+    private val notificationService: NotificationService,
     private val clock: Clock,
 ) {
     private val objectMapper = jacksonObjectMapper()
@@ -98,6 +100,7 @@ class PgWebhookService(
         }
 
         val before = payment.auditSnapshot()
+        val previousStatus = payment.status
         when (event.eventType) {
             "payment.succeeded" -> payment.applySucceeded(event)
             "payment.failed" -> payment.applyTerminalFailure(event, PaymentStatus.FAILED)
@@ -115,6 +118,9 @@ class PgWebhookService(
         event.status = PgWebhookEventStatus.PROCESSED
         event.processedAt = Instant.now(clock)
         auditPaymentChange(event, before, payment.auditSnapshot())
+        if (event.eventType == "payment.succeeded" && previousStatus != PaymentStatus.PAID && payment.status == PaymentStatus.PAID) {
+            notificationService.recordPaymentCompleted(payment)
+        }
     }
 
     private fun PaymentEntity.applySucceeded(event: PgWebhookEventEntity) {

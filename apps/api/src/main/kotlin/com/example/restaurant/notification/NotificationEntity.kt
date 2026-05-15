@@ -56,6 +56,24 @@ class NotificationEntity(
     @Column(name = "payload", nullable = false, columnDefinition = "json")
     val payloadJson: String,
 
+    @Column(name = "scheduled_at")
+    var scheduledAt: Instant? = null,
+
+    @Column(name = "sent_at")
+    var sentAt: Instant? = null,
+
+    @Column(name = "attempt_count", nullable = false)
+    var attemptCount: Int = 0,
+
+    @Column(name = "next_retry_at")
+    var nextRetryAt: Instant? = null,
+
+    @Column(name = "provider_key", length = 80)
+    var providerKey: String? = null,
+
+    @Column(name = "provider_message_id", length = 128)
+    var providerMessageId: String? = null,
+
     @Column(name = "last_error", columnDefinition = "text")
     var lastError: String? = null,
 
