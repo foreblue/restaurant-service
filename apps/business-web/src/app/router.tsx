@@ -4,6 +4,7 @@ import { LoginPage } from "@/features/auth/LoginPage";
 import { PasswordResetRequestPage } from "@/features/auth/PasswordResetRequestPage";
 import { DashboardPage } from "@/features/dashboard/DashboardPage";
 import { RestaurantApplicationPage } from "@/features/onboarding/RestaurantApplicationPage";
+import { PaymentOperationsPage } from "@/features/payments/PaymentOperationsPage";
 import { ReservationProductsPage } from "@/features/products/ReservationProductsPage";
 import { ReservationOperationsPage } from "@/features/reservations/ReservationOperationsPage";
 import { StoreSettingsPage } from "@/features/store/StoreSettingsPage";
@@ -43,6 +44,10 @@ export function createBusinessRouter() {
             {
               path: "reservations",
               element: <ReservationOperationsPage />,
+            },
+            {
+              path: "payments",
+              element: <PaymentOperationsPage />,
             },
             {
               path: "products",

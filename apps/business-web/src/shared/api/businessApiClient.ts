@@ -464,6 +464,76 @@ export interface BusinessAuditLogListResponse {
   items: BusinessAuditLogResponse[];
 }
 
+export interface BusinessPaymentListQuery {
+  status?: string | null;
+  from?: string | null;
+  to?: string | null;
+}
+
+export interface BusinessPaymentListItemResponse {
+  id: number;
+  paymentNumber: string;
+  reservationId: number;
+  reservationNumber: string;
+  customerName: string;
+  productName: string;
+  paymentType: string;
+  status: string;
+  statusLabel: string;
+  statusTone: string;
+  amount: number;
+  currency: string;
+  paidAt: string | null;
+  dueAt: string | null;
+  cardGuaranteeHeld: boolean;
+  actionRequired: boolean;
+}
+
+export interface BusinessPaymentListResponse {
+  summary: {
+    totalCount: number;
+    paidAmount: number;
+    cardGuaranteeCount: number;
+    actionRequiredCount: number;
+  };
+  items: BusinessPaymentListItemResponse[];
+}
+
+export interface BusinessRefundListQuery {
+  status?: string | null;
+  from?: string | null;
+  to?: string | null;
+}
+
+export interface BusinessRefundListItemResponse {
+  id: number;
+  refundNumber: string;
+  paymentId: number;
+  reservationId: number;
+  reservationNumber: string;
+  customerName: string;
+  productName: string;
+  status: string;
+  statusLabel: string;
+  statusTone: string;
+  refundAmount: number;
+  currency: string;
+  requestedAt: string | null;
+  completedAt: string | null;
+  failureMessage: string | null;
+  actionRequired: boolean;
+}
+
+export interface BusinessRefundListResponse {
+  summary: {
+    totalCount: number;
+    refundAmount: number;
+    failedCount: number;
+    actionRequiredCount: number;
+  };
+  items: BusinessRefundListItemResponse[];
+}
+
 export interface RestaurantSettingsResponse {
   id: number;
   status: "DRAFT" | "APPROVAL_REQUESTED" | "APPROVED" | "REJECTED" | "SUSPENDED";
@@ -587,6 +657,8 @@ export interface BusinessApiClient {
     request: BusinessReservationOperationNoteRequest,
   ): Promise<BusinessReservationDetailResponse>;
   listBusinessAuditLogs(query: BusinessAuditLogListQuery): Promise<BusinessAuditLogListResponse>;
+  listBusinessPayments(query: BusinessPaymentListQuery): Promise<BusinessPaymentListResponse>;
+  listBusinessRefunds(query: BusinessRefundListQuery): Promise<BusinessRefundListResponse>;
 }
 
 export function createBusinessQueryClient() {
@@ -861,6 +933,14 @@ class HttpBusinessApiClient implements BusinessApiClient {
     return this.request<BusinessAuditLogListResponse>(
       `/api/business/audit-logs${queryString(query)}`,
     );
+  }
+
+  listBusinessPayments(query: BusinessPaymentListQuery) {
+    return this.request<BusinessPaymentListResponse>(`/api/business/payments${queryString(query)}`);
+  }
+
+  listBusinessRefunds(query: BusinessRefundListQuery) {
+    return this.request<BusinessRefundListResponse>(`/api/business/refunds${queryString(query)}`);
   }
 
   private async request<T>(path: string, init: { method?: string; body?: unknown } = {}) {
@@ -1497,6 +1577,64 @@ class MockBusinessApiClient implements BusinessApiClient {
       });
 
     return { items } satisfies BusinessAuditLogListResponse;
+  }
+
+  async listBusinessPayments(query: BusinessPaymentListQuery) {
+    const items = defaultMockBusinessPayments().filter((payment) => {
+      const paymentDate = payment.paidAt ?? payment.dueAt;
+
+      if (query.status && payment.status !== query.status) {
+        return false;
+      }
+      if (query.from && paymentDate && paymentDate.slice(0, 10) < query.from) {
+        return false;
+      }
+      if (query.to && paymentDate && paymentDate.slice(0, 10) > query.to) {
+        return false;
+      }
+
+      return true;
+    });
+
+    return {
+      summary: {
+        totalCount: items.length,
+        paidAmount: items
+          .filter((payment) => payment.status === "PAID")
+          .reduce((total, payment) => total + payment.amount, 0),
+        cardGuaranteeCount: items.filter((payment) => payment.cardGuaranteeHeld).length,
+        actionRequiredCount: items.filter((payment) => payment.actionRequired).length,
+      },
+      items,
+    } satisfies BusinessPaymentListResponse;
+  }
+
+  async listBusinessRefunds(query: BusinessRefundListQuery) {
+    const items = defaultMockBusinessRefunds().filter((refund) => {
+      if (query.status && refund.status !== query.status) {
+        return false;
+      }
+      if (query.from && refund.requestedAt && refund.requestedAt.slice(0, 10) < query.from) {
+        return false;
+      }
+      if (query.to && refund.requestedAt && refund.requestedAt.slice(0, 10) > query.to) {
+        return false;
+      }
+
+      return true;
+    });
+
+    return {
+      summary: {
+        totalCount: items.length,
+        refundAmount: items
+          .filter((refund) => refund.status === "SUCCEEDED")
+          .reduce((total, refund) => total + refund.refundAmount, 0),
+        failedCount: items.filter((refund) => refund.status === "FAILED").length,
+        actionRequiredCount: items.filter((refund) => refund.actionRequired).length,
+      },
+      items,
+    } satisfies BusinessRefundListResponse;
   }
 
   private readBusinessReservations() {
@@ -2242,6 +2380,148 @@ function defaultMockReservationProducts() {
       id: 6002,
       name: "런치 코스",
       maxPartySize: 8,
+    },
+  ];
+}
+
+function defaultMockBusinessPayments(): BusinessPaymentListItemResponse[] {
+  const today = todayDateString();
+  const yesterday = addDays(today, -1);
+
+  return [
+    {
+      id: 9101,
+      paymentNumber: "PAY-9101",
+      reservationId: 7001,
+      reservationNumber: "RSV-7001",
+      customerName: "김예약",
+      productName: "디너 코스",
+      paymentType: "DEPOSIT",
+      status: "PAID",
+      statusLabel: "결제 완료",
+      statusTone: "success",
+      amount: 30000,
+      currency: "KRW",
+      paidAt: toDateTimeIsoString(today, "10:10:00"),
+      dueAt: null,
+      cardGuaranteeHeld: false,
+      actionRequired: false,
+    },
+    {
+      id: 9102,
+      paymentNumber: "PAY-9102",
+      reservationId: 7002,
+      reservationNumber: "RSV-7002",
+      customerName: "이수정",
+      productName: "런치 코스",
+      paymentType: "ONSITE",
+      status: "OFFLINE",
+      statusLabel: "현장 결제",
+      statusTone: "muted",
+      amount: 0,
+      currency: "KRW",
+      paidAt: null,
+      dueAt: null,
+      cardGuaranteeHeld: false,
+      actionRequired: false,
+    },
+    {
+      id: 9103,
+      paymentNumber: "PAY-9103",
+      reservationId: 7005,
+      reservationNumber: "RSV-7005",
+      customerName: "오민준",
+      productName: "디너 코스",
+      paymentType: "CARD_GUARANTEE",
+      status: "CARD_GUARANTEE",
+      statusLabel: "카드 보증",
+      statusTone: "warning",
+      amount: 50000,
+      currency: "KRW",
+      paidAt: null,
+      dueAt: toDateTimeIsoString(today, "19:00:00"),
+      cardGuaranteeHeld: true,
+      actionRequired: true,
+    },
+    {
+      id: 9104,
+      paymentNumber: "PAY-9104",
+      reservationId: 7003,
+      reservationNumber: "RSV-7003",
+      customerName: "박취소",
+      productName: "디너 코스",
+      paymentType: "PREPAID",
+      status: "REFUND_PENDING",
+      statusLabel: "환불 대기",
+      statusTone: "danger",
+      amount: 120000,
+      currency: "KRW",
+      paidAt: toDateTimeIsoString(yesterday, "18:00:00"),
+      dueAt: null,
+      cardGuaranteeHeld: false,
+      actionRequired: true,
+    },
+  ];
+}
+
+function defaultMockBusinessRefunds(): BusinessRefundListItemResponse[] {
+  const today = todayDateString();
+  const yesterday = addDays(today, -1);
+
+  return [
+    {
+      id: 9201,
+      refundNumber: "REF-9201",
+      paymentId: 9104,
+      reservationId: 7003,
+      reservationNumber: "RSV-7003",
+      customerName: "박취소",
+      productName: "디너 코스",
+      status: "PENDING",
+      statusLabel: "환불 처리중",
+      statusTone: "warning",
+      refundAmount: 120000,
+      currency: "KRW",
+      requestedAt: toDateTimeIsoString(today, "09:30:00"),
+      completedAt: null,
+      failureMessage: null,
+      actionRequired: true,
+    },
+    {
+      id: 9202,
+      refundNumber: "REF-9202",
+      paymentId: 9101,
+      reservationId: 7001,
+      reservationNumber: "RSV-7001",
+      customerName: "김예약",
+      productName: "디너 코스",
+      status: "SUCCEEDED",
+      statusLabel: "환불 완료",
+      statusTone: "success",
+      refundAmount: 30000,
+      currency: "KRW",
+      requestedAt: toDateTimeIsoString(yesterday, "16:20:00"),
+      completedAt: toDateTimeIsoString(yesterday, "16:22:00"),
+      failureMessage: null,
+      actionRequired: false,
+    },
+    {
+      id: 9203,
+      refundNumber: "REF-9203",
+      paymentId: 9103,
+      reservationId: 7005,
+      reservationNumber: "RSV-7005",
+      customerName: "오민준",
+      productName: "디너 코스",
+      status: "FAILED",
+      statusLabel: "환불 실패",
+      statusTone: "danger",
+      refundAmount: 50000,
+      currency: "KRW",
+      requestedAt: toDateTimeIsoString(today, "20:30:00"),
+      completedAt: null,
+      failureMessage: "PG 승인 거절",
+      actionRequired: true,
     },
   ];
 }
