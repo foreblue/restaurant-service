@@ -1,8 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  type BusinessManualReservationCreateRequest,
   type BusinessReservationCalendarQuery,
   type BusinessReservationListQuery,
+  type BusinessReservationDetailResponse,
 } from "@/shared/api/businessApiClient";
 import { useBusinessApiClient } from "@/shared/api/useBusinessApiClient";
 
@@ -33,5 +35,22 @@ export function useBusinessReservationDetailQuery(reservationId: number | null) 
     queryKey: [...businessReservationsQueryKey, "detail", reservationId],
     queryFn: () => apiClient.getBusinessReservationDetail(reservationId ?? 0),
     enabled: reservationId !== null,
+  });
+}
+
+export function useCreateManualBusinessReservationMutation() {
+  const apiClient = useBusinessApiClient();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (request: BusinessManualReservationCreateRequest) =>
+      apiClient.createManualBusinessReservation(request),
+    onSuccess: (reservation) => {
+      queryClient.invalidateQueries({ queryKey: businessReservationsQueryKey });
+      queryClient.setQueryData<BusinessReservationDetailResponse>(
+        [...businessReservationsQueryKey, "detail", reservation.id],
+        reservation,
+      );
+    },
   });
 }

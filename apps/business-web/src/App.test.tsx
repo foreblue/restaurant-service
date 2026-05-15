@@ -362,6 +362,40 @@ describe("App routing", () => {
         noShowAt: null,
         auditLogs: [],
       }),
+      createManualBusinessReservation: async () => ({
+        id: 2,
+        reservationNumber: "M20260515-1",
+        status: "CONFIRMED",
+        statusLabel: "확정",
+        statusTone: "success",
+        source: "MANUAL_PHONE",
+        reservedStartAt: "2026-05-15T03:00:00.000Z",
+        reservedEndAt: "2026-05-15T04:30:00.000Z",
+        visitDate: "2026-05-15",
+        startTime: "12:00:00",
+        endTime: "13:30:00",
+        partySize: 2,
+        product: {
+          id: mockReservationProduct.id,
+          name: mockReservationProduct.name,
+        },
+        customer: {
+          id: 2,
+          name: "한전화",
+          phoneNumber: "01012345678",
+          visitCount: 1,
+          noShowCount: 0,
+        },
+        customerRequest: null,
+        ownerNote: null,
+        paymentStatus: "OFFLINE",
+        paymentActionRequired: false,
+        cancelledAt: null,
+        cancelReason: null,
+        completedAt: null,
+        noShowAt: null,
+        auditLogs: [],
+      }),
     };
     window.history.pushState({}, "", "/onboarding");
 
@@ -641,6 +675,32 @@ describe("App routing", () => {
     expect(await screen.findByText("창가 좌석 요청, 알레르기 확인 필요")).toBeInTheDocument();
     expect(screen.getByText("VIP/주의 고객 표시는 CRM 단계에서 연결됩니다.")).toBeInTheDocument();
     expect(screen.getByText("변경, 취소, 방문 완료, 노쇼 처리 가능")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "수동 예약 등록" }));
+
+    expect(await screen.findByRole("dialog", { name: "수동 예약 등록" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("예약 상품"), {
+      target: { value: "6001" },
+    });
+    fireEvent.change(screen.getByLabelText("고객명"), {
+      target: { value: "한전화" },
+    });
+    fireEvent.change(screen.getByLabelText("고객 전화번호"), {
+      target: { value: "010-7777-1212" },
+    });
+    fireEvent.change(screen.getByLabelText("방문 시간"), {
+      target: { value: "12:30" },
+    });
+    fireEvent.change(screen.getByLabelText("인원"), {
+      target: { value: "3" },
+    });
+    fireEvent.change(screen.getByLabelText("고객 요청사항"), {
+      target: { value: "유아 의자 필요" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "등록" }));
+
+    expect(await screen.findByText("수동 예약이 등록되었습니다.")).toBeInTheDocument();
+    expect((await screen.findAllByText("한전화")).length).toBeGreaterThan(0);
 
     fireEvent.change(screen.getByPlaceholderText("예약번호, 고객명, 연락처, 상품명"), {
       target: { value: "박취소" },
