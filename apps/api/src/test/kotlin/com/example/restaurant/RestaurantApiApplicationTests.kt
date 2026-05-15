@@ -2572,6 +2572,180 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun businessOwnerCanManageTablesCombinationsAndProductSeatRules() {
+        val owner = createBusinessUser("inventory-owner@example.com")
+        val sessionCookie = loginAndExtractSessionCookie(owner.email)
+        createApprovedRestaurantForSettings(owner, "Inventory Table", "inventory-table")
+
+        val productResult = mockMvc.post("/api/business/reservation-products") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "좌석 연결 코스",
+              "priceAmount": 60000,
+              "visible": true,
+              "minPartySize": 1,
+              "maxPartySize": 4,
+              "slotCapacity": 4
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val productId = JsonPath.read<Int>(productResult.response.contentAsString, "$.id").toLong()
+
+        val hallTableResult = mockMvc.post("/api/business/tables") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "A1",
+              "seatType": "HALL",
+              "seatTypeLabel": "홀",
+              "minPartySize": 1,
+              "maxPartySize": 4,
+              "sortOrder": 10
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.name") { value("A1") }
+            jsonPath("$.seatType") { value("HALL") }
+            jsonPath("$.active") { value(true) }
+        }.andReturn()
+        val hallTableId = JsonPath.read<Int>(hallTableResult.response.contentAsString, "$.id").toLong()
+
+        val roomTableResult = mockMvc.post("/api/business/tables") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "R1",
+              "seatType": "ROOM",
+              "seatTypeLabel": "룸",
+              "minPartySize": 2,
+              "maxPartySize": 4,
+              "sortOrder": 20
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.seatType") { value("ROOM") }
+        }.andReturn()
+        val roomTableId = JsonPath.read<Int>(roomTableResult.response.contentAsString, "$.id").toLong()
+
+        mockMvc.post("/api/business/tables") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"name":"단체석","seatType":"HALL","minPartySize":1,"maxPartySize":9}"""
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("VALIDATION_ERROR") }
+        }
+
+        mockMvc.put("/api/business/tables/$hallTableId") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"name":"A1-수정","seatType":"HALL","seatTypeLabel":"홀","minPartySize":1,"maxPartySize":4,"active":true,"sortOrder":5}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.name") { value("A1-수정") }
+            jsonPath("$.sortOrder") { value(5) }
+        }
+
+        mockMvc.get("/api/business/tables") {
+            cookie(sessionCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$[0].id") { value(hallTableId.toInt()) }
+            jsonPath("$[1].id") { value(roomTableId.toInt()) }
+        }
+
+        val combinationResult = mockMvc.post("/api/business/table-combinations") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "name": "A1+R1",
+              "tableIds": [$hallTableId, $roomTableId],
+              "minPartySize": 2,
+              "maxPartySize": 8
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.tableIds.length()") { value(2) }
+            jsonPath("$.maxPartySize") { value(8) }
+        }.andReturn()
+        val combinationId = JsonPath.read<Int>(combinationResult.response.contentAsString, "$.id").toLong()
+
+        mockMvc.put("/api/business/table-combinations/$combinationId") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"name":"A1+R1 비활성","tableIds":[$hallTableId,$roomTableId],"minPartySize":2,"maxPartySize":8,"active":false}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.active") { value(false) }
+        }
+
+        val otherOwner = createBusinessUser("inventory-other-owner@example.com")
+        val otherCookie = loginAndExtractSessionCookie(otherOwner.email)
+        createApprovedRestaurantForSettings(otherOwner, "Other Inventory Table", "inventory-other")
+        val otherTableResult = mockMvc.post("/api/business/tables") {
+            cookie(otherCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"name":"외부테이블","seatType":"HALL","minPartySize":1,"maxPartySize":2}"""
+        }.andExpect {
+            status { isCreated() }
+        }.andReturn()
+        val otherTableId = JsonPath.read<Int>(otherTableResult.response.contentAsString, "$.id").toLong()
+
+        mockMvc.post("/api/business/reservation-products/$productId/seat-rules") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "allowedSeatTypes": ["HALL", "ROOM"],
+              "allowedTableIds": [$hallTableId, $roomTableId],
+              "defaultDurationMinutes": 120,
+              "slotIntervalMinutes": 30,
+              "inventoryPolicy": "TABLE"
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.productId") { value(productId.toInt()) }
+            jsonPath("$.allowedSeatTypes[0]") { value("HALL") }
+            jsonPath("$.allowedTableIds.length()") { value(2) }
+            jsonPath("$.defaultDurationMinutes") { value(120) }
+            jsonPath("$.slotIntervalMinutes") { value(30) }
+        }
+
+        mockMvc.get("/api/business/reservation-products/$productId/seat-rules") {
+            cookie(sessionCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.allowedTableIds[0]") { value(hallTableId.toInt()) }
+            jsonPath("$.inventoryPolicy") { value("TABLE") }
+        }
+
+        mockMvc.post("/api/business/reservation-products/$productId/seat-rules") {
+            cookie(sessionCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"allowedTableIds": [$hallTableId, $otherTableId], "slotIntervalMinutes": 30}"""
+        }.andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("restaurant_table", hallTableId).map { it.action })
+            .contains("RESTAURANT_TABLE_CREATED", "RESTAURANT_TABLE_UPDATED")
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("table_combination", combinationId).map { it.action })
+            .contains("TABLE_COMBINATION_CREATED", "TABLE_COMBINATION_UPDATED")
+    }
+
+    @Test
     fun publicAvailabilityUsesHoursHolidaysProductPolicyAndCapacity() {
         val owner = createBusinessUser("availability-owner@example.com")
         val sessionCookie = loginAndExtractSessionCookie(owner.email)
