@@ -19,6 +19,13 @@ interface ReservationRepository : JpaRepository<ReservationEntity, Long> {
 
     fun countByCustomerIdAndStatus(customerId: Long, status: ReservationStatus): Long
 
+    fun countByCustomerIdAndStatusIn(
+        customerId: Long,
+        statuses: Collection<ReservationStatus>,
+    ): Long
+
+    fun findByCustomerIdOrderByVisitDateDescStartTimeDescIdDesc(customerId: Long): List<ReservationEntity>
+
     @Query(
         """
         select r from ReservationEntity r
