@@ -7,6 +7,7 @@ import com.example.restaurant.availability.AvailabilityService
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
 import com.example.restaurant.notification.NotificationService
+import com.example.restaurant.payment.ReservationPaymentPolicyResolver
 import com.example.restaurant.reservationproduct.ReservationProductRepository
 import com.example.restaurant.reservationproduct.ReservationProductStatus
 import com.example.restaurant.restaurant.ReservationPageRepository
@@ -24,6 +25,7 @@ import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import java.time.temporal.ChronoUnit
 
 private const val MAX_IDEMPOTENCY_KEY_LENGTH = 128
 private const val MAX_CUSTOMER_NAME_LENGTH = 80
@@ -39,6 +41,7 @@ class PublicReservationService(
     private val reservationRepository: ReservationRepository,
     private val lookupTokenService: ReservationLookupTokenService,
     private val notificationService: NotificationService,
+    private val paymentPolicyResolver: ReservationPaymentPolicyResolver,
     private val clock: Clock,
 ) {
     private val secureRandom = SecureRandom()
@@ -105,6 +108,7 @@ class PublicReservationService(
             ),
         )
 
+        val paymentPolicy = paymentPolicyResolver.resolve(product, normalized.partySize)
         val reservation = reservationRepository.saveAndFlush(
             ReservationEntity(
                 restaurant = product.restaurant,
@@ -118,6 +122,11 @@ class PublicReservationService(
                 status = ReservationStatus.CONFIRMED,
                 source = ReservationSource.ONLINE,
                 customerRequest = normalized.customerRequest,
+                paymentRequired = paymentPolicy.requiresGateway,
+                paymentMode = paymentPolicy.mode,
+                paymentStatus = paymentPolicy.initialStatus,
+                paymentDueAt = paymentPolicy.requiresGateway.takeIf { it }
+                    ?.let { Instant.now(clock).plus(15, ChronoUnit.MINUTES) },
                 idempotencyKey = normalized.idempotencyKey,
                 idempotencyRequestHash = normalized.requestHash,
             ),
