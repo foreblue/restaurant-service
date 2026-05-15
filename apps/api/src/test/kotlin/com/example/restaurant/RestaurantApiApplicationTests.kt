@@ -34,6 +34,7 @@ import com.example.restaurant.reservation.ReservationPaymentMode
 import com.example.restaurant.reservation.ReservationRepository
 import com.example.restaurant.reservation.ReservationSource
 import com.example.restaurant.reservation.ReservationStatus
+import com.example.restaurant.reservationproduct.ReservationProductPaymentPolicyType
 import com.example.restaurant.reservationproduct.ReservationProductRepository
 import com.example.restaurant.reservationproduct.ReservationProductStatus
 import com.example.restaurant.restaurant.FileStorage
@@ -279,6 +280,258 @@ class RestaurantApiApplicationTests {
             jdbcTemplate.queryForList("show tables", String::class.java)
                 .filter { it.contains("settlement", ignoreCase = true) },
         ).isEmpty()
+    }
+
+    @Test
+    fun publicPaymentStartUsesProductPolicyAndIdempotency() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "payment-start-owner@example.com",
+            restaurantName = "Payment Start Table",
+            slug = "payment-start",
+        )
+        configureProductPaymentPolicy(
+            productId = fixture.productId,
+            type = ReservationProductPaymentPolicyType.DEPOSIT,
+            amount = 30_000,
+        )
+        val created = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "payment-start-reservation-1",
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "결제시작",
+            customerPhone = "010-2020-0001",
+        )
+
+        val reservationBeforePayment = reservationRepository.findById(created.id).orElseThrow()
+        assertThat(reservationBeforePayment.paymentRequired).isTrue()
+        assertThat(reservationBeforePayment.paymentMode).isEqualTo(ReservationPaymentMode.DEPOSIT)
+        assertThat(reservationBeforePayment.paymentStatus).isEqualTo(PaymentStatus.REQUIRES_PAYMENT)
+
+        mockMvc.get("/api/public/reservations/${created.id}/payment-summary") {
+            header("X-Reservation-Lookup-Token", created.lookupToken)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.paymentMode") { value("DEPOSIT") }
+            jsonPath("$.paymentStatus") { value("REQUIRES_PAYMENT") }
+            jsonPath("$.paymentRequired") { value(true) }
+            jsonPath("$.amount") { value(30000) }
+            jsonPath("$.currency") { value("KRW") }
+        }
+
+        val firstPayment = mockMvc.post("/api/public/reservations/${created.id}/payments") {
+            header("X-Reservation-Lookup-Token", created.lookupToken)
+            header("Idempotency-Key", "payment-start-key-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"paymentMode": "deposit", "returnUrl": "https://service.example.com/payment-return"}"""
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.status") { value("PENDING") }
+            jsonPath("$.amount") { value(30000) }
+            jsonPath("$.currency") { value("KRW") }
+            jsonPath("$.paymentAction.type") { value("REDIRECT") }
+            jsonPath("$.paymentAction.url") { value(org.hamcrest.Matchers.containsString("fake-payment")) }
+            jsonPath("$.expiresAt") { isNotEmpty() }
+        }.andReturn()
+        val paymentId = JsonPath.read<Int>(firstPayment.response.contentAsString, "$.paymentId")
+
+        mockMvc.post("/api/public/reservations/${created.id}/payments") {
+            header("X-Reservation-Lookup-Token", created.lookupToken)
+            header("Idempotency-Key", "payment-start-key-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"paymentMode": "deposit", "returnUrl": "https://service.example.com/payment-return"}"""
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.paymentId") { value(paymentId) }
+            jsonPath("$.status") { value("PENDING") }
+        }
+
+        assertThat(paymentRepository.findByReservationIdOrderByCreatedAtAsc(created.id)).hasSize(1)
+        val reservationAfterPayment = reservationRepository.findById(created.id).orElseThrow()
+        assertThat(reservationAfterPayment.status).isEqualTo(ReservationStatus.CONFIRMED)
+        assertThat(reservationAfterPayment.paymentStatus).isEqualTo(PaymentStatus.PENDING)
+        assertThat(reservationAfterPayment.paymentDueAt).isNotNull()
+    }
+
+    @Test
+    fun publicGuaranteeStartUsesCardGuaranteePolicy() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "guarantee-start-owner@example.com",
+            restaurantName = "Guarantee Start Table",
+            slug = "guarantee-start",
+        )
+        configureProductPaymentPolicy(
+            productId = fixture.productId,
+            type = ReservationProductPaymentPolicyType.CARD_GUARANTEE,
+        )
+        val created = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "guarantee-start-reservation-1",
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "보증시작",
+            customerPhone = "010-2020-0002",
+        )
+
+        mockMvc.post("/api/public/reservations/${created.id}/guarantee") {
+            header("X-Reservation-Lookup-Token", created.lookupToken)
+            header("Idempotency-Key", "guarantee-start-key-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"returnUrl": "https://service.example.com/guarantee-return"}"""
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.status") { value("PENDING") }
+            jsonPath("$.guaranteeAction.type") { value("REDIRECT") }
+            jsonPath("$.guaranteeAction.url") { value(org.hamcrest.Matchers.containsString("fake-guarantee")) }
+            jsonPath("$.expiresAt") { isNotEmpty() }
+        }
+
+        val reservation = reservationRepository.findById(created.id).orElseThrow()
+        assertThat(reservation.paymentMode).isEqualTo(ReservationPaymentMode.CARD_GUARANTEE)
+        assertThat(reservation.paymentStatus).isEqualTo(PaymentStatus.PENDING)
+        assertThat(paymentRepository.findByReservationIdOrderByCreatedAtAsc(created.id).single().paymentType)
+            .isEqualTo(PaymentType.CARD_GUARANTEE)
+    }
+
+    @Test
+    fun publicPaymentSkipsGatewayForPayOnSitePolicy() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "pay-on-site-owner@example.com",
+            restaurantName = "Pay On Site Table",
+            slug = "pay-on-site",
+        )
+        configureProductPaymentPolicy(
+            productId = fixture.productId,
+            type = ReservationProductPaymentPolicyType.PAY_ON_SITE,
+        )
+        val created = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "pay-on-site-reservation-1",
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "현장결제",
+            customerPhone = "010-2020-0003",
+        )
+
+        mockMvc.post("/api/public/reservations/${created.id}/payments") {
+            header("X-Reservation-Lookup-Token", created.lookupToken)
+            header("Idempotency-Key", "pay-on-site-key-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = "{}"
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.status") { value("PAY_ON_SITE") }
+            jsonPath("$.amount") { value(0) }
+            jsonPath("$.paymentAction") { value(org.hamcrest.Matchers.nullValue()) }
+        }
+
+        val reservation = reservationRepository.findById(created.id).orElseThrow()
+        assertThat(reservation.paymentRequired).isFalse()
+        assertThat(reservation.paymentStatus).isEqualTo(PaymentStatus.PAY_ON_SITE)
+        assertThat(paymentRepository.findByReservationIdOrderByCreatedAtAsc(created.id).single().paymentType)
+            .isEqualTo(PaymentType.ONSITE)
+    }
+
+    @Test
+    fun publicPaymentFailureAndExpiryKeepReservationStatusConsistent() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "payment-failure-owner@example.com",
+            restaurantName = "Payment Failure Table",
+            slug = "payment-failure",
+            slotCapacity = 4,
+        )
+        configureProductPaymentPolicy(
+            productId = fixture.productId,
+            type = ReservationProductPaymentPolicyType.DEPOSIT,
+            amount = 20_000,
+        )
+        val failed = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "payment-failure-reservation-1",
+            startTime = "11:00:00",
+            partySize = 1,
+            customerName = "결제실패",
+            customerPhone = "010-2020-0004",
+        )
+        val expired = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "payment-expiry-reservation-1",
+            startTime = "11:30:00",
+            partySize = 1,
+            customerName = "결제만료",
+            customerPhone = "010-2020-0005",
+        )
+
+        mockMvc.post("/api/public/reservations/${failed.id}/payments") {
+            header("X-Reservation-Lookup-Token", failed.lookupToken)
+            header("Idempotency-Key", "payment-failure-key-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"paymentMode": "deposit", "returnUrl": "https://service.example.com/gateway-fail"}"""
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.status") { value("FAILED") }
+            jsonPath("$.paymentAction") { value(org.hamcrest.Matchers.nullValue()) }
+        }
+        mockMvc.post("/api/public/reservations/${expired.id}/payments") {
+            header("X-Reservation-Lookup-Token", expired.lookupToken)
+            header("Idempotency-Key", "payment-expiry-key-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"paymentMode": "deposit", "returnUrl": "https://service.example.com/gateway-expire"}"""
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.status") { value("EXPIRED") }
+            jsonPath("$.expiresAt") { isNotEmpty() }
+        }
+
+        val failedReservation = reservationRepository.findById(failed.id).orElseThrow()
+        assertThat(failedReservation.status).isEqualTo(ReservationStatus.CONFIRMED)
+        assertThat(failedReservation.paymentStatus).isEqualTo(PaymentStatus.FAILED)
+        assertThat(failedReservation.paymentRequired).isTrue()
+        val expiredReservation = reservationRepository.findById(expired.id).orElseThrow()
+        assertThat(expiredReservation.status).isEqualTo(ReservationStatus.CONFIRMED)
+        assertThat(expiredReservation.paymentStatus).isEqualTo(PaymentStatus.EXPIRED)
+        assertThat(expiredReservation.paymentRequired).isFalse()
+    }
+
+    @Test
+    fun publicPaymentStartRejectsCancelledReservation() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "payment-cancelled-owner@example.com",
+            restaurantName = "Payment Cancelled Table",
+            slug = "payment-cancelled",
+        )
+        configureProductPaymentPolicy(
+            productId = fixture.productId,
+            type = ReservationProductPaymentPolicyType.DEPOSIT,
+            amount = 20_000,
+        )
+        val created = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "payment-cancelled-reservation-1",
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "취소결제",
+            customerPhone = "010-2020-0006",
+        )
+        mockMvc.post("/api/public/reservations/${created.id}/cancel") {
+            header("X-Reservation-Lookup-Token", created.lookupToken)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reason": "결제 전 취소"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("CANCELLED_BY_CUSTOMER") }
+        }
+
+        mockMvc.post("/api/public/reservations/${created.id}/payments") {
+            header("X-Reservation-Lookup-Token", created.lookupToken)
+            header("Idempotency-Key", "payment-cancelled-key-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"paymentMode": "deposit", "returnUrl": "https://service.example.com/payment-return"}"""
+        }.andExpect {
+            status { isConflict() }
+            jsonPath("$.code") { value("CONFLICT") }
+        }
+        assertThat(paymentRepository.findByReservationIdOrderByCreatedAtAsc(created.id)).isEmpty()
     }
 
     @Test
@@ -3153,6 +3406,17 @@ class RestaurantApiApplicationTests {
             reservationNumber = JsonPath.read<String>(result.response.contentAsString, "$.reservationNumber"),
             lookupToken = JsonPath.read<String>(result.response.contentAsString, "$.lookupToken"),
         )
+    }
+
+    private fun configureProductPaymentPolicy(
+        productId: Long,
+        type: ReservationProductPaymentPolicyType,
+        amount: Long? = null,
+    ) {
+        val product = reservationProductRepository.findById(productId).orElseThrow()
+        product.paymentPolicyType = type
+        product.paymentAmount = amount
+        reservationProductRepository.saveAndFlush(product)
     }
 
     private data class PublicReservationFixture(

@@ -250,7 +250,11 @@ class ReservationProductService(
             availableDays = parseAvailableDays(),
             availableStartTime = availableStartTime,
             availableEndTime = availableEndTime,
-            requiresPayment = paymentPolicyType != ReservationProductPaymentPolicyType.NONE,
+            requiresPayment = paymentPolicyType in setOf(
+                ReservationProductPaymentPolicyType.DEPOSIT,
+                ReservationProductPaymentPolicyType.PREPAID,
+                ReservationProductPaymentPolicyType.CARD_GUARANTEE,
+            ),
             depositAmount = paymentAmount ?: 0,
         )
 
