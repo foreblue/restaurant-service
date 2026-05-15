@@ -19,15 +19,18 @@ import { Alert, Button, Checkbox, DateInput, Field, Input, Select } from "@/comp
 import { useReservationProductsQuery } from "@/features/products/reservationProductsQueries";
 import {
   useCancelBusinessReservationMutation,
+  useBusinessAuditLogsQuery,
   useCompleteBusinessReservationMutation,
   useCreateManualBusinessReservationMutation,
   useBusinessReservationCalendarQuery,
   useBusinessReservationDetailQuery,
   useBusinessReservationsQuery,
   useMarkBusinessReservationNoShowMutation,
+  useUpdateBusinessReservationOperationNoteMutation,
   useUpdateBusinessReservationMutation,
 } from "@/features/reservations/reservationOperationsQueries";
 import {
+  type BusinessAuditLogResponse,
   type BusinessManualReservationSource,
   type BusinessReservationCalendarDayResponse,
   type BusinessReservationDetailResponse,
@@ -50,6 +53,13 @@ interface ManualReservationFormValues {
 }
 
 type ReservationActionKind = "edit" | "cancel" | "complete" | "no-show";
+
+interface ReservationAuditLogDisplayItem {
+  id: number;
+  action: string;
+  actorRole?: string | null;
+  createdAt: string | null;
+}
 
 interface ReservationEditFormValues {
   productId: string;
@@ -133,6 +143,8 @@ export function ReservationOperationsPage() {
   const [noShowReason, setNoShowReason] = useState("");
   const [noShowForce, setNoShowForce] = useState(false);
   const [actionFormError, setActionFormError] = useState<string | null>(null);
+  const [ownerNoteDrafts, setOwnerNoteDrafts] = useState<Record<number, string>>({});
+  const [ownerNoteError, setOwnerNoteError] = useState<string | null>(null);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
   const calendarRange = useMemo(
     () => getCalendarRange(selectedDate, calendarMode),
@@ -164,12 +176,20 @@ export function ReservationOperationsPage() {
   const reservationsQuery = useBusinessReservationsQuery(listQuery);
   const calendarQueryResult = useBusinessReservationCalendarQuery(calendarQuery);
   const detailQuery = useBusinessReservationDetailQuery(selectedReservationId);
+  const auditLogsQuery = useBusinessAuditLogsQuery(
+    {
+      targetType: "reservation",
+      targetId: selectedReservationId,
+    },
+    selectedReservationId !== null,
+  );
   const productsQuery = useReservationProductsQuery();
   const createManualReservation = useCreateManualBusinessReservationMutation();
   const updateReservation = useUpdateBusinessReservationMutation();
   const cancelReservation = useCancelBusinessReservationMutation();
   const completeReservation = useCompleteBusinessReservationMutation();
   const markReservationNoShow = useMarkBusinessReservationNoShowMutation();
+  const updateOperationNote = useUpdateBusinessReservationOperationNoteMutation();
   const productOptions = useMemo(
     () => buildProductOptions(productsQuery.data ?? [], reservationsQuery.data?.items ?? []),
     [productsQuery.data, reservationsQuery.data?.items],
@@ -448,6 +468,39 @@ export function ReservationOperationsPage() {
     setResultMessage(message);
   }
 
+  function updateOwnerNoteDraft(reservationId: number, value: string) {
+    setOwnerNoteError(null);
+    updateOperationNote.reset();
+    setOwnerNoteDrafts((current) => ({ ...current, [reservationId]: value }));
+  }
+
+  async function handleSaveOwnerNote(reservation: BusinessReservationDetailResponse) {
+    const ownerNote = (ownerNoteDrafts[reservation.id] ?? reservation.ownerNote ?? "").trim();
+
+    setOwnerNoteError(null);
+    setResultMessage(null);
+
+    if (ownerNote.length > 1000) {
+      setOwnerNoteError("운영 메모는 1000자 이하여야 합니다.");
+      return;
+    }
+
+    try {
+      const updatedReservation = await updateOperationNote.mutateAsync({
+        reservationId: reservation.id,
+        request: { ownerNote: ownerNote || null },
+      });
+      setOwnerNoteDrafts((current) => ({
+        ...current,
+        [updatedReservation.id]: updatedReservation.ownerNote ?? "",
+      }));
+      setSelectedReservationId(updatedReservation.id);
+      setResultMessage("운영 메모가 저장되었습니다.");
+    } catch {
+      // Mutation state renders the API error.
+    }
+  }
+
   const actionApiError =
     reservationAction === "edit"
       ? updateReservation.error
@@ -463,6 +516,17 @@ export function ReservationOperationsPage() {
     cancelReservation.isPending ||
     completeReservation.isPending ||
     markReservationNoShow.isPending;
+  const selectedOwnerNoteValue = detailQuery.data
+    ? (ownerNoteDrafts[detailQuery.data.id] ?? detailQuery.data.ownerNote ?? "")
+    : "";
+  const auditLogItems: ReservationAuditLogDisplayItem[] =
+    auditLogsQuery.data?.items.map(toReservationAuditLogDisplayItem) ??
+    detailQuery.data?.auditLogs.map((log) => ({
+      id: log.id,
+      action: log.action,
+      createdAt: log.createdAt,
+    })) ??
+    [];
 
   return (
     <section className="grid gap-5">
@@ -609,10 +673,20 @@ export function ReservationOperationsPage() {
           <ReservationDetailPanel
             detail={detailQuery.data}
             error={detailQuery.error}
+            auditLogs={auditLogItems}
+            auditLogsError={auditLogsQuery.error}
+            isAuditLogsError={auditLogsQuery.isError}
+            isAuditLogsPending={auditLogsQuery.isPending && selectedReservationId !== null}
             isError={detailQuery.isError}
+            isSavingOwnerNote={updateOperationNote.isPending}
             isPending={detailQuery.isPending}
+            ownerNoteApiError={updateOperationNote.error}
+            ownerNoteError={ownerNoteError}
+            ownerNoteValue={selectedOwnerNoteValue}
             reservationId={selectedReservationId}
             onClose={() => setSelectedReservationId(null)}
+            onOwnerNoteChange={updateOwnerNoteDraft}
+            onSaveOwnerNote={handleSaveOwnerNote}
             onOpenAction={openReservationAction}
           />
 
@@ -1083,18 +1157,38 @@ function ReservationActionDialog({
 function ReservationDetailPanel({
   reservationId,
   detail,
+  auditLogs,
+  auditLogsError,
+  isAuditLogsError,
+  isAuditLogsPending,
   isPending,
   isError,
   error,
+  isSavingOwnerNote,
+  ownerNoteApiError,
+  ownerNoteError,
+  ownerNoteValue,
   onClose,
+  onOwnerNoteChange,
+  onSaveOwnerNote,
   onOpenAction,
 }: {
   reservationId: number | null;
   detail: BusinessReservationDetailResponse | undefined;
+  auditLogs: ReservationAuditLogDisplayItem[];
+  auditLogsError: unknown;
+  isAuditLogsError: boolean;
+  isAuditLogsPending: boolean;
   isPending: boolean;
   isError: boolean;
   error: unknown;
+  isSavingOwnerNote: boolean;
+  ownerNoteApiError: unknown;
+  ownerNoteError: string | null;
+  ownerNoteValue: string;
   onClose: () => void;
+  onOwnerNoteChange: (reservationId: number, value: string) => void;
+  onSaveOwnerNote: (reservation: BusinessReservationDetailResponse) => void;
   onOpenAction: (
     action: ReservationActionKind,
     reservation: BusinessReservationDetailResponse,
@@ -1255,18 +1349,48 @@ function ReservationDetailPanel({
 
         <section className="grid gap-2 border-t border-border pt-4">
           <h3 className="text-sm font-semibold">운영 메모</h3>
-          <p className="rounded-md bg-muted px-3 py-2 text-sm text-foreground">
-            {detail.ownerNote ?? "등록된 운영 메모가 없습니다."}
-          </p>
+          <Alert>고객의 민감정보, 결제정보, 불필요한 개인정보는 운영 메모에 입력하지 마세요.</Alert>
+          <textarea
+            className="min-h-28 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60"
+            id={`owner-note-${detail.id}`}
+            maxLength={1000}
+            placeholder="전화 확인 내용, 좌석 배정 참고사항 등"
+            value={ownerNoteValue}
+            onChange={(event) => onOwnerNoteChange(detail.id, event.target.value)}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs text-muted-foreground">{ownerNoteValue.length}/1000</span>
+            <Button
+              type="button"
+              size="sm"
+              isLoading={isSavingOwnerNote}
+              onClick={() => onSaveOwnerNote(detail)}
+            >
+              운영 메모 저장
+            </Button>
+          </div>
+          {ownerNoteError ? <Alert variant="danger">{ownerNoteError}</Alert> : null}
+          {ownerNoteApiError ? (
+            <Alert variant="danger">{errorMessage(ownerNoteApiError)}</Alert>
+          ) : null}
         </section>
 
         <section className="grid gap-2 border-t border-border pt-4">
           <h3 className="text-sm font-semibold">감사 로그</h3>
-          {detail.auditLogs.length > 0 ? (
+          {isAuditLogsPending ? (
+            <Panel title="감사 로그를 불러오는 중입니다." />
+          ) : isAuditLogsError ? (
+            <Alert variant="danger">{errorMessage(auditLogsError)}</Alert>
+          ) : auditLogs.length > 0 ? (
             <ul className="grid gap-2 text-sm">
-              {detail.auditLogs.map((log) => (
+              {auditLogs.map((log) => (
                 <li className="rounded-md bg-muted px-3 py-2" key={log.id}>
                   <span className="font-medium">{auditActionLabel(log.action)}</span>
+                  {log.actorRole ? (
+                    <span className="ml-2 text-muted-foreground">
+                      {auditActorLabel(log.actorRole)}
+                    </span>
+                  ) : null}
                   <span className="ml-2 text-muted-foreground">
                     {formatDateTime(log.createdAt)}
                   </span>
@@ -1552,8 +1676,25 @@ function reservationActionSubmitLabel(action: ReservationActionKind) {
   return labels[action];
 }
 
+function toReservationAuditLogDisplayItem(
+  log: BusinessAuditLogResponse,
+): ReservationAuditLogDisplayItem {
+  return {
+    id: log.id,
+    action: log.action,
+    actorRole: log.actorRole,
+    createdAt: log.createdAt,
+  };
+}
+
 function auditActionLabel(action: string) {
   const labels: Record<string, string> = {
+    RESERVATION_OWNER_NOTE_UPDATED: "운영 메모 수정",
+    RESERVATION_UPDATED: "예약 변경",
+    RESERVATION_CANCELLED_BY_CUSTOMER: "고객 취소",
+    RESERVATION_CANCELLED_BY_RESTAURANT: "매장 취소",
+    RESERVATION_COMPLETED: "방문 완료",
+    RESERVATION_NO_SHOW: "노쇼",
     "reservation.owner_note_updated": "운영 메모 수정",
     "reservation.updated": "예약 변경",
     "reservation.cancelled_by_customer": "고객 취소",
@@ -1563,6 +1704,17 @@ function auditActionLabel(action: string) {
   };
 
   return labels[action] ?? action;
+}
+
+function auditActorLabel(actorRole: string) {
+  const labels: Record<string, string> = {
+    OWNER: "오너",
+    CUSTOMER: "고객",
+    SYSTEM: "시스템",
+    ADMIN: "관리자",
+  };
+
+  return labels[actorRole] ?? actorRole;
 }
 
 function formatDateTime(value: string | null) {

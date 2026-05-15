@@ -437,6 +437,33 @@ export interface BusinessReservationNoShowRequest {
   force?: boolean | null;
 }
 
+export interface BusinessReservationOperationNoteRequest {
+  ownerNote?: string | null;
+}
+
+export interface BusinessAuditLogListQuery {
+  targetType?: string | null;
+  targetId?: number | null;
+}
+
+export interface BusinessAuditLogResponse {
+  id: number;
+  actorUserId: number | null;
+  actorRole: string;
+  action: string;
+  targetType: string;
+  targetId: number;
+  beforeValue: Record<string, unknown> | null;
+  afterValue: Record<string, unknown> | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+  createdAt: string | null;
+}
+
+export interface BusinessAuditLogListResponse {
+  items: BusinessAuditLogResponse[];
+}
+
 export interface RestaurantSettingsResponse {
   id: number;
   status: "DRAFT" | "APPROVAL_REQUESTED" | "APPROVED" | "REJECTED" | "SUSPENDED";
@@ -555,6 +582,11 @@ export interface BusinessApiClient {
     reservationId: number,
     request: BusinessReservationNoShowRequest,
   ): Promise<BusinessReservationDetailResponse>;
+  updateBusinessReservationOperationNote(
+    reservationId: number,
+    request: BusinessReservationOperationNoteRequest,
+  ): Promise<BusinessReservationDetailResponse>;
+  listBusinessAuditLogs(query: BusinessAuditLogListQuery): Promise<BusinessAuditLogListResponse>;
 }
 
 export function createBusinessQueryClient() {
@@ -812,6 +844,25 @@ class HttpBusinessApiClient implements BusinessApiClient {
     );
   }
 
+  updateBusinessReservationOperationNote(
+    reservationId: number,
+    request: BusinessReservationOperationNoteRequest,
+  ) {
+    return this.request<BusinessReservationDetailResponse>(
+      `/api/business/reservations/${reservationId}/operation-note`,
+      {
+        method: "PUT",
+        body: request,
+      },
+    );
+  }
+
+  listBusinessAuditLogs(query: BusinessAuditLogListQuery) {
+    return this.request<BusinessAuditLogListResponse>(
+      `/api/business/audit-logs${queryString(query)}`,
+    );
+  }
+
   private async request<T>(path: string, init: { method?: string; body?: unknown } = {}) {
     const requestInit: RequestInit = {
       method: init.method ?? "GET",
@@ -860,12 +911,14 @@ class MockBusinessApiClient implements BusinessApiClient {
     "restaurant-business-web.mock-manual-reservations";
   private readonly reservationOverridesStorageKey =
     "restaurant-business-web.mock-reservation-overrides";
+  private readonly reservationNotesStorageKey = "restaurant-business-web.mock-reservation-notes";
   private memoryUser: BusinessUser | null = null;
   private memoryApplication: RestaurantApplicationResponse | null = null;
   private memoryRestaurant: RestaurantSettingsResponse | null = null;
   private memoryReservationProducts: ReservationProductResponse[] | null = null;
   private memoryManualReservations: BusinessReservationListItemResponse[] | null = null;
   private memoryReservationOverrides: BusinessReservationListItemResponse[] | null = null;
+  private memoryReservationNotes: Record<string, string | null> | null = null;
   private nextFileId = 3001;
 
   async getCurrentUser() {
@@ -1280,7 +1333,12 @@ class MockBusinessApiClient implements BusinessApiClient {
       throw new ApiError("예약을 찾을 수 없습니다.", 404, "NOT_FOUND");
     }
 
-    return toMockBusinessReservationDetail(reservation);
+    const ownerNote = this.readReservationNoteOverride(reservation.id);
+
+    return toMockBusinessReservationDetail(
+      reservation,
+      ownerNote !== undefined ? { ownerNote } : {},
+    );
   }
 
   async createManualBusinessReservation(request: BusinessManualReservationCreateRequest) {
@@ -1399,6 +1457,48 @@ class MockBusinessApiClient implements BusinessApiClient {
     return toMockBusinessReservationDetail(noShowReservation);
   }
 
+  async updateBusinessReservationOperationNote(
+    reservationId: number,
+    request: BusinessReservationOperationNoteRequest,
+  ) {
+    const reservation = this.readBusinessReservations().find((item) => item.id === reservationId);
+
+    if (!reservation) {
+      throw new ApiError("예약을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    const ownerNote = normalizeBusinessReservationOperationNoteRequest(request);
+    const updatedReservation = patchMockBusinessReservation(reservation, {
+      hasOwnerNote: ownerNote !== null,
+    });
+
+    this.writeBusinessReservation(updatedReservation);
+    this.writeReservationNoteOverride(reservationId, ownerNote);
+
+    return toMockBusinessReservationDetail(updatedReservation, {
+      ownerNote,
+    });
+  }
+
+  async listBusinessAuditLogs(query: BusinessAuditLogListQuery) {
+    const targetType = query.targetType ?? null;
+    const targetId = query.targetId ?? null;
+    const items = this.readBusinessReservations()
+      .flatMap((reservation) => toMockBusinessAuditLogs(reservation))
+      .filter((item) => {
+        if (targetType && item.targetType !== targetType) {
+          return false;
+        }
+        if (targetId && item.targetId !== targetId) {
+          return false;
+        }
+
+        return true;
+      });
+
+    return { items } satisfies BusinessAuditLogListResponse;
+  }
+
   private readBusinessReservations() {
     const overrides = new Map(
       this.readReservationOverrides().map((reservation) => [reservation.id, reservation]),
@@ -1497,6 +1597,48 @@ class MockBusinessApiClient implements BusinessApiClient {
       storage.setItem(this.reservationOverridesStorageKey, JSON.stringify(reservations));
     } else {
       this.memoryReservationOverrides = reservations;
+    }
+  }
+
+  private readReservationNoteOverrides() {
+    const storage = getBrowserStorage();
+
+    if (!storage) {
+      return this.memoryReservationNotes ?? {};
+    }
+
+    const raw = storage.getItem(this.reservationNotesStorageKey);
+
+    if (!raw) {
+      return {};
+    }
+
+    try {
+      return JSON.parse(raw) as Record<string, string | null>;
+    } catch {
+      storage.removeItem(this.reservationNotesStorageKey);
+      return {};
+    }
+  }
+
+  private readReservationNoteOverride(reservationId: number) {
+    const notes = this.readReservationNoteOverrides();
+    const key = String(reservationId);
+
+    return Object.prototype.hasOwnProperty.call(notes, key) ? notes[key] : undefined;
+  }
+
+  private writeReservationNoteOverride(reservationId: number, ownerNote: string | null) {
+    const notes = {
+      ...this.readReservationNoteOverrides(),
+      [reservationId]: ownerNote,
+    };
+    const storage = getBrowserStorage();
+
+    if (storage) {
+      storage.setItem(this.reservationNotesStorageKey, JSON.stringify(notes));
+    } else {
+      this.memoryReservationNotes = notes;
     }
   }
 
@@ -2173,6 +2315,7 @@ function toMockBusinessReservationDetail(
   overrides: {
     customerPhone?: string;
     customerRequest?: string | null;
+    ownerNote?: string | null;
     cancelReason?: string | null;
   } = {},
 ): BusinessReservationDetailResponse {
@@ -2203,7 +2346,12 @@ function toMockBusinessReservationDetail(
     customerRequest:
       overrides.customerRequest ??
       (reservation.hasCustomerRequest ? "창가 좌석 요청, 알레르기 확인 필요" : null),
-    ownerNote: reservation.hasOwnerNote ? "전화 확인 완료. 방문 전 좌석 배정 확인." : null,
+    ownerNote:
+      overrides.ownerNote !== undefined
+        ? overrides.ownerNote
+        : reservation.hasOwnerNote
+          ? "전화 확인 완료. 방문 전 좌석 배정 확인."
+          : null,
     paymentStatus: reservation.paymentStatus,
     paymentActionRequired: reservation.paymentActionRequired,
     cancelledAt: isCancelledReservation(reservation)
@@ -2379,12 +2527,31 @@ function normalizeBusinessReservationNoShowRequest(request: BusinessReservationN
   };
 }
 
+function normalizeBusinessReservationOperationNoteRequest(
+  request: BusinessReservationOperationNoteRequest,
+) {
+  const ownerNote = request.ownerNote?.trim() || null;
+
+  if ((ownerNote?.length ?? 0) > 1000) {
+    throw new ApiError("운영 메모는 1000자 이하여야 합니다.", 400, "VALIDATION_ERROR");
+  }
+
+  return ownerNote;
+}
+
 function patchMockBusinessReservation(
   reservation: BusinessReservationListItemResponse,
   patch: Partial<
     Pick<
       BusinessReservationListItemResponse,
-      "status" | "visitDate" | "startTime" | "endTime" | "partySize" | "productId" | "productName"
+      | "status"
+      | "visitDate"
+      | "startTime"
+      | "endTime"
+      | "partySize"
+      | "productId"
+      | "productName"
+      | "hasOwnerNote"
     >
   >,
 ) {
@@ -2409,6 +2576,45 @@ function patchMockBusinessReservation(
 
 function isActionableBusinessReservation(status: BusinessReservationStatus) {
   return status === "CONFIRMED" || status === "MODIFIED";
+}
+
+function toMockBusinessAuditLogs(
+  reservation: BusinessReservationListItemResponse,
+): BusinessAuditLogResponse[] {
+  const actions: string[] = [];
+
+  if (reservation.hasOwnerNote) {
+    actions.push("RESERVATION_OWNER_NOTE_UPDATED");
+  }
+  if (reservation.status === "MODIFIED") {
+    actions.push("RESERVATION_UPDATED");
+  }
+  if (reservation.status === "CANCELLED_BY_CUSTOMER") {
+    actions.push("RESERVATION_CANCELLED_BY_CUSTOMER");
+  }
+  if (reservation.status === "CANCELLED_BY_RESTAURANT") {
+    actions.push("RESERVATION_CANCELLED_BY_RESTAURANT");
+  }
+  if (reservation.status === "COMPLETED") {
+    actions.push("RESERVATION_COMPLETED");
+  }
+  if (reservation.status === "NO_SHOW") {
+    actions.push("RESERVATION_NO_SHOW");
+  }
+
+  return actions.map((action, index) => ({
+    id: reservation.id * 100 + index,
+    actorUserId: 1001,
+    actorRole: "OWNER",
+    action,
+    targetType: "reservation",
+    targetId: reservation.id,
+    beforeValue: null,
+    afterValue: null,
+    ipAddress: "127.0.0.1",
+    userAgent: "mock-business-web",
+    createdAt: toDateTimeIsoString(reservation.visitDate, reservation.startTime),
+  }));
 }
 
 function nextBusinessReservationId(reservations: BusinessReservationListItemResponse[]) {

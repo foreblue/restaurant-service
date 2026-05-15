@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  type BusinessAuditLogListQuery,
   type BusinessManualReservationCreateRequest,
+  type BusinessReservationOperationNoteRequest,
   type BusinessReservationCancelRequest,
   type BusinessReservationCalendarQuery,
   type BusinessReservationListQuery,
@@ -12,6 +14,7 @@ import {
 import { useBusinessApiClient } from "@/shared/api/useBusinessApiClient";
 
 export const businessReservationsQueryKey = ["business", "reservations"] as const;
+export const businessAuditLogsQueryKey = ["business", "audit-logs"] as const;
 
 export function useBusinessReservationsQuery(query: BusinessReservationListQuery) {
   const apiClient = useBusinessApiClient();
@@ -38,6 +41,16 @@ export function useBusinessReservationDetailQuery(reservationId: number | null) 
     queryKey: [...businessReservationsQueryKey, "detail", reservationId],
     queryFn: () => apiClient.getBusinessReservationDetail(reservationId ?? 0),
     enabled: reservationId !== null,
+  });
+}
+
+export function useBusinessAuditLogsQuery(query: BusinessAuditLogListQuery, enabled = true) {
+  const apiClient = useBusinessApiClient();
+
+  return useQuery({
+    queryKey: [...businessAuditLogsQueryKey, query],
+    queryFn: () => apiClient.listBusinessAuditLogs(query),
+    enabled,
   });
 }
 
@@ -107,6 +120,25 @@ export function useMarkBusinessReservationNoShowMutation() {
       request: BusinessReservationNoShowRequest;
     }) => apiClient.markBusinessReservationNoShow(reservationId, request),
     onSuccess: (reservation) => applyReservationMutationSuccess(queryClient, reservation),
+  });
+}
+
+export function useUpdateBusinessReservationOperationNoteMutation() {
+  const apiClient = useBusinessApiClient();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      reservationId,
+      request,
+    }: {
+      reservationId: number;
+      request: BusinessReservationOperationNoteRequest;
+    }) => apiClient.updateBusinessReservationOperationNote(reservationId, request),
+    onSuccess: (reservation) => {
+      applyReservationMutationSuccess(queryClient, reservation);
+      queryClient.invalidateQueries({ queryKey: businessAuditLogsQueryKey });
+    },
   });
 }
 
