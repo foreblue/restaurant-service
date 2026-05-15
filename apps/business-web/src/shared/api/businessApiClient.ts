@@ -95,6 +95,47 @@ export interface RestaurantApplicationResponse {
   rejectionReason: string | null;
 }
 
+export interface RestaurantSettingsUpdateRequest {
+  name?: string | null;
+  description?: string | null;
+  phone?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  postalCode?: string | null;
+  cuisineTypes?: string[] | null;
+  coverImageFileId?: number | null;
+}
+
+export interface ReservationPageSettingsResponse {
+  id: number;
+  slug: string | null;
+  status: "DRAFT" | "PRIVATE" | "PUBLIC" | "DISABLED";
+  publishedAt: string | null;
+  unpublishedAt: string | null;
+  publicUrl: string | null;
+  publishable: boolean;
+  publishBlockers: string[];
+}
+
+export interface RestaurantSettingsResponse {
+  id: number;
+  status: "DRAFT" | "APPROVAL_REQUESTED" | "APPROVED" | "REJECTED" | "SUSPENDED";
+  name: string | null;
+  slug: string | null;
+  description: string | null;
+  phone: string | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  postalCode: string | null;
+  cuisineTypes: string[];
+  coverImageFileId: number | null;
+  timezone: string;
+  approvedAt: string | null;
+  reservationPage: ReservationPageSettingsResponse | null;
+  businessHours: unknown[];
+  holidayRules: unknown[];
+}
+
 interface BusinessLoginResponse {
   user: BusinessUser;
 }
@@ -137,6 +178,11 @@ export interface BusinessApiClient {
   ): Promise<RestaurantApplicationResponse>;
   uploadBusinessFile(purpose: BusinessFilePurpose, file: File): Promise<BusinessFileUploadResponse>;
   submitRestaurantApplication(applicationId: number): Promise<RestaurantApplicationResponse>;
+  getCurrentRestaurant(): Promise<RestaurantSettingsResponse>;
+  updateRestaurant(
+    restaurantId: number,
+    request: RestaurantSettingsUpdateRequest,
+  ): Promise<RestaurantSettingsResponse>;
 }
 
 export function createBusinessQueryClient() {
@@ -236,6 +282,17 @@ class HttpBusinessApiClient implements BusinessApiClient {
     );
   }
 
+  getCurrentRestaurant() {
+    return this.request<RestaurantSettingsResponse>("/api/business/restaurants/current");
+  }
+
+  updateRestaurant(restaurantId: number, request: RestaurantSettingsUpdateRequest) {
+    return this.request<RestaurantSettingsResponse>(`/api/business/restaurants/${restaurantId}`, {
+      method: "PUT",
+      body: request,
+    });
+  }
+
   private async request<T>(path: string, init: { method?: string; body?: unknown } = {}) {
     const requestInit: RequestInit = {
       method: init.method ?? "GET",
@@ -277,8 +334,10 @@ class HttpBusinessApiClient implements BusinessApiClient {
 class MockBusinessApiClient implements BusinessApiClient {
   private readonly storageKey = "restaurant-business-web.mock-session";
   private readonly applicationStorageKey = "restaurant-business-web.mock-application";
+  private readonly restaurantStorageKey = "restaurant-business-web.mock-restaurant";
   private memoryUser: BusinessUser | null = null;
   private memoryApplication: RestaurantApplicationResponse | null = null;
+  private memoryRestaurant: RestaurantSettingsResponse | null = null;
   private nextFileId = 3001;
 
   async getCurrentUser() {
@@ -411,6 +470,32 @@ class MockBusinessApiClient implements BusinessApiClient {
     return submitted;
   }
 
+  async getCurrentRestaurant() {
+    return this.readRestaurant() ?? defaultMockRestaurant();
+  }
+
+  async updateRestaurant(restaurantId: number, request: RestaurantSettingsUpdateRequest) {
+    const previous = this.readRestaurant() ?? defaultMockRestaurant();
+
+    if (previous.id !== restaurantId) {
+      throw new ApiError("매장을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    const updated: RestaurantSettingsResponse = {
+      ...previous,
+      name: request.name ?? null,
+      description: request.description ?? null,
+      phone: request.phone ?? null,
+      addressLine1: request.addressLine1 ?? null,
+      addressLine2: request.addressLine2 ?? null,
+      postalCode: request.postalCode ?? null,
+      cuisineTypes: request.cuisineTypes ?? [],
+      coverImageFileId: request.coverImageFileId ?? null,
+    };
+    this.writeRestaurant(updated);
+    return updated;
+  }
+
   private readUser() {
     const storage = getBrowserStorage();
 
@@ -460,6 +545,37 @@ class MockBusinessApiClient implements BusinessApiClient {
       storage.setItem(this.applicationStorageKey, JSON.stringify(application));
     } else {
       this.memoryApplication = application;
+    }
+  }
+
+  private readRestaurant() {
+    const storage = getBrowserStorage();
+
+    if (!storage) {
+      return this.memoryRestaurant;
+    }
+
+    const raw = storage.getItem(this.restaurantStorageKey);
+
+    if (!raw) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(raw) as RestaurantSettingsResponse;
+    } catch {
+      storage.removeItem(this.restaurantStorageKey);
+      return null;
+    }
+  }
+
+  private writeRestaurant(restaurant: RestaurantSettingsResponse) {
+    const storage = getBrowserStorage();
+
+    if (storage) {
+      storage.setItem(this.restaurantStorageKey, JSON.stringify(restaurant));
+    } else {
+      this.memoryRestaurant = restaurant;
     }
   }
 }
@@ -581,4 +697,34 @@ function submissionMissingFields(application: RestaurantApplicationResponse) {
   if (!application.contactVerified) missing.push("contactVerified");
 
   return missing;
+}
+
+function defaultMockRestaurant(): RestaurantSettingsResponse {
+  return {
+    id: 1,
+    status: "APPROVED",
+    name: "청담 본점",
+    slug: "cheongdam-main",
+    description: "제철 식재료로 준비하는 예약제 다이닝입니다.",
+    phone: "02-1234-5678",
+    addressLine1: "서울시 강남구 테스트로 1",
+    addressLine2: "2층",
+    postalCode: "06000",
+    cuisineTypes: ["한식", "코스"],
+    coverImageFileId: null,
+    timezone: "Asia/Seoul",
+    approvedAt: new Date().toISOString(),
+    reservationPage: {
+      id: 1,
+      slug: "cheongdam-main",
+      status: "PRIVATE",
+      publishedAt: null,
+      unpublishedAt: null,
+      publicUrl: "/r/cheongdam-main",
+      publishable: true,
+      publishBlockers: [],
+    },
+    businessHours: [],
+    holidayRules: [],
+  };
 }

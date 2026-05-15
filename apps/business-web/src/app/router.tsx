@@ -4,6 +4,7 @@ import { LoginPage } from "@/features/auth/LoginPage";
 import { PasswordResetRequestPage } from "@/features/auth/PasswordResetRequestPage";
 import { DashboardPage } from "@/features/dashboard/DashboardPage";
 import { RestaurantApplicationPage } from "@/features/onboarding/RestaurantApplicationPage";
+import { StoreSettingsPage } from "@/features/store/StoreSettingsPage";
 import { AppShell } from "@/layout/AppShell";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { PlaceholderPage } from "@/pages/PlaceholderPage";
@@ -43,7 +44,7 @@ export function createBusinessRouter() {
             },
             {
               path: "store",
-              element: <PlaceholderPage title="매장 설정" status="영업시간과 예약 정책" />,
+              element: <StoreSettingsPage />,
             },
             {
               path: "customers",
