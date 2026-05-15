@@ -2138,6 +2138,226 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun businessOwnerCanUpdateCancelCompleteAndNoShowReservations() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "business-transition-owner@example.com",
+            restaurantName = "Business Transition Table",
+            slug = "business-transition",
+            slotCapacity = 4,
+        )
+        val ownerCookie = loginAndExtractSessionCookie("business-transition-owner@example.com")
+
+        fun createManualReservation(
+            idempotencyLabel: String,
+            startTime: String,
+            partySize: Int,
+        ): Long {
+            val result = mockMvc.post("/api/business/reservations/manual") {
+                cookie(ownerCookie)
+                contentType = MediaType.APPLICATION_JSON
+                content = """
+                {
+                  "source": "manual_phone",
+                  "productId": ${fixture.productId},
+                  "visitDate": "${fixture.targetDate}",
+                  "startTime": "$startTime",
+                  "partySize": $partySize,
+                  "customerName": "상태전이$idempotencyLabel",
+                  "customerPhone": "010-55${idempotencyLabel.padStart(2, '0')}-0000"
+                }
+                """.trimIndent()
+            }.andExpect {
+                status { isCreated() }
+            }.andReturn()
+            return JsonPath.read<Int>(result.response.contentAsString, "$.id").toLong()
+        }
+
+        val reservationId = createManualReservation("1", "11:00:00", 2)
+        mockMvc.put("/api/business/reservations/$reservationId") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            header("X-Forwarded-For", "203.0.113.17")
+            content = """
+            {
+              "visitDate": "${fixture.targetDate}",
+              "startTime": "11:30:00",
+              "partySize": 3
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("MODIFIED") }
+            jsonPath("$.statusLabel") { value("변경됨") }
+            jsonPath("$.startTime") { value("11:30:00") }
+            jsonPath("$.partySize") { value(3) }
+        }
+        val updatedLog = auditLogRepository.findByTargetTypeAndTargetId("reservation", reservationId)
+            .single { it.action == "RESERVATION_UPDATED" }
+        assertThat(updatedLog.beforeValue).contains("\"startTime\": \"11:00\"")
+        assertThat(updatedLog.afterValue).contains("\"startTime\": \"11:30\"")
+        assertThat(updatedLog.ipAddress).isEqualTo("203.0.113.17")
+
+        mockMvc.get("/api/business/reservations") {
+            cookie(ownerCookie)
+            param("date", fixture.targetDate.toString())
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.summary.modifiedCount") { value(1) }
+            jsonPath("$.items[0].status") { value("MODIFIED") }
+        }
+
+        createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "business-transition-old-slot",
+            startTime = "11:00:00",
+            partySize = 4,
+            customerName = "기존슬롯",
+            customerPhone = "010-6600-0000",
+        )
+        mockMvc.put("/api/business/reservations/$reservationId") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "startTime": "11:00:00",
+              "partySize": 1
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isConflict() }
+            jsonPath("$.code") { value("CONFLICT") }
+        }
+
+        mockMvc.post("/api/business/reservations/$reservationId/cancel") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reason": "매장 임시 휴무"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("CANCELLED_BY_RESTAURANT") }
+            jsonPath("$.cancelledAt") { isNotEmpty() }
+            jsonPath("$.cancelReason") { value("매장 임시 휴무") }
+        }
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("reservation", reservationId).map { it.action })
+            .contains("RESERVATION_CANCELLED_BY_RESTAURANT")
+
+        createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "business-transition-freed-slot",
+            startTime = "11:30:00",
+            partySize = 4,
+            customerName = "복구슬롯",
+            customerPhone = "010-7700-0000",
+        )
+        mockMvc.put("/api/business/reservations/$reservationId") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"partySize": 2}"""
+        }.andExpect {
+            status { isConflict() }
+            jsonPath("$.code") { value("CONFLICT") }
+        }
+
+        val completeId = createManualReservation("2", "12:00:00", 1)
+        val noShowId = createManualReservation("3", "12:30:00", 1)
+        val pastDate = LocalDate.now(ZoneId.of("Asia/Seoul")).minusDays(1)
+        jdbcTemplate.update(
+            "update reservations set visit_date = ?, start_time = ?, end_time = ? where id = ?",
+            java.sql.Date.valueOf(pastDate),
+            java.sql.Time.valueOf("12:00:00"),
+            java.sql.Time.valueOf("12:30:00"),
+            completeId,
+        )
+        jdbcTemplate.update(
+            "update reservations set visit_date = ?, start_time = ?, end_time = ? where id = ?",
+            java.sql.Date.valueOf(pastDate),
+            java.sql.Time.valueOf("12:30:00"),
+            java.sql.Time.valueOf("13:00:00"),
+            noShowId,
+        )
+
+        mockMvc.post("/api/business/reservations/$completeId/complete") {
+            cookie(ownerCookie)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("COMPLETED") }
+            jsonPath("$.completedAt") { isNotEmpty() }
+        }
+        mockMvc.post("/api/business/reservations/$noShowId/no-show") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reason": "예약 시간 경과"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("NO_SHOW") }
+            jsonPath("$.noShowAt") { isNotEmpty() }
+        }
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("reservation", completeId).map { it.action })
+            .contains("RESERVATION_COMPLETED")
+        assertThat(auditLogRepository.findByTargetTypeAndTargetId("reservation", noShowId).map { it.action })
+            .contains("RESERVATION_NO_SHOW")
+
+        val futureNoShowId = createManualReservation("4", "12:00:00", 1)
+        mockMvc.post("/api/business/reservations/$futureNoShowId/no-show") {
+            cookie(ownerCookie)
+        }.andExpect {
+            status { isConflict() }
+            jsonPath("$.code") { value("CONFLICT") }
+        }
+    }
+
+    @Test
+    fun customerCanCancelReservationAfterOwnerModification() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "business-modified-customer-cancel-owner@example.com",
+            restaurantName = "Business Modified Customer Cancel Table",
+            slug = "business-modified-customer-cancel",
+            slotCapacity = 2,
+        )
+        val ownerCookie = loginAndExtractSessionCookie("business-modified-customer-cancel-owner@example.com")
+        val reservation = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "business-modified-customer-cancel",
+            startTime = "11:00:00",
+            partySize = 1,
+            customerName = "변경취소",
+            customerPhone = "010-1212-3434",
+        )
+
+        mockMvc.put("/api/business/reservations/${reservation.id}") {
+            cookie(ownerCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "startTime": "11:30:00",
+              "partySize": 1
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("MODIFIED") }
+        }
+
+        mockMvc.get("/api/public/reservations/${reservation.id}") {
+            param("lookupToken", reservation.lookupToken)
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("MODIFIED") }
+            jsonPath("$.cancelable") { value(true) }
+        }
+
+        mockMvc.post("/api/public/reservations/${reservation.id}/cancel") {
+            header("X-Reservation-Lookup-Token", reservation.lookupToken)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reason": "변경 후 고객 취소"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("CANCELLED_BY_CUSTOMER") }
+            jsonPath("$.cancelable") { value(false) }
+        }
+    }
+
+    @Test
     fun publicReservationCancelRejectsVisitStartPassed() {
         val fixture = createPublicReservationFixture(
             ownerEmail = "reservation-past-cancel-owner@example.com",

@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RequestBody
@@ -55,6 +56,56 @@ class BusinessReservationController(
                 query = query,
                 includeCancelled = includeCancelled,
             ),
+        )
+
+    @PutMapping("/{reservationId}")
+    fun update(
+        servletRequest: HttpServletRequest,
+        @PathVariable reservationId: Long,
+        @RequestBody request: BusinessReservationUpdateRequest,
+    ): BusinessReservationDetailResponse =
+        businessReservationService.update(
+            principal = BusinessAuthContext.principal(servletRequest),
+            reservationId = reservationId,
+            request = request,
+            metadata = servletRequest.toMetadata(),
+        )
+
+    @PostMapping("/{reservationId}/cancel")
+    fun cancel(
+        servletRequest: HttpServletRequest,
+        @PathVariable reservationId: Long,
+        @RequestBody(required = false) request: BusinessReservationCancelRequest?,
+    ): BusinessReservationDetailResponse =
+        businessReservationService.cancel(
+            principal = BusinessAuthContext.principal(servletRequest),
+            reservationId = reservationId,
+            request = request,
+            metadata = servletRequest.toMetadata(),
+        )
+
+    @PostMapping("/{reservationId}/complete")
+    fun complete(
+        servletRequest: HttpServletRequest,
+        @PathVariable reservationId: Long,
+    ): BusinessReservationDetailResponse =
+        businessReservationService.complete(
+            principal = BusinessAuthContext.principal(servletRequest),
+            reservationId = reservationId,
+            metadata = servletRequest.toMetadata(),
+        )
+
+    @PostMapping("/{reservationId}/no-show")
+    fun noShow(
+        servletRequest: HttpServletRequest,
+        @PathVariable reservationId: Long,
+        @RequestBody(required = false) request: BusinessReservationNoShowRequest?,
+    ): BusinessReservationDetailResponse =
+        businessReservationService.noShow(
+            principal = BusinessAuthContext.principal(servletRequest),
+            reservationId = reservationId,
+            request = request,
+            metadata = servletRequest.toMetadata(),
         )
 
     @GetMapping("/calendar")

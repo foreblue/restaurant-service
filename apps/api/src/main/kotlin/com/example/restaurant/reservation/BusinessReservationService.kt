@@ -77,7 +77,7 @@ class BusinessReservationService(
             productId = product.id,
             visitDate = normalized.visitDate,
             startTime = normalized.startTime,
-            statuses = listOf(ReservationStatus.CONFIRMED),
+            statuses = activeReservationStatuses(),
         )
         if (reservedPartySize + normalized.partySize > availableSlot.remainingCapacity) {
             throw ApiException(ErrorCode.CONFLICT, "예약 가능한 재고가 없습니다.")
@@ -130,6 +130,124 @@ class BusinessReservationService(
         return reservation.toDetail()
     }
 
+    @Transactional
+    fun update(
+        principal: BusinessPrincipal,
+        reservationId: Long,
+        request: BusinessReservationUpdateRequest,
+        metadata: BusinessReservationRequestMetadata,
+    ): BusinessReservationDetailResponse {
+        val owner = owner(principal)
+        val restaurant = ownedRestaurant(principal)
+        val reservation = ownedReservationForUpdate(restaurant.id, reservationId)
+        reservation.requireActive("변경할 수 없는 예약입니다.")
+        val normalized = request.normalized(reservation)
+        val availableSlot = availabilityService.businessAvailableTimes(
+            restaurantId = restaurant.id,
+            productId = normalized.productId,
+            dateValue = normalized.visitDate.toString(),
+            partySizeValue = normalized.partySize,
+        ).times.firstOrNull { it.startTime == normalized.startTime && it.available }
+            ?: throw ApiException(ErrorCode.CONFLICT, "예약 가능한 시간이 아닙니다.")
+
+        val product = reservationProductRepository.findByIdForUpdate(normalized.productId)
+            ?: throw ApiException(ErrorCode.NOT_FOUND, "예약 상품을 찾을 수 없습니다.")
+        if (product.restaurant.id != restaurant.id || product.status != ReservationProductStatus.ACTIVE) {
+            throw ApiException(ErrorCode.NOT_FOUND, "예약 상품을 찾을 수 없습니다.")
+        }
+
+        val reservedPartySize = reservationRepository.sumPartySizeBySlot(
+            productId = product.id,
+            visitDate = normalized.visitDate,
+            startTime = normalized.startTime,
+            statuses = activeReservationStatuses(),
+        )
+        val currentPartySizeInTarget = reservation.currentPartySizeInTarget(
+            productId = product.id,
+            visitDate = normalized.visitDate,
+            startTime = normalized.startTime,
+        )
+        if (reservedPartySize - currentPartySizeInTarget + normalized.partySize > availableSlot.remainingCapacity) {
+            throw ApiException(ErrorCode.CONFLICT, "예약 가능한 재고가 없습니다.")
+        }
+
+        val before = reservation.auditSnapshot()
+        reservation.reservationProduct = product
+        reservation.visitDate = normalized.visitDate
+        reservation.startTime = normalized.startTime
+        reservation.endTime = availableSlot.endTime
+        reservation.partySize = normalized.partySize
+        reservation.status = ReservationStatus.MODIFIED
+        auditReservationChange(owner, "RESERVATION_UPDATED", reservation, before, metadata)
+
+        return reservation.toDetail()
+    }
+
+    @Transactional
+    fun cancel(
+        principal: BusinessPrincipal,
+        reservationId: Long,
+        request: BusinessReservationCancelRequest?,
+        metadata: BusinessReservationRequestMetadata,
+    ): BusinessReservationDetailResponse {
+        val owner = owner(principal)
+        val restaurant = ownedRestaurant(principal)
+        val reservation = ownedReservationForUpdate(restaurant.id, reservationId)
+        if (reservation.status == ReservationStatus.CANCELLED_BY_RESTAURANT) {
+            return reservation.toDetail()
+        }
+        reservation.requireActive("취소할 수 없는 예약입니다.")
+        val reason = request.normalizedCancelReason()
+        val before = reservation.auditSnapshot()
+        reservation.status = ReservationStatus.CANCELLED_BY_RESTAURANT
+        reservation.cancelledAt = Instant.now(clock)
+        reservation.cancelReason = reason
+        auditReservationChange(owner, "RESERVATION_CANCELLED_BY_RESTAURANT", reservation, before, metadata)
+
+        return reservation.toDetail()
+    }
+
+    @Transactional
+    fun complete(
+        principal: BusinessPrincipal,
+        reservationId: Long,
+        metadata: BusinessReservationRequestMetadata,
+    ): BusinessReservationDetailResponse {
+        val owner = owner(principal)
+        val restaurant = ownedRestaurant(principal)
+        val reservation = ownedReservationForUpdate(restaurant.id, reservationId)
+        reservation.requireActive("방문 완료 처리할 수 없는 예약입니다.")
+        val before = reservation.auditSnapshot()
+        reservation.status = ReservationStatus.COMPLETED
+        reservation.completedAt = Instant.now(clock)
+        auditReservationChange(owner, "RESERVATION_COMPLETED", reservation, before, metadata)
+
+        return reservation.toDetail()
+    }
+
+    @Transactional
+    fun noShow(
+        principal: BusinessPrincipal,
+        reservationId: Long,
+        request: BusinessReservationNoShowRequest?,
+        metadata: BusinessReservationRequestMetadata,
+    ): BusinessReservationDetailResponse {
+        val owner = owner(principal)
+        val restaurant = ownedRestaurant(principal)
+        val reservation = ownedReservationForUpdate(restaurant.id, reservationId)
+        reservation.requireActive("노쇼 처리할 수 없는 예약입니다.")
+        if (Instant.now(clock).isBefore(reservation.reservedInstant(reservation.startTime)) && request?.force != true) {
+            throw ApiException(ErrorCode.CONFLICT, "예약 시작 전에는 노쇼 처리할 수 없습니다.")
+        }
+        val before = reservation.auditSnapshot()
+        reservation.status = ReservationStatus.NO_SHOW
+        reservation.noShowAt = Instant.now(clock)
+        val after = reservation.auditSnapshot() + ("reason" to request?.reason?.trim()?.takeIf { it.isNotBlank() })
+        auditReservationChange(owner, "RESERVATION_NO_SHOW", reservation, before, metadata, after)
+
+        return reservation.toDetail()
+    }
+
     @Transactional(readOnly = true)
     fun list(
         principal: BusinessPrincipal,
@@ -177,7 +295,7 @@ class BusinessReservationService(
                     reservationCount = reservations.size,
                     partySizeTotal = reservations.sumOf { it.partySize },
                     confirmedCount = reservations.count { it.status == ReservationStatus.CONFIRMED },
-                    modifiedCount = 0,
+                    modifiedCount = reservations.count { it.status == ReservationStatus.MODIFIED },
                     completedCount = reservations.count { it.status == ReservationStatus.COMPLETED },
                     cancelledCount = reservations.count { it.status.isCancelled() },
                     noShowCount = reservations.count { it.status == ReservationStatus.NO_SHOW },
@@ -207,6 +325,18 @@ class BusinessReservationService(
     private fun owner(principal: BusinessPrincipal): BusinessUserEntity =
         userRepository.findById(principal.userId)
             .orElseThrow { ApiException(ErrorCode.AUTHENTICATION_REQUIRED) }
+
+    private fun ownedReservationForUpdate(
+        restaurantId: Long,
+        reservationId: Long,
+    ): ReservationEntity {
+        val reservation = reservationRepository.findByIdForUpdate(reservationId)
+            ?: throw ApiException(ErrorCode.NOT_FOUND, "예약을 찾을 수 없습니다.")
+        if (reservation.restaurant.id != restaurantId) {
+            throw ApiException(ErrorCode.NOT_FOUND, "예약을 찾을 수 없습니다.")
+        }
+        return reservation
+    }
 
     private fun BusinessManualReservationCreateRequest.normalized(): NormalizedManualReservationCreateRequest {
         val normalizedProductId = productId
@@ -249,6 +379,38 @@ class BusinessReservationService(
             customerRequest = normalizedCustomerRequest,
             source = source.parseManualSource(),
         )
+    }
+
+    private fun BusinessReservationUpdateRequest.normalized(
+        reservation: ReservationEntity,
+    ): NormalizedReservationUpdateRequest {
+        val normalizedProductId = productId ?: reservation.reservationProduct.id
+        if (normalizedProductId < 1) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "productId가 올바르지 않습니다.")
+        }
+        val normalizedVisitDate = visitDate.parseOptionalDate("visitDate") ?: reservation.visitDate
+        val normalizedStartTime = startTime.parseOptionalTime("startTime") ?: reservation.startTime
+        val normalizedPartySize = partySize ?: reservation.partySize
+        if (normalizedPartySize < 1) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "partySize는 1 이상이어야 합니다.")
+        }
+        return NormalizedReservationUpdateRequest(
+            productId = normalizedProductId,
+            visitDate = normalizedVisitDate,
+            startTime = normalizedStartTime,
+            partySize = normalizedPartySize,
+        )
+    }
+
+    private fun BusinessReservationCancelRequest?.normalizedCancelReason(): String {
+        val reason = this?.reason?.trim().orEmpty()
+        if (reason.isBlank()) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "취소 사유가 필요합니다.")
+        }
+        if (reason.length > 255) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "취소 사유는 255자 이하여야 합니다.")
+        }
+        return reason
     }
 
     private fun BusinessReservationListQuery.toCriteria(
@@ -417,7 +579,7 @@ class BusinessReservationService(
             totalReservations = size,
             totalPartySize = sumOf { it.partySize },
             confirmedCount = count { it.status == ReservationStatus.CONFIRMED },
-            modifiedCount = 0,
+            modifiedCount = count { it.status == ReservationStatus.MODIFIED },
             completedCount = count { it.status == ReservationStatus.COMPLETED },
             cancelledCount = count { it.status.isCancelled() },
             noShowCount = count { it.status == ReservationStatus.NO_SHOW },
@@ -484,6 +646,8 @@ class BusinessReservationService(
             paymentActionRequired = false,
             cancelledAt = cancelledAt,
             cancelReason = cancelReason,
+            completedAt = completedAt,
+            noShowAt = noShowAt,
             auditLogs = emptyList(),
         )
     }
@@ -501,6 +665,7 @@ class BusinessReservationService(
     private fun ReservationStatus.presentation(): ReservationStatusPresentation =
         when (this) {
             ReservationStatus.CONFIRMED -> ReservationStatusPresentation("확정", "success")
+            ReservationStatus.MODIFIED -> ReservationStatusPresentation("변경됨", "warning")
             ReservationStatus.CANCELLED_BY_CUSTOMER -> ReservationStatusPresentation("고객 취소", "neutral")
             ReservationStatus.CANCELLED_BY_RESTAURANT -> ReservationStatusPresentation("매장 취소", "warning")
             ReservationStatus.COMPLETED -> ReservationStatusPresentation("방문 완료", "success")
@@ -509,6 +674,31 @@ class BusinessReservationService(
 
     private fun ReservationStatus.isCancelled(): Boolean =
         this == ReservationStatus.CANCELLED_BY_CUSTOMER || this == ReservationStatus.CANCELLED_BY_RESTAURANT
+
+    private fun ReservationEntity.requireActive(message: String) {
+        if (status !in activeReservationStatuses()) {
+            throw ApiException(ErrorCode.CONFLICT, message)
+        }
+    }
+
+    private fun ReservationEntity.currentPartySizeInTarget(
+        productId: Long,
+        visitDate: LocalDate,
+        startTime: LocalTime,
+    ): Int =
+        if (
+            status in activeReservationStatuses() &&
+            reservationProduct.id == productId &&
+            this.visitDate == visitDate &&
+            this.startTime == startTime
+        ) {
+            partySize
+        } else {
+            0
+        }
+
+    private fun activeReservationStatuses(): List<ReservationStatus> =
+        listOf(ReservationStatus.CONFIRMED, ReservationStatus.MODIFIED)
 
     private fun ReservationDateRange.dates(): List<LocalDate> =
         generateSequence(from) { previous ->
@@ -540,7 +730,32 @@ class BusinessReservationService(
             "partySize" to partySize,
             "status" to status.name,
             "source" to source.name,
+            "cancelledAt" to cancelledAt?.toString(),
+            "cancelReason" to cancelReason,
+            "completedAt" to completedAt?.toString(),
+            "noShowAt" to noShowAt?.toString(),
         )
+
+    private fun auditReservationChange(
+        owner: BusinessUserEntity,
+        action: String,
+        reservation: ReservationEntity,
+        before: Map<String, Any?>,
+        metadata: BusinessReservationRequestMetadata,
+        after: Map<String, Any?> = reservation.auditSnapshot(),
+    ) {
+        auditLogService.record(
+            actorUser = owner,
+            actorRole = "OWNER",
+            action = action,
+            targetType = "reservation",
+            targetId = reservation.id,
+            beforeValue = objectMapper.writeValueAsString(before),
+            afterValue = objectMapper.writeValueAsString(after),
+            ipAddress = metadata.ipAddress,
+            userAgent = metadata.userAgent,
+        )
+    }
 }
 
 data class BusinessManualReservationCreateRequest(
@@ -552,6 +767,22 @@ data class BusinessManualReservationCreateRequest(
     val customerName: String? = null,
     val customerPhone: String? = null,
     val customerRequest: String? = null,
+)
+
+data class BusinessReservationUpdateRequest(
+    val productId: Long? = null,
+    val visitDate: String? = null,
+    val startTime: String? = null,
+    val partySize: Int? = null,
+)
+
+data class BusinessReservationCancelRequest(
+    val reason: String? = null,
+)
+
+data class BusinessReservationNoShowRequest(
+    val reason: String? = null,
+    val force: Boolean? = null,
 )
 
 data class BusinessReservationListQuery(
@@ -589,6 +820,13 @@ private data class NormalizedManualReservationCreateRequest(
     val customerPhone: String,
     val customerRequest: String?,
     val source: ReservationSource,
+)
+
+private data class NormalizedReservationUpdateRequest(
+    val productId: Long,
+    val visitDate: LocalDate,
+    val startTime: LocalTime,
+    val partySize: Int,
 )
 
 private data class BusinessReservationSearchCriteria(
