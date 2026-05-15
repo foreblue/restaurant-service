@@ -10,7 +10,6 @@ data class BusinessFileUploadResponse(
     val contentType: String,
     val byteSize: Long,
     val checksumSha256: String?,
-    val storageKey: String,
     val publicUrl: String?,
     val createdAt: Instant?,
 )

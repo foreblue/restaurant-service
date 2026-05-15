@@ -165,7 +165,6 @@ private fun StoredFileEntity.toUploadResponse(fileStorage: FileStorage): Busines
         contentType = contentType,
         byteSize = byteSize,
         checksumSha256 = checksumSha256,
-        storageKey = storageKey,
         publicUrl = if (visibility == StoredFileVisibility.PUBLIC) fileStorage.publicUrl(storageKey) else null,
         createdAt = createdAt,
     )
