@@ -288,6 +288,26 @@ describe("App routing", () => {
       createReservationProduct: async () => mockReservationProduct,
       updateReservationProduct: async () => mockReservationProduct,
       deleteReservationProduct: async () => undefined,
+      updateReservationProductPaymentPolicy: async () => ({
+        productId: mockReservationProduct.id,
+        paymentMode: "NONE",
+        depositType: null,
+        paymentAmount: null,
+        noShowFeeAmount: null,
+        updatedAt: "2026-05-15T00:00:00.000Z",
+      }),
+      saveReservationProductCancellationPolicy: async () => ({
+        policyId: "mock-cancel-1",
+        productId: mockReservationProduct.id,
+        isActive: true,
+        name: "기본 취소 정책",
+        rules: [],
+        noShowRule: {
+          refundRate: 0,
+          feeAmount: 0,
+        },
+        updatedAt: "2026-05-15T00:00:00.000Z",
+      }),
     };
     window.history.pushState({}, "", "/onboarding");
 
@@ -480,6 +500,40 @@ describe("App routing", () => {
     expect(screen.getByText("18:00-21:00 · 재고 8")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "디너 코스 수정" }));
+    expect(await screen.findByLabelText("노쇼 환불율")).toBeInTheDocument();
+    fireEvent.change(await screen.findByLabelText("결제 방식"), {
+      target: { value: "DEPOSIT" },
+    });
+    fireEvent.change(screen.getByLabelText("예약금"), {
+      target: { value: "0" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "정책 저장" }));
+
+    expect(await screen.findByText("예약금은 1원 이상이어야 합니다.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("예약금"), {
+      target: { value: "10000" },
+    });
+    fireEvent.change(screen.getByLabelText("24시간 전"), {
+      target: { value: "120" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "정책 저장" }));
+
+    expect(
+      await screen.findByText("환불율은 0부터 100 사이 정수로 입력해 주세요."),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("24시간 전"), {
+      target: { value: "50" },
+    });
+    fireEvent.change(screen.getByLabelText("노쇼 수수료"), {
+      target: { value: "30000" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "정책 저장" }));
+
+    expect(await screen.findByText("결제/취소 정책이 저장되었습니다.")).toBeInTheDocument();
+    expect(screen.getByText(/예약금 10,000원/)).toBeInTheDocument();
+
     fireEvent.change(await screen.findByLabelText("상품명"), {
       target: { value: "런치 코스" },
     });

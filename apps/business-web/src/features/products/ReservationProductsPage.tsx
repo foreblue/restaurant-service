@@ -16,10 +16,14 @@ import {
   useCreateReservationProductMutation,
   useDeleteReservationProductMutation,
   useReservationProductsQuery,
+  useSaveReservationProductCancellationPolicyMutation,
+  useUpdateReservationProductPaymentPolicyMutation,
   useUpdateReservationProductMutation,
 } from "@/features/products/reservationProductsQueries";
 import {
   type BusinessDayOfWeek,
+  type ReservationProductDepositType,
+  type ReservationProductPaymentMode,
   type ReservationProductResponse,
   type ReservationProductSaveRequest,
 } from "@/shared/api/businessApiClient";
@@ -34,6 +38,19 @@ type ProductFormMode =
     };
 
 type ProductSortKey = "newest" | "name" | "visible";
+
+interface ProductPolicyFormValues {
+  paymentMode: ReservationProductPaymentMode;
+  depositType: ReservationProductDepositType;
+  paymentAmount: string;
+  noShowFeeAmount: string;
+  cancellationName: string;
+  refundRate48Hours: string;
+  refundRate24Hours: string;
+  refundRate0Hours: string;
+  noShowRefundRate: string;
+  cancellationNoShowFee: string;
+}
 
 const allDays: BusinessDayOfWeek[] = [
   "MONDAY",
@@ -60,17 +77,44 @@ const sortOptions = [
   { label: "상품명순", value: "name" },
   { label: "노출 우선", value: "visible" },
 ];
+const paymentModeOptions = [
+  { label: "무료/현장 결제", value: "NONE" },
+  { label: "예약금", value: "DEPOSIT" },
+  { label: "전액 선결제", value: "PREPAY" },
+  { label: "카드 보증", value: "CARD_GUARANTEE" },
+];
+const depositTypeOptions = [
+  { label: "예약 건당", value: "PER_RESERVATION" },
+  { label: "인원당", value: "PER_PERSON" },
+];
 const emptyProducts: ReservationProductResponse[] = [];
+const emptyPolicyFormValues: ProductPolicyFormValues = {
+  paymentMode: "NONE",
+  depositType: "PER_RESERVATION",
+  paymentAmount: "0",
+  noShowFeeAmount: "0",
+  cancellationName: "기본 취소 정책",
+  refundRate48Hours: "100",
+  refundRate24Hours: "50",
+  refundRate0Hours: "0",
+  noShowRefundRate: "0",
+  cancellationNoShowFee: "0",
+};
 
 export function ReservationProductsPage() {
   const productsQuery = useReservationProductsQuery();
   const createProduct = useCreateReservationProductMutation();
   const updateProduct = useUpdateReservationProductMutation();
   const deleteProduct = useDeleteReservationProductMutation();
+  const updatePaymentPolicy = useUpdateReservationProductPaymentPolicyMutation();
+  const saveCancellationPolicy = useSaveReservationProductCancellationPolicyMutation();
   const [formMode, setFormMode] = useState<ProductFormMode | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ReservationProductResponse | null>(null);
   const [sortKey, setSortKey] = useState<ProductSortKey>("newest");
   const [resultMessage, setResultMessage] = useState<string | null>(null);
+  const [policyValues, setPolicyValues] = useState<ProductPolicyFormValues>(emptyPolicyFormValues);
+  const [policyError, setPolicyError] = useState<string | null>(null);
+  const [policySaved, setPolicySaved] = useState(false);
   const form = useForm<ReservationProductFormValues>({
     defaultValues: emptyReservationProductFormValues,
     resolver: zodResolver(reservationProductFormSchema),
@@ -87,6 +131,8 @@ export function ReservationProductsPage() {
   const hiddenCount = products.length - visibleCount;
   const saveError = createProduct.error ?? updateProduct.error;
   const isSaving = createProduct.isPending || updateProduct.isPending;
+  const policySaveError = updatePaymentPolicy.error ?? saveCancellationPolicy.error;
+  const isPolicySaving = updatePaymentPolicy.isPending || saveCancellationPolicy.isPending;
   const columns: Array<ColumnDef<ReservationProductResponse>> = [
     {
       accessorKey: "name",
@@ -161,24 +207,39 @@ export function ReservationProductsPage() {
   function openCreateForm() {
     setFormMode({ type: "create" });
     setResultMessage(null);
+    setPolicyValues(emptyPolicyFormValues);
+    setPolicyError(null);
+    setPolicySaved(false);
     createProduct.reset();
     updateProduct.reset();
+    updatePaymentPolicy.reset();
+    saveCancellationPolicy.reset();
     form.reset(emptyReservationProductFormValues);
   }
 
   function openEditForm(product: ReservationProductResponse) {
     setFormMode({ type: "edit", product });
     setResultMessage(null);
+    setPolicyValues(toPolicyFormValues(product));
+    setPolicyError(null);
+    setPolicySaved(false);
     createProduct.reset();
     updateProduct.reset();
+    updatePaymentPolicy.reset();
+    saveCancellationPolicy.reset();
     form.reset(toFormValues(product));
   }
 
   function closeForm() {
     setFormMode(null);
     form.reset(emptyReservationProductFormValues);
+    setPolicyValues(emptyPolicyFormValues);
+    setPolicyError(null);
+    setPolicySaved(false);
     createProduct.reset();
     updateProduct.reset();
+    updatePaymentPolicy.reset();
+    saveCancellationPolicy.reset();
   }
 
   function toggleAvailableDay(day: BusinessDayOfWeek, checked: boolean) {
@@ -228,6 +289,44 @@ export function ReservationProductsPage() {
       await deleteProduct.mutateAsync(deleteTarget.id);
       setDeleteTarget(null);
       setResultMessage("상품이 삭제되었습니다.");
+    } catch {
+      // Mutation state renders the error.
+    }
+  }
+
+  function updatePolicy(patch: Partial<ProductPolicyFormValues>) {
+    setPolicyError(null);
+    setPolicySaved(false);
+    updatePaymentPolicy.reset();
+    saveCancellationPolicy.reset();
+    setPolicyValues((current) => ({ ...current, ...patch }));
+  }
+
+  async function handleSavePolicy() {
+    if (!formMode || formMode.type !== "edit") {
+      return;
+    }
+
+    const validationError = validatePolicyForm(policyValues, formMode.product);
+
+    setPolicyError(null);
+    setPolicySaved(false);
+
+    if (validationError) {
+      setPolicyError(validationError);
+      return;
+    }
+
+    try {
+      await updatePaymentPolicy.mutateAsync({
+        productId: formMode.product.id,
+        request: toPaymentPolicyRequest(policyValues, formMode.product),
+      });
+      await saveCancellationPolicy.mutateAsync({
+        productId: formMode.product.id,
+        request: toCancellationPolicyRequest(policyValues),
+      });
+      setPolicySaved(true);
     } catch {
       // Mutation state renders the error.
     }
@@ -436,6 +535,124 @@ export function ReservationProductsPage() {
               {formValues.slotCapacity || "-"}
             </Alert>
 
+            {formMode.type === "edit" ? (
+              <section className="grid gap-4 border-t border-border pt-4">
+                <div>
+                  <h3 className="text-sm font-semibold">결제/취소 정책</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    고객 예약 화면에 표시할 결제 방식과 취소 환불 기준입니다.
+                  </p>
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-3">
+                  <Field id="product-payment-mode" label="결제 방식">
+                    <Select
+                      id="product-payment-mode"
+                      options={paymentModeOptions}
+                      value={policyValues.paymentMode}
+                      onChange={(event) =>
+                        updatePolicy({
+                          paymentMode: event.target.value as ReservationProductPaymentMode,
+                        })
+                      }
+                    />
+                  </Field>
+                  {policyValues.paymentMode === "DEPOSIT" ? (
+                    <>
+                      <Field id="product-deposit-type" label="예약금 기준">
+                        <Select
+                          id="product-deposit-type"
+                          options={depositTypeOptions}
+                          value={policyValues.depositType}
+                          onChange={(event) =>
+                            updatePolicy({
+                              depositType: event.target.value as ReservationProductDepositType,
+                            })
+                          }
+                        />
+                      </Field>
+                      <TextFieldInline
+                        id="product-payment-amount"
+                        label="예약금"
+                        value={policyValues.paymentAmount}
+                        onChange={(value) => updatePolicy({ paymentAmount: value })}
+                      />
+                    </>
+                  ) : null}
+                  {policyValues.paymentMode === "CARD_GUARANTEE" ? (
+                    <TextFieldInline
+                      id="product-no-show-fee"
+                      label="카드 보증 수수료"
+                      value={policyValues.noShowFeeAmount}
+                      onChange={(value) => updatePolicy({ noShowFeeAmount: value })}
+                    />
+                  ) : null}
+                  {policyValues.paymentMode === "PREPAY" ? (
+                    <Alert>전액 선결제 금액: {formatPrice(formMode.product.priceAmount)}</Alert>
+                  ) : null}
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-[1fr_repeat(5,120px)]">
+                  <TextFieldInline
+                    id="product-cancel-name"
+                    label="취소 정책명"
+                    value={policyValues.cancellationName}
+                    onChange={(value) => updatePolicy({ cancellationName: value })}
+                  />
+                  <TextFieldInline
+                    id="refund-rate-48"
+                    label="48시간 전"
+                    value={policyValues.refundRate48Hours}
+                    onChange={(value) => updatePolicy({ refundRate48Hours: value })}
+                  />
+                  <TextFieldInline
+                    id="refund-rate-24"
+                    label="24시간 전"
+                    value={policyValues.refundRate24Hours}
+                    onChange={(value) => updatePolicy({ refundRate24Hours: value })}
+                  />
+                  <TextFieldInline
+                    id="refund-rate-0"
+                    label="당일"
+                    value={policyValues.refundRate0Hours}
+                    onChange={(value) => updatePolicy({ refundRate0Hours: value })}
+                  />
+                  <TextFieldInline
+                    id="refund-rate-no-show"
+                    label="노쇼 환불율"
+                    value={policyValues.noShowRefundRate}
+                    onChange={(value) => updatePolicy({ noShowRefundRate: value })}
+                  />
+                  <TextFieldInline
+                    id="cancel-no-show-fee"
+                    label="노쇼 수수료"
+                    value={policyValues.cancellationNoShowFee}
+                    onChange={(value) => updatePolicy({ cancellationNoShowFee: value })}
+                  />
+                </div>
+
+                <Alert title="고객 화면 요약">
+                  {paymentPolicySummary(policyValues, formMode.product)}{" "}
+                  {cancellationPolicySummary(policyValues)}
+                </Alert>
+
+                {policyError ? <Alert variant="danger">{policyError}</Alert> : null}
+                {policySaveError ? (
+                  <Alert variant="danger">{errorMessage(policySaveError)}</Alert>
+                ) : null}
+                {policySaved ? (
+                  <Alert variant="success">결제/취소 정책이 저장되었습니다.</Alert>
+                ) : null}
+
+                <div className="flex justify-end">
+                  <Button type="button" isLoading={isPolicySaving} onClick={handleSavePolicy}>
+                    <Save aria-hidden className="size-4" />
+                    정책 저장
+                  </Button>
+                </div>
+              </section>
+            ) : null}
+
             {saveError ? <Alert variant="danger">{errorMessage(saveError)}</Alert> : null}
 
             <div className="flex justify-end gap-2">
@@ -569,6 +786,24 @@ function Panel({
   );
 }
 
+function TextFieldInline({
+  id,
+  label,
+  value,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Field id={id} label={label}>
+      <Input id={id} value={value} onChange={(event) => onChange(event.target.value)} />
+    </Field>
+  );
+}
+
 function toFormValues(product: ReservationProductResponse): ReservationProductFormValues {
   return {
     name: product.name,
@@ -581,6 +816,14 @@ function toFormValues(product: ReservationProductResponse): ReservationProductFo
     availableStartTime: product.availableStartTime ?? "",
     availableEndTime: product.availableEndTime ?? "",
     slotCapacity: String(product.slotCapacity),
+  };
+}
+
+function toPolicyFormValues(product: ReservationProductResponse): ProductPolicyFormValues {
+  return {
+    ...emptyPolicyFormValues,
+    paymentMode: product.paymentPolicyType,
+    paymentAmount: String(product.paymentAmount ?? 0),
   };
 }
 
@@ -599,6 +842,109 @@ function toSaveRequest(values: ReservationProductFormValues): ReservationProduct
     availableEndTime: values.availableEndTime || null,
     slotCapacity: Number(values.slotCapacity),
   };
+}
+
+function validatePolicyForm(values: ProductPolicyFormValues, product: ReservationProductResponse) {
+  const paymentAmount = parseInteger(values.paymentAmount, "결제 금액");
+  const noShowFeeAmount = parseInteger(values.noShowFeeAmount, "노쇼 수수료");
+  const cancellationNoShowFee = parseInteger(values.cancellationNoShowFee, "노쇼 수수료");
+  const refundRates = [
+    parseInteger(values.refundRate48Hours, "48시간 전 환불율"),
+    parseInteger(values.refundRate24Hours, "24시간 전 환불율"),
+    parseInteger(values.refundRate0Hours, "당일 환불율"),
+    parseInteger(values.noShowRefundRate, "노쇼 환불율"),
+  ];
+
+  if (!values.cancellationName.trim()) {
+    return "취소 정책명을 입력해 주세요.";
+  }
+
+  if (typeof paymentAmount === "string") return paymentAmount;
+  if (typeof noShowFeeAmount === "string") return noShowFeeAmount;
+  if (typeof cancellationNoShowFee === "string") return cancellationNoShowFee;
+
+  for (const refundRate of refundRates) {
+    if (typeof refundRate === "string") {
+      return refundRate;
+    }
+    if (refundRate < 0 || refundRate > 100) {
+      return "환불율은 0부터 100 사이 정수로 입력해 주세요.";
+    }
+  }
+
+  if (values.paymentMode === "DEPOSIT" && paymentAmount < 1) {
+    return "예약금은 1원 이상이어야 합니다.";
+  }
+  if (values.paymentMode === "PREPAY" && product.priceAmount < 1) {
+    return "전액 선결제 상품은 가격이 1원 이상이어야 합니다.";
+  }
+  if (values.paymentMode === "CARD_GUARANTEE" && noShowFeeAmount < 1) {
+    return "카드 보증 수수료는 1원 이상이어야 합니다.";
+  }
+
+  return null;
+}
+
+function toPaymentPolicyRequest(
+  values: ProductPolicyFormValues,
+  product: ReservationProductResponse,
+) {
+  return {
+    paymentMode: values.paymentMode,
+    depositType: values.paymentMode === "DEPOSIT" ? values.depositType : null,
+    paymentAmount:
+      values.paymentMode === "DEPOSIT"
+        ? Number(values.paymentAmount)
+        : values.paymentMode === "PREPAY"
+          ? product.priceAmount
+          : null,
+    noShowFeeAmount:
+      values.paymentMode === "CARD_GUARANTEE" ? Number(values.noShowFeeAmount) : null,
+  };
+}
+
+function toCancellationPolicyRequest(values: ProductPolicyFormValues) {
+  return {
+    name: values.cancellationName.trim(),
+    rules: [
+      { beforeVisitHours: 48, refundRate: Number(values.refundRate48Hours) },
+      { beforeVisitHours: 24, refundRate: Number(values.refundRate24Hours) },
+      { beforeVisitHours: 0, refundRate: Number(values.refundRate0Hours) },
+    ],
+    noShowRule: {
+      refundRate: Number(values.noShowRefundRate),
+      feeAmount: Number(values.cancellationNoShowFee),
+    },
+  };
+}
+
+function paymentPolicySummary(
+  values: ProductPolicyFormValues,
+  product: ReservationProductResponse,
+) {
+  if (values.paymentMode === "DEPOSIT") {
+    return `예약금 ${formatPrice(Number(values.paymentAmount || 0))} 결제 후 예약을 확정합니다.`;
+  }
+  if (values.paymentMode === "PREPAY") {
+    return `상품 가격 ${formatPrice(product.priceAmount)} 전액을 예약 시 결제합니다.`;
+  }
+  if (values.paymentMode === "CARD_GUARANTEE") {
+    return `카드 보증 후 노쇼 시 최대 ${formatPrice(Number(values.noShowFeeAmount || 0))}를 청구합니다.`;
+  }
+
+  return "예약 시 결제 없이 현장 결제로 안내합니다.";
+}
+
+function cancellationPolicySummary(values: ProductPolicyFormValues) {
+  return `취소 환불율: 48시간 전 ${values.refundRate48Hours}%, 24시간 전 ${values.refundRate24Hours}%, 당일 ${values.refundRate0Hours}%, 노쇼 ${values.noShowRefundRate}%.`;
+}
+
+function parseInteger(value: string, label: string) {
+  if (!/^\d+$/.test(value.trim())) {
+    return `${label}은 0 이상 정수로 입력해 주세요.`;
+  }
+
+  return Number(value);
 }
 
 function sortProducts(products: ReservationProductResponse[], sortKey: ProductSortKey) {

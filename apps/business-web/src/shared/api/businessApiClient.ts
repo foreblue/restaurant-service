@@ -198,6 +198,51 @@ export interface ReservationProductSaveRequest {
   slotCapacity?: number | null;
 }
 
+export type ReservationProductPaymentMode = "NONE" | "DEPOSIT" | "PREPAY" | "CARD_GUARANTEE";
+export type ReservationProductDepositType = "PER_RESERVATION" | "PER_PERSON";
+
+export interface ReservationProductPaymentPolicyRequest {
+  paymentMode: ReservationProductPaymentMode;
+  depositType?: ReservationProductDepositType | null;
+  paymentAmount?: number | null;
+  noShowFeeAmount?: number | null;
+}
+
+export interface ReservationProductPaymentPolicyResponse {
+  productId: number;
+  paymentMode: ReservationProductPaymentMode;
+  depositType: ReservationProductDepositType | null;
+  paymentAmount: number | null;
+  noShowFeeAmount: number | null;
+  updatedAt: string | null;
+}
+
+export interface CancellationPolicyRuleRequest {
+  beforeVisitHours: number;
+  refundRate: number;
+}
+
+export interface CancellationPolicyNoShowRuleRequest {
+  refundRate: number;
+  feeAmount: number;
+}
+
+export interface ReservationProductCancellationPolicyRequest {
+  name: string;
+  rules: CancellationPolicyRuleRequest[];
+  noShowRule: CancellationPolicyNoShowRuleRequest;
+}
+
+export interface ReservationProductCancellationPolicyResponse {
+  policyId: string;
+  productId: number;
+  isActive: boolean;
+  name: string;
+  rules: CancellationPolicyRuleRequest[];
+  noShowRule: CancellationPolicyNoShowRuleRequest;
+  updatedAt: string | null;
+}
+
 export interface ReservationProductResponse {
   id: number;
   restaurantId: number;
@@ -212,7 +257,7 @@ export interface ReservationProductResponse {
   availableStartTime: string | null;
   availableEndTime: string | null;
   slotCapacity: number;
-  paymentPolicyType: "NONE";
+  paymentPolicyType: ReservationProductPaymentMode;
   paymentAmount: number | null;
   createdAt: string | null;
   updatedAt: string | null;
@@ -305,6 +350,14 @@ export interface BusinessApiClient {
     request: ReservationProductSaveRequest,
   ): Promise<ReservationProductResponse>;
   deleteReservationProduct(productId: number): Promise<void>;
+  updateReservationProductPaymentPolicy(
+    productId: number,
+    request: ReservationProductPaymentPolicyRequest,
+  ): Promise<ReservationProductPaymentPolicyResponse>;
+  saveReservationProductCancellationPolicy(
+    productId: number,
+    request: ReservationProductCancellationPolicyRequest,
+  ): Promise<ReservationProductCancellationPolicyResponse>;
 }
 
 export function createBusinessQueryClient() {
@@ -470,6 +523,32 @@ class HttpBusinessApiClient implements BusinessApiClient {
     await this.request<void>(`/api/business/reservation-products/${productId}`, {
       method: "DELETE",
     });
+  }
+
+  updateReservationProductPaymentPolicy(
+    productId: number,
+    request: ReservationProductPaymentPolicyRequest,
+  ) {
+    return this.request<ReservationProductPaymentPolicyResponse>(
+      `/api/business/reservation-products/${productId}/payment-policy`,
+      {
+        method: "PUT",
+        body: request,
+      },
+    );
+  }
+
+  saveReservationProductCancellationPolicy(
+    productId: number,
+    request: ReservationProductCancellationPolicyRequest,
+  ) {
+    return this.request<ReservationProductCancellationPolicyResponse>(
+      `/api/business/reservation-products/${productId}/cancellation-policy`,
+      {
+        method: "POST",
+        body: request,
+      },
+    );
   }
 
   private async request<T>(path: string, init: { method?: string; body?: unknown } = {}) {
@@ -802,6 +881,78 @@ class MockBusinessApiClient implements BusinessApiClient {
     this.writeReservationProducts(
       products.map((product) => (product.id === productId ? deleted : product)),
     );
+  }
+
+  async updateReservationProductPaymentPolicy(
+    productId: number,
+    request: ReservationProductPaymentPolicyRequest,
+  ) {
+    const products = this.readReservationProducts();
+    const current = products.find(
+      (product) => product.id === productId && product.status === "ACTIVE",
+    );
+
+    if (!current) {
+      throw new ApiError("예약 상품을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    const policy = normalizePaymentPolicy(productId, request, current);
+    const updated: ReservationProductResponse = {
+      ...current,
+      paymentPolicyType: policy.paymentMode,
+      paymentAmount: policy.paymentAmount,
+      updatedAt: policy.updatedAt,
+    };
+    this.writeReservationProducts(
+      sortMockReservationProducts(
+        products.map((product) => (product.id === productId ? updated : product)),
+      ),
+    );
+    return policy;
+  }
+
+  async saveReservationProductCancellationPolicy(
+    productId: number,
+    request: ReservationProductCancellationPolicyRequest,
+  ) {
+    const current = this.readReservationProducts().find(
+      (product) => product.id === productId && product.status === "ACTIVE",
+    );
+
+    if (!current) {
+      throw new ApiError("예약 상품을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    const name = request.name.trim();
+    const rules = request.rules.map((rule) => ({
+      beforeVisitHours: rule.beforeVisitHours,
+      refundRate: rule.refundRate,
+    }));
+    const noShowRule = {
+      refundRate: request.noShowRule.refundRate,
+      feeAmount: request.noShowRule.feeAmount,
+    };
+
+    if (!name) {
+      throw new ApiError("취소 정책명을 입력해 주세요.", 400, "VALIDATION_ERROR");
+    }
+
+    rules.forEach((rule) => validateRefundRate(rule.refundRate));
+    validateRefundRate(noShowRule.refundRate);
+
+    if (!Number.isInteger(noShowRule.feeAmount) || noShowRule.feeAmount < 0) {
+      throw new ApiError("노쇼 수수료는 0 이상 정수로 입력해 주세요.", 400, "VALIDATION_ERROR");
+    }
+
+    return {
+      policyId: `mock-cancel-${productId}`,
+      productId,
+      isActive: true,
+      name,
+      rules,
+      noShowRule,
+      updatedAt: new Date().toISOString(),
+    } satisfies ReservationProductCancellationPolicyResponse;
   }
 
   private readUser() {
@@ -1207,4 +1358,51 @@ function timestamp(value: string | null) {
 function trimToNull(value: string | null | undefined) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function normalizePaymentPolicy(
+  productId: number,
+  request: ReservationProductPaymentPolicyRequest,
+  product: ReservationProductResponse,
+): ReservationProductPaymentPolicyResponse {
+  const paymentAmount = request.paymentAmount ?? null;
+  const noShowFeeAmount = request.noShowFeeAmount ?? null;
+
+  if (paymentAmount !== null && (!Number.isInteger(paymentAmount) || paymentAmount < 0)) {
+    throw new ApiError("결제 금액은 0 이상 정수로 입력해 주세요.", 400, "VALIDATION_ERROR");
+  }
+  if (noShowFeeAmount !== null && (!Number.isInteger(noShowFeeAmount) || noShowFeeAmount < 0)) {
+    throw new ApiError("노쇼 수수료는 0 이상 정수로 입력해 주세요.", 400, "VALIDATION_ERROR");
+  }
+
+  if (request.paymentMode === "DEPOSIT" && (!paymentAmount || paymentAmount < 1)) {
+    throw new ApiError("예약금은 1원 이상이어야 합니다.", 400, "VALIDATION_ERROR");
+  }
+  if (request.paymentMode === "PREPAY" && product.priceAmount < 1) {
+    throw new ApiError("전액 선결제 상품은 가격이 1원 이상이어야 합니다.", 400, "VALIDATION_ERROR");
+  }
+  if (request.paymentMode === "CARD_GUARANTEE" && (!noShowFeeAmount || noShowFeeAmount < 1)) {
+    throw new ApiError("카드 보증 수수료는 1원 이상이어야 합니다.", 400, "VALIDATION_ERROR");
+  }
+
+  return {
+    productId,
+    paymentMode: request.paymentMode,
+    depositType:
+      request.paymentMode === "DEPOSIT" ? (request.depositType ?? "PER_RESERVATION") : null,
+    paymentAmount:
+      request.paymentMode === "DEPOSIT"
+        ? paymentAmount
+        : request.paymentMode === "PREPAY"
+          ? product.priceAmount
+          : null,
+    noShowFeeAmount: request.paymentMode === "CARD_GUARANTEE" ? noShowFeeAmount : null,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function validateRefundRate(refundRate: number) {
+  if (!Number.isInteger(refundRate) || refundRate < 0 || refundRate > 100) {
+    throw new ApiError("환불율은 0부터 100 사이 정수로 입력해 주세요.", 400, "VALIDATION_ERROR");
+  }
 }

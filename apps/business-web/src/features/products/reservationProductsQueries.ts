@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  type ReservationProductCancellationPolicyRequest,
+  type ReservationProductPaymentPolicyRequest,
   type ReservationProductResponse,
   type ReservationProductSaveRequest,
 } from "@/shared/api/businessApiClient";
@@ -69,6 +71,51 @@ export function useDeleteReservationProductMutation() {
         (current) => (current ?? []).filter((product) => product.id !== productId),
       );
     },
+  });
+}
+
+export function useUpdateReservationProductPaymentPolicyMutation() {
+  const apiClient = useBusinessApiClient();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      productId,
+      request,
+    }: {
+      productId: number;
+      request: ReservationProductPaymentPolicyRequest;
+    }) => apiClient.updateReservationProductPaymentPolicy(productId, request),
+    onSuccess: (policy) => {
+      queryClient.setQueryData<ReservationProductResponse[]>(
+        reservationProductsQueryKey,
+        (current) =>
+          (current ?? []).map((product) =>
+            product.id === policy.productId
+              ? {
+                  ...product,
+                  paymentPolicyType: policy.paymentMode,
+                  paymentAmount: policy.paymentAmount,
+                  updatedAt: policy.updatedAt,
+                }
+              : product,
+          ),
+      );
+    },
+  });
+}
+
+export function useSaveReservationProductCancellationPolicyMutation() {
+  const apiClient = useBusinessApiClient();
+
+  return useMutation({
+    mutationFn: ({
+      productId,
+      request,
+    }: {
+      productId: number;
+      request: ReservationProductCancellationPolicyRequest;
+    }) => apiClient.saveReservationProductCancellationPolicy(productId, request),
   });
 }
 
