@@ -6,6 +6,8 @@ import com.example.restaurant.auth.BusinessUserEntity
 import com.example.restaurant.auth.BusinessUserRepository
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.example.restaurant.payment.CancellationPolicyEntity
+import com.example.restaurant.payment.CancellationPolicyRepository
 import com.example.restaurant.restaurant.ReservationPageRepository
 import com.example.restaurant.restaurant.ReservationPageStatus
 import com.example.restaurant.restaurant.RestaurantEntity
@@ -16,6 +18,7 @@ import com.fasterxml.jackson.module.kotlin.readValue
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.DayOfWeek
+import java.time.Instant
 import java.time.LocalTime
 import java.time.format.DateTimeParseException
 import java.util.Locale
@@ -26,6 +29,7 @@ class ReservationProductService(
     private val restaurantRepository: RestaurantRepository,
     private val reservationPageRepository: ReservationPageRepository,
     private val reservationProductRepository: ReservationProductRepository,
+    private val cancellationPolicyRepository: CancellationPolicyRepository,
     private val auditLogService: AuditLogService,
 ) {
     private val objectMapper = jacksonObjectMapper()
@@ -91,6 +95,64 @@ class ReservationProductService(
 
         audit(owner, "RESERVATION_PRODUCT_UPDATED", product.id, before, product.snapshot(), metadata)
         return product.toResponse()
+    }
+
+    @Transactional
+    fun updatePaymentPolicy(
+        principal: BusinessPrincipal,
+        productId: Long,
+        request: ReservationProductPaymentPolicyRequest,
+        metadata: ReservationProductRequestMetadata,
+    ): ReservationProductPaymentPolicyResponse {
+        val owner = owner(principal)
+        val product = ownedProduct(principal, productId)
+        val before = product.snapshot()
+        val normalized = request.normalized(product)
+
+        product.paymentPolicyType = normalized.paymentPolicyType
+        product.paymentAmount = normalized.paymentAmount
+
+        audit(owner, "RESERVATION_PRODUCT_PAYMENT_POLICY_UPDATED", product.id, before, product.snapshot(), metadata)
+        return product.toPaymentPolicyResponse()
+    }
+
+    @Transactional
+    fun upsertCancellationPolicy(
+        principal: BusinessPrincipal,
+        productId: Long,
+        request: ReservationProductCancellationPolicyRequest,
+        metadata: ReservationProductRequestMetadata,
+    ): ReservationProductCancellationPolicyResponse {
+        val owner = owner(principal)
+        val product = ownedProduct(principal, productId)
+        val activePolicies = cancellationPolicyRepository
+            .findByReservationProductIdAndActiveOrderByEffectiveFromDesc(product.id, true)
+        val before = activePolicies.map { it.snapshot() }
+        val normalized = request.normalized()
+
+        activePolicies.forEach { it.active = false }
+        val policy = cancellationPolicyRepository.saveAndFlush(
+            CancellationPolicyEntity(
+                restaurant = product.restaurant,
+                reservationProduct = product,
+                name = normalized.name,
+                rulesJson = objectMapper.writeValueAsString(normalized.rules),
+                noShowRuleJson = normalized.noShowRule?.let { objectMapper.writeValueAsString(it) },
+                restaurantCancelRefundRate = normalized.restaurantCancelRefundRate,
+                active = true,
+                effectiveFrom = normalized.effectiveFrom,
+            ),
+        )
+
+        audit(
+            actor = owner,
+            action = "RESERVATION_PRODUCT_CANCELLATION_POLICY_UPDATED",
+            targetId = product.id,
+            before = before.takeIf { it.isNotEmpty() },
+            after = policy.snapshot(),
+            metadata = metadata,
+        )
+        return policy.toResponse()
     }
 
     @Transactional
@@ -200,6 +262,103 @@ class ReservationProductService(
         )
     }
 
+    private fun ReservationProductPaymentPolicyRequest.normalized(
+        product: ReservationProductEntity,
+    ): NormalizedPaymentPolicyRequest {
+        val type = paymentPolicyType
+            ?: throw ApiException(ErrorCode.VALIDATION_ERROR, "paymentPolicyType이 필요합니다.")
+        val normalizedAmount = paymentAmount?.takeIf { it > 0 }
+
+        return when (type) {
+            ReservationProductPaymentPolicyType.DEPOSIT -> {
+                val amount = normalizedAmount
+                    ?: throw ApiException(ErrorCode.VALIDATION_ERROR, "예약금 정책에는 paymentAmount가 필요합니다.")
+                NormalizedPaymentPolicyRequest(type, amount)
+            }
+            ReservationProductPaymentPolicyType.PREPAID -> {
+                if (product.priceAmount <= 0) {
+                    throw ApiException(ErrorCode.VALIDATION_ERROR, "전액 선결제 정책은 상품 가격이 0보다 커야 합니다.")
+                }
+                if (normalizedAmount != null) {
+                    throw ApiException(ErrorCode.VALIDATION_ERROR, "전액 선결제 금액은 상품 가격과 예약 인원으로 계산됩니다.")
+                }
+                NormalizedPaymentPolicyRequest(type, null)
+            }
+            ReservationProductPaymentPolicyType.CARD_GUARANTEE,
+            ReservationProductPaymentPolicyType.PAY_ON_SITE,
+            ReservationProductPaymentPolicyType.FREE,
+            ReservationProductPaymentPolicyType.NONE,
+            -> {
+                if (normalizedAmount != null) {
+                    throw ApiException(ErrorCode.VALIDATION_ERROR, "${type.name} 정책에는 paymentAmount를 설정할 수 없습니다.")
+                }
+                NormalizedPaymentPolicyRequest(type, null)
+            }
+        }
+    }
+
+    private fun ReservationProductCancellationPolicyRequest.normalized(): NormalizedCancellationPolicyRequest {
+        val normalizedName = name?.trim().orEmpty()
+        if (normalizedName.isBlank()) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "취소 정책명이 필요합니다.")
+        }
+        if (normalizedName.length > 120) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "취소 정책명은 120자 이하여야 합니다.")
+        }
+        val normalizedRules = rules
+            ?.takeIf { it.isNotEmpty() }
+            ?.mapIndexed { index, rule -> rule.normalized(index) }
+            ?: throw ApiException(ErrorCode.VALIDATION_ERROR, "취소 정책 rules가 필요합니다.")
+        if (normalizedRules.map { it.beforeVisitHours }.distinct().size != normalizedRules.size) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "취소 정책 기준 시간은 중복될 수 없습니다.")
+        }
+        val normalizedRestaurantCancelRefundRate = restaurantCancelRefundRate ?: 100
+        if (normalizedRestaurantCancelRefundRate !in 0..100) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "restaurantCancelRefundRate는 0 이상 100 이하여야 합니다.")
+        }
+
+        return NormalizedCancellationPolicyRequest(
+            name = normalizedName,
+            rules = normalizedRules.sortedByDescending { it.beforeVisitHours },
+            noShowRule = noShowRule?.normalized(),
+            restaurantCancelRefundRate = normalizedRestaurantCancelRefundRate,
+            effectiveFrom = effectiveFrom ?: Instant.now(),
+        )
+    }
+
+    private fun CancellationPolicyRuleRequest.normalized(index: Int): NormalizedCancellationPolicyRule {
+        val beforeVisitHours = beforeVisitHours
+            ?: throw ApiException(ErrorCode.VALIDATION_ERROR, "rules[$index].beforeVisitHours가 필요합니다.")
+        val refundRate = refundRate
+            ?: throw ApiException(ErrorCode.VALIDATION_ERROR, "rules[$index].refundRate가 필요합니다.")
+        if (beforeVisitHours < 0) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "beforeVisitHours는 0 이상이어야 합니다.")
+        }
+        if (refundRate !in 0..100) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "refundRate는 0 이상 100 이하여야 합니다.")
+        }
+        return NormalizedCancellationPolicyRule(
+            id = "rule_${beforeVisitHours}h_$refundRate",
+            beforeVisitHours = beforeVisitHours,
+            refundRate = refundRate,
+        )
+    }
+
+    private fun CancellationPolicyNoShowRuleRequest.normalized(): NormalizedCancellationPolicyNoShowRule {
+        val normalizedRefundRate = refundRate ?: 0
+        val normalizedFeeAmount = feeAmount
+        if (normalizedRefundRate !in 0..100) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "noShowRule.refundRate는 0 이상 100 이하여야 합니다.")
+        }
+        if ((normalizedFeeAmount ?: 0) < 0) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "noShowRule.feeAmount는 0 이상이어야 합니다.")
+        }
+        return NormalizedCancellationPolicyNoShowRule(
+            refundRate = normalizedRefundRate,
+            feeAmount = normalizedFeeAmount,
+        )
+    }
+
     private fun String.parseDayOfWeek(): DayOfWeek =
         try {
             DayOfWeek.valueOf(trim().uppercase(Locale.ROOT))
@@ -239,6 +398,33 @@ class ReservationProductService(
             updatedAt = updatedAt,
         )
 
+    private fun ReservationProductEntity.toPaymentPolicyResponse(): ReservationProductPaymentPolicyResponse =
+        ReservationProductPaymentPolicyResponse(
+            productId = id,
+            paymentPolicyType = paymentPolicyType,
+            paymentAmount = paymentAmount,
+            updatedAt = updatedAt,
+        )
+
+    private fun CancellationPolicyEntity.toResponse(): ReservationProductCancellationPolicyResponse {
+        val rules = objectMapper.readValue<List<CancellationPolicyRuleResponse>>(rulesJson)
+        val noShowRule = noShowRuleJson?.let {
+            objectMapper.readValue<CancellationPolicyNoShowRuleResponse>(it)
+        }
+        return ReservationProductCancellationPolicyResponse(
+            policyId = id,
+            productId = reservationProduct.id,
+            active = active,
+            name = name,
+            rules = rules,
+            noShowRule = noShowRule,
+            restaurantCancelRefundRate = restaurantCancelRefundRate,
+            effectiveFrom = effectiveFrom,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+        )
+    }
+
     private fun ReservationProductEntity.toPublicResponse(): PublicReservationProductResponse =
         PublicReservationProductResponse(
             id = id,
@@ -275,6 +461,18 @@ class ReservationProductService(
             "paymentAmount" to paymentAmount,
         )
 
+    private fun CancellationPolicyEntity.snapshot(): Map<String, Any?> =
+        mapOf(
+            "policyId" to id,
+            "productId" to reservationProduct.id,
+            "name" to name,
+            "rules" to objectMapper.readTree(rulesJson),
+            "noShowRule" to noShowRuleJson?.let { objectMapper.readTree(it) },
+            "restaurantCancelRefundRate" to restaurantCancelRefundRate,
+            "active" to active,
+            "effectiveFrom" to effectiveFrom.toString(),
+        )
+
     private fun ReservationProductEntity.parseAvailableDays(): List<DayOfWeek> =
         objectMapper.readValue<List<String>>(availableDaysJson)
             .map { DayOfWeek.valueOf(it) }
@@ -283,8 +481,8 @@ class ReservationProductService(
         actor: BusinessUserEntity,
         action: String,
         targetId: Long,
-        before: Map<String, Any?>?,
-        after: Map<String, Any?>,
+        before: Any?,
+        after: Any,
         metadata: ReservationProductRequestMetadata,
     ) {
         auditLogService.record(
@@ -312,4 +510,28 @@ private data class NormalizedReservationProductRequest(
     val availableStartTime: LocalTime?,
     val availableEndTime: LocalTime?,
     val slotCapacity: Int,
+)
+
+private data class NormalizedPaymentPolicyRequest(
+    val paymentPolicyType: ReservationProductPaymentPolicyType,
+    val paymentAmount: Long?,
+)
+
+private data class NormalizedCancellationPolicyRequest(
+    val name: String,
+    val rules: List<NormalizedCancellationPolicyRule>,
+    val noShowRule: NormalizedCancellationPolicyNoShowRule?,
+    val restaurantCancelRefundRate: Int,
+    val effectiveFrom: Instant,
+)
+
+private data class NormalizedCancellationPolicyRule(
+    val id: String,
+    val beforeVisitHours: Long,
+    val refundRate: Int,
+)
+
+private data class NormalizedCancellationPolicyNoShowRule(
+    val refundRate: Int,
+    val feeAmount: Long?,
 )

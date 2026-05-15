@@ -1,6 +1,7 @@
 package com.example.restaurant.reservationproduct
 
 import jakarta.validation.constraints.Min
+import jakarta.validation.constraints.Max
 import jakarta.validation.constraints.Size
 import java.time.DayOfWeek
 import java.time.Instant
@@ -52,6 +53,77 @@ data class ReservationProductResponse(
     val paymentAmount: Long?,
     val createdAt: Instant?,
     val updatedAt: Instant?,
+)
+
+data class ReservationProductPaymentPolicyRequest(
+    val paymentPolicyType: ReservationProductPaymentPolicyType? = null,
+
+    @field:Min(0)
+    val paymentAmount: Long? = null,
+)
+
+data class ReservationProductPaymentPolicyResponse(
+    val productId: Long,
+    val paymentPolicyType: ReservationProductPaymentPolicyType,
+    val paymentAmount: Long?,
+    val updatedAt: Instant?,
+)
+
+data class ReservationProductCancellationPolicyRequest(
+    @field:Size(max = 120)
+    val name: String? = null,
+
+    val rules: List<CancellationPolicyRuleRequest>? = null,
+
+    val noShowRule: CancellationPolicyNoShowRuleRequest? = null,
+
+    @field:Min(0)
+    @field:Max(100)
+    val restaurantCancelRefundRate: Int? = null,
+
+    val effectiveFrom: Instant? = null,
+)
+
+data class CancellationPolicyRuleRequest(
+    @field:Min(0)
+    val beforeVisitHours: Long? = null,
+
+    @field:Min(0)
+    @field:Max(100)
+    val refundRate: Int? = null,
+)
+
+data class CancellationPolicyNoShowRuleRequest(
+    @field:Min(0)
+    @field:Max(100)
+    val refundRate: Int? = null,
+
+    @field:Min(0)
+    val feeAmount: Long? = null,
+)
+
+data class ReservationProductCancellationPolicyResponse(
+    val policyId: Long,
+    val productId: Long,
+    val active: Boolean,
+    val name: String,
+    val rules: List<CancellationPolicyRuleResponse>,
+    val noShowRule: CancellationPolicyNoShowRuleResponse?,
+    val restaurantCancelRefundRate: Int,
+    val effectiveFrom: Instant,
+    val createdAt: Instant?,
+    val updatedAt: Instant?,
+)
+
+data class CancellationPolicyRuleResponse(
+    val id: String,
+    val beforeVisitHours: Long,
+    val refundRate: Int,
+)
+
+data class CancellationPolicyNoShowRuleResponse(
+    val refundRate: Int,
+    val feeAmount: Long?,
 )
 
 data class PublicReservationProductListResponse(
