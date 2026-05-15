@@ -59,7 +59,7 @@ class RestaurantSettingsService(
             ?.mapNotNull { it.trimToNull() }
             ?.takeIf { it.isNotEmpty() }
             ?.let { objectMapper.writeValueAsString(it) }
-        restaurant.coverImageFile = fileOrNull(request.coverImageFileId, StoredFilePurpose.RESTAURANT_COVER_IMAGE)
+        restaurant.coverImageFile = fileOrNull(request.coverImageFileId, StoredFilePurpose.RESTAURANT_COVER_IMAGE, owner)
 
         audit(
             actor = owner,
@@ -344,6 +344,7 @@ class RestaurantSettingsService(
     private fun fileOrNull(
         fileId: Long?,
         purpose: StoredFilePurpose,
+        owner: BusinessUserEntity,
     ): StoredFileEntity? {
         if (fileId == null) {
             return null
@@ -352,6 +353,9 @@ class RestaurantSettingsService(
             .orElseThrow { ApiException(ErrorCode.NOT_FOUND, "파일을 찾을 수 없습니다.") }
         if (file.purpose != purpose) {
             throw ApiException(ErrorCode.BAD_REQUEST, "파일 용도가 올바르지 않습니다.")
+        }
+        if (file.createdBy?.id != owner.id) {
+            throw ApiException(ErrorCode.NOT_FOUND, "파일을 찾을 수 없습니다.")
         }
         return file
     }
