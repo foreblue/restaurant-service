@@ -460,6 +460,42 @@ export interface BusinessReservationRefundPreviewResponse {
   settlementNotice: string;
 }
 
+export type BusinessSeatType = "HALL" | "ROOM" | "BAR" | "TERRACE";
+export type BusinessTableCombinationPolicy = "NONE" | "ADJACENT" | "SAME_TYPE";
+
+export interface BusinessTableResponse {
+  id: number;
+  name: string;
+  seatType: BusinessSeatType;
+  seatTypeLabel: string;
+  minPartySize: number;
+  maxPartySize: number;
+  isActive: boolean;
+  combinationPolicy: BusinessTableCombinationPolicy;
+  combinationPolicyLabel: string;
+  hasReservations: boolean;
+  updatedAt: string;
+}
+
+export interface BusinessTableListResponse {
+  summary: {
+    totalCount: number;
+    activeCount: number;
+    totalCapacity: number;
+    roomCount: number;
+  };
+  items: BusinessTableResponse[];
+}
+
+export interface BusinessTableSaveRequest {
+  name?: string | null;
+  seatType?: BusinessSeatType | null;
+  minPartySize?: number | null;
+  maxPartySize?: number | null;
+  isActive?: boolean | null;
+  combinationPolicy?: BusinessTableCombinationPolicy | null;
+}
+
 export interface BusinessAuditLogListQuery {
   targetType?: string | null;
   targetId?: number | null;
@@ -678,6 +714,12 @@ export interface BusinessApiClient {
   getBusinessReservationRefundPreview(
     reservationId: number,
   ): Promise<BusinessReservationRefundPreviewResponse>;
+  listBusinessTables(): Promise<BusinessTableListResponse>;
+  createBusinessTable(request: BusinessTableSaveRequest): Promise<BusinessTableResponse>;
+  updateBusinessTable(
+    tableId: number,
+    request: BusinessTableSaveRequest,
+  ): Promise<BusinessTableResponse>;
   listBusinessAuditLogs(query: BusinessAuditLogListQuery): Promise<BusinessAuditLogListResponse>;
   listBusinessPayments(query: BusinessPaymentListQuery): Promise<BusinessPaymentListResponse>;
   listBusinessRefunds(query: BusinessRefundListQuery): Promise<BusinessRefundListResponse>;
@@ -957,6 +999,24 @@ class HttpBusinessApiClient implements BusinessApiClient {
     );
   }
 
+  listBusinessTables() {
+    return this.request<BusinessTableListResponse>("/api/business/tables");
+  }
+
+  createBusinessTable(request: BusinessTableSaveRequest) {
+    return this.request<BusinessTableResponse>("/api/business/tables", {
+      method: "POST",
+      body: request,
+    });
+  }
+
+  updateBusinessTable(tableId: number, request: BusinessTableSaveRequest) {
+    return this.request<BusinessTableResponse>(`/api/business/tables/${tableId}`, {
+      method: "PUT",
+      body: request,
+    });
+  }
+
   listBusinessAuditLogs(query: BusinessAuditLogListQuery) {
     return this.request<BusinessAuditLogListResponse>(
       `/api/business/audit-logs${queryString(query)}`,
@@ -1015,6 +1075,7 @@ class MockBusinessApiClient implements BusinessApiClient {
   private readonly restaurantStorageKey = "restaurant-business-web.mock-restaurant";
   private readonly reservationProductsStorageKey =
     "restaurant-business-web.mock-reservation-products";
+  private readonly businessTablesStorageKey = "restaurant-business-web.mock-business-tables";
   private readonly manualReservationsStorageKey =
     "restaurant-business-web.mock-manual-reservations";
   private readonly reservationOverridesStorageKey =
@@ -1024,6 +1085,7 @@ class MockBusinessApiClient implements BusinessApiClient {
   private memoryApplication: RestaurantApplicationResponse | null = null;
   private memoryRestaurant: RestaurantSettingsResponse | null = null;
   private memoryReservationProducts: ReservationProductResponse[] | null = null;
+  private memoryBusinessTables: BusinessTableResponse[] | null = null;
   private memoryManualReservations: BusinessReservationListItemResponse[] | null = null;
   private memoryReservationOverrides: BusinessReservationListItemResponse[] | null = null;
   private memoryReservationNotes: Record<string, string | null> | null = null;
@@ -1598,6 +1660,59 @@ class MockBusinessApiClient implements BusinessApiClient {
     return toMockBusinessReservationRefundPreview(reservation);
   }
 
+  async listBusinessTables() {
+    const items = this.readBusinessTables();
+
+    return {
+      summary: {
+        totalCount: items.length,
+        activeCount: items.filter((item) => item.isActive).length,
+        totalCapacity: items
+          .filter((item) => item.isActive)
+          .reduce((total, item) => total + item.maxPartySize, 0),
+        roomCount: items.filter((item) => item.seatType === "ROOM").length,
+      },
+      items,
+    } satisfies BusinessTableListResponse;
+  }
+
+  async createBusinessTable(request: BusinessTableSaveRequest) {
+    const tables = this.readBusinessTables();
+    const normalized = normalizeBusinessTableRequest(request);
+    const table = {
+      ...normalized,
+      id: nextBusinessTableId(tables),
+      seatTypeLabel: businessSeatTypeLabel(normalized.seatType),
+      combinationPolicyLabel: businessTableCombinationPolicyLabel(normalized.combinationPolicy),
+      hasReservations: false,
+      updatedAt: new Date().toISOString(),
+    } satisfies BusinessTableResponse;
+
+    this.writeBusinessTables([...tables, table]);
+    return table;
+  }
+
+  async updateBusinessTable(tableId: number, request: BusinessTableSaveRequest) {
+    const tables = this.readBusinessTables();
+    const current = tables.find((item) => item.id === tableId);
+
+    if (!current) {
+      throw new ApiError("테이블을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    const normalized = normalizeBusinessTableRequest(request, current);
+    const table = {
+      ...current,
+      ...normalized,
+      seatTypeLabel: businessSeatTypeLabel(normalized.seatType),
+      combinationPolicyLabel: businessTableCombinationPolicyLabel(normalized.combinationPolicy),
+      updatedAt: new Date().toISOString(),
+    } satisfies BusinessTableResponse;
+
+    this.writeBusinessTables(tables.map((item) => (item.id === table.id ? table : item)));
+    return table;
+  }
+
   async listBusinessAuditLogs(query: BusinessAuditLogListQuery) {
     const targetType = query.targetType ?? null;
     const targetId = query.targetId ?? null;
@@ -1946,6 +2061,37 @@ class MockBusinessApiClient implements BusinessApiClient {
       storage.setItem(this.reservationProductsStorageKey, JSON.stringify(products));
     } else {
       this.memoryReservationProducts = products;
+    }
+  }
+
+  private readBusinessTables() {
+    const storage = getBrowserStorage();
+
+    if (!storage) {
+      return this.memoryBusinessTables ?? defaultMockBusinessTables();
+    }
+
+    const raw = storage.getItem(this.businessTablesStorageKey);
+
+    if (!raw) {
+      return defaultMockBusinessTables();
+    }
+
+    try {
+      return JSON.parse(raw) as BusinessTableResponse[];
+    } catch {
+      storage.removeItem(this.businessTablesStorageKey);
+      return defaultMockBusinessTables();
+    }
+  }
+
+  private writeBusinessTables(tables: BusinessTableResponse[]) {
+    const storage = getBrowserStorage();
+
+    if (storage) {
+      storage.setItem(this.businessTablesStorageKey, JSON.stringify(tables));
+    } else {
+      this.memoryBusinessTables = tables;
     }
   }
 }
@@ -2297,10 +2443,157 @@ function normalizePaymentPolicy(
   };
 }
 
+function normalizeBusinessTableRequest(
+  request: BusinessTableSaveRequest,
+  current?: BusinessTableResponse,
+) {
+  const name = request.name !== undefined ? request.name?.trim() : current?.name;
+  const seatType = request.seatType ?? current?.seatType ?? "HALL";
+  const minPartySize = request.minPartySize ?? current?.minPartySize ?? 1;
+  const maxPartySize = request.maxPartySize ?? current?.maxPartySize ?? 2;
+  const combinationPolicy = request.combinationPolicy ?? current?.combinationPolicy ?? "NONE";
+
+  if (!name) {
+    throw new ApiError("테이블명을 입력해 주세요.", 400, "VALIDATION_ERROR");
+  }
+  if (name.length > 30) {
+    throw new ApiError("테이블명은 30자 이하여야 합니다.", 400, "VALIDATION_ERROR");
+  }
+  if (!isBusinessSeatType(seatType)) {
+    throw new ApiError("좌석 유형을 선택해 주세요.", 400, "VALIDATION_ERROR");
+  }
+  if (
+    !Number.isInteger(minPartySize) ||
+    !Number.isInteger(maxPartySize) ||
+    minPartySize < 1 ||
+    maxPartySize < 1
+  ) {
+    throw new ApiError("수용 인원은 1명 이상 정수로 입력해 주세요.", 400, "VALIDATION_ERROR");
+  }
+  if (minPartySize > maxPartySize) {
+    throw new ApiError(
+      "최소 수용 인원은 최대 수용 인원보다 클 수 없습니다.",
+      400,
+      "VALIDATION_ERROR",
+    );
+  }
+  if (maxPartySize > 20) {
+    throw new ApiError(
+      "대형 단체 예약 테이블은 현재 범위에서 제외됩니다.",
+      400,
+      "VALIDATION_ERROR",
+    );
+  }
+  if (!isBusinessTableCombinationPolicy(combinationPolicy)) {
+    throw new ApiError("테이블 조합 범위를 선택해 주세요.", 400, "VALIDATION_ERROR");
+  }
+
+  return {
+    name,
+    seatType,
+    minPartySize,
+    maxPartySize,
+    isActive: request.isActive ?? current?.isActive ?? true,
+    combinationPolicy,
+  };
+}
+
+function nextBusinessTableId(tables: BusinessTableResponse[]) {
+  return tables.reduce((maxId, table) => Math.max(maxId, table.id), 4000) + 1;
+}
+
+function isBusinessSeatType(value: string): value is BusinessSeatType {
+  return ["HALL", "ROOM", "BAR", "TERRACE"].includes(value);
+}
+
+function isBusinessTableCombinationPolicy(value: string): value is BusinessTableCombinationPolicy {
+  return ["NONE", "ADJACENT", "SAME_TYPE"].includes(value);
+}
+
+function businessSeatTypeLabel(value: BusinessSeatType) {
+  const labels: Record<BusinessSeatType, string> = {
+    HALL: "홀",
+    ROOM: "룸",
+    BAR: "바",
+    TERRACE: "테라스",
+  };
+
+  return labels[value];
+}
+
+function businessTableCombinationPolicyLabel(value: BusinessTableCombinationPolicy) {
+  const labels: Record<BusinessTableCombinationPolicy, string> = {
+    NONE: "단독 사용",
+    ADJACENT: "인접 테이블 조합",
+    SAME_TYPE: "같은 좌석 유형 조합",
+  };
+
+  return labels[value];
+}
+
 function validateRefundRate(refundRate: number) {
   if (!Number.isInteger(refundRate) || refundRate < 0 || refundRate > 100) {
     throw new ApiError("환불율은 0부터 100 사이 정수로 입력해 주세요.", 400, "VALIDATION_ERROR");
   }
+}
+
+function defaultMockBusinessTables(): BusinessTableResponse[] {
+  const updatedAt = new Date().toISOString();
+
+  return [
+    {
+      id: 4001,
+      name: "홀 A1",
+      seatType: "HALL",
+      seatTypeLabel: "홀",
+      minPartySize: 1,
+      maxPartySize: 2,
+      isActive: true,
+      combinationPolicy: "ADJACENT",
+      combinationPolicyLabel: "인접 테이블 조합",
+      hasReservations: true,
+      updatedAt,
+    },
+    {
+      id: 4002,
+      name: "홀 A2",
+      seatType: "HALL",
+      seatTypeLabel: "홀",
+      minPartySize: 2,
+      maxPartySize: 4,
+      isActive: true,
+      combinationPolicy: "ADJACENT",
+      combinationPolicyLabel: "인접 테이블 조합",
+      hasReservations: false,
+      updatedAt,
+    },
+    {
+      id: 4003,
+      name: "룸 1",
+      seatType: "ROOM",
+      seatTypeLabel: "룸",
+      minPartySize: 3,
+      maxPartySize: 6,
+      isActive: true,
+      combinationPolicy: "SAME_TYPE",
+      combinationPolicyLabel: "같은 좌석 유형 조합",
+      hasReservations: true,
+      updatedAt,
+    },
+    {
+      id: 4004,
+      name: "바 1",
+      seatType: "BAR",
+      seatTypeLabel: "바",
+      minPartySize: 1,
+      maxPartySize: 1,
+      isActive: false,
+      combinationPolicy: "NONE",
+      combinationPolicyLabel: "단독 사용",
+      hasReservations: false,
+      updatedAt,
+    },
+  ];
 }
 
 function defaultMockBusinessReservations(): BusinessReservationListItemResponse[] {

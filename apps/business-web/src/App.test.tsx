@@ -429,6 +429,41 @@ describe("App routing", () => {
         adminContactRequired: false,
         settlementNotice: "정산금 계산이나 지급 스케줄은 이 화면에서 제공하지 않습니다.",
       }),
+      listBusinessTables: async () => ({
+        summary: {
+          totalCount: 0,
+          activeCount: 0,
+          totalCapacity: 0,
+          roomCount: 0,
+        },
+        items: [],
+      }),
+      createBusinessTable: async () => ({
+        id: 4001,
+        name: "홀 A1",
+        seatType: "HALL",
+        seatTypeLabel: "홀",
+        minPartySize: 1,
+        maxPartySize: 2,
+        isActive: true,
+        combinationPolicy: "NONE",
+        combinationPolicyLabel: "단독 사용",
+        hasReservations: false,
+        updatedAt: "2026-05-15T00:00:00.000Z",
+      }),
+      updateBusinessTable: async () => ({
+        id: 4001,
+        name: "홀 A1",
+        seatType: "HALL",
+        seatTypeLabel: "홀",
+        minPartySize: 1,
+        maxPartySize: 2,
+        isActive: false,
+        combinationPolicy: "NONE",
+        combinationPolicyLabel: "단독 사용",
+        hasReservations: false,
+        updatedAt: "2026-05-15T00:00:00.000Z",
+      }),
       listBusinessPayments: async () => ({
         summary: {
           totalCount: 0,
@@ -910,5 +945,72 @@ describe("App routing", () => {
     fireEvent.click(screen.getByRole("button", { name: "필터 초기화" }));
 
     expect(await screen.findByText("REF-9202")).toBeInTheDocument();
+  });
+
+  it("manages seat tables with the mock adapter", async () => {
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText("이메일"), {
+      target: { value: "owner@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("비밀번호"), {
+      target: { value: "password123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "로그인" }));
+
+    await screen.findByRole("heading", { name: "운영 현황" });
+    fireEvent.click(screen.getByRole("link", { name: "좌석/재고" }));
+
+    expect(await screen.findByRole("heading", { name: "테이블/좌석 관리" })).toBeInTheDocument();
+    expect(await screen.findByText("홀 A1")).toBeInTheDocument();
+    expect(screen.getByText("룸 1")).toBeInTheDocument();
+    expect(screen.getByText("활성 수용 인원")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "테이블 추가" }));
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    expect(await screen.findByText("테이블명을 입력해 주세요.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("테이블명"), {
+      target: { value: "테라스 1" },
+    });
+    fireEvent.change(screen.getByLabelText("좌석 유형"), {
+      target: { value: "TERRACE" },
+    });
+    fireEvent.change(screen.getByLabelText("최소 수용 인원"), {
+      target: { value: "5" },
+    });
+    fireEvent.change(screen.getByLabelText("최대 수용 인원"), {
+      target: { value: "2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    expect(
+      await screen.findByText("최소 수용 인원은 최대 수용 인원보다 클 수 없습니다."),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("최대 수용 인원"), {
+      target: { value: "6" },
+    });
+    fireEvent.change(screen.getByLabelText("테이블 조합 범위"), {
+      target: { value: "SAME_TYPE" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    expect(await screen.findByText("테이블이 생성되었습니다.")).toBeInTheDocument();
+    expect(await screen.findByText("테라스 1")).toBeInTheDocument();
+    expect(screen.getByText("테라스")).toBeInTheDocument();
+    expect(screen.getByText("5-6명")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "테라스 1 수정" }));
+    fireEvent.click(screen.getByLabelText("예약 사용"));
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    expect(await screen.findByText("테이블이 수정되었습니다.")).toBeInTheDocument();
+    expect(screen.getAllByText("비활성").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "홀 A2 비활성화" }));
+
+    expect(await screen.findByText("테이블이 비활성화되었습니다.")).toBeInTheDocument();
   });
 });
