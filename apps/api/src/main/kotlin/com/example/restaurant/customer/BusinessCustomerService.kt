@@ -24,6 +24,14 @@ private const val MAX_CUSTOMER_EMAIL_LENGTH = 255
 private const val MAX_CUSTOMER_SHORT_FIELD_LENGTH = 40
 private const val MAX_CUSTOMER_NOTE_LENGTH = 1000
 private const val MAX_CUSTOMER_FLAG_REASON_LENGTH = 500
+private const val MAX_CUSTOMER_PRIVACY_REASON_LENGTH = 255
+private const val MERGE_WARNING = "고객 병합은 되돌릴 수 없으며, 병합된 고객의 개인정보는 익명화됩니다."
+private const val ANONYMIZE_WARNING = "개인정보 익명화는 되돌릴 수 없으며, 예약 운영에 필요한 최소 이력만 유지됩니다."
+private const val ANONYMIZED_NOTE_CONTENT = "개인정보 요청으로 삭제된 메모입니다."
+private const val ANONYMIZED_CUSTOMER_NAME = "익명 고객"
+private const val MERGED_CUSTOMER_NAME = "병합된 고객"
+private const val ANONYMIZED_PHONE_PREFIX = "90000000"
+private const val MERGED_PHONE_PREFIX = "91000000"
 
 @Service
 class BusinessCustomerService(
@@ -48,6 +56,42 @@ class BusinessCustomerService(
             .filter { it.matches(normalizedQuery) }
             .map { it.toListItem() }
         return BusinessCustomerListResponse(items = items, totalCount = items.size)
+    }
+
+    @Transactional(readOnly = true)
+    fun duplicateCandidates(
+        principal: BusinessPrincipal,
+    ): BusinessCustomerDuplicateCandidatesResponse {
+        val restaurant = ownedRestaurant(principal)
+        val customers = customerRepository.findByRestaurantIdOrderByCreatedAtDescIdDesc(restaurant.id)
+            .filterNot { it.isAnonymizedCustomer() }
+        val phoneGroups = customers
+            .groupBy { it.phoneNumber }
+            .filterValues { it.size > 1 }
+            .map { (phoneNumber, groupCustomers) ->
+                BusinessCustomerDuplicateCandidateGroupResponse(
+                    matchType = BusinessCustomerDuplicateMatchType.PHONE,
+                    matchKeyMasked = phoneNumber.maskedPhone(),
+                    customers = groupCustomers.toDuplicateItems(),
+                )
+            }
+        val emailGroups = customers
+            .filter { !it.email.isNullOrBlank() }
+            .groupBy { it.email!!.trim().lowercase() }
+            .filterValues { it.size > 1 }
+            .map { (email, groupCustomers) ->
+                BusinessCustomerDuplicateCandidateGroupResponse(
+                    matchType = BusinessCustomerDuplicateMatchType.EMAIL,
+                    matchKeyMasked = email.maskedEmail(),
+                    customers = groupCustomers.toDuplicateItems(),
+                )
+            }
+        val groups = (phoneGroups + emailGroups)
+            .sortedWith(compareBy({ it.matchType.name }, { it.matchKeyMasked }))
+        return BusinessCustomerDuplicateCandidatesResponse(
+            totalGroups = groups.size,
+            groups = groups,
+        )
     }
 
     @Transactional
@@ -176,6 +220,129 @@ class BusinessCustomerService(
     }
 
     @Transactional
+    fun merge(
+        principal: BusinessPrincipal,
+        request: BusinessCustomerMergeRequest,
+        metadata: BusinessCustomerRequestMetadata,
+    ): BusinessCustomerMergeResponse {
+        val owner = owner(principal)
+        val restaurant = ownedRestaurant(principal)
+        val normalized = request.normalizedMergeRequest()
+        val target = lockedCustomer(restaurant.id, normalized.targetCustomerId)
+        val before = target.snapshot()
+        var movedReservationCount = 0
+        var movedNoteCount = 0
+        val sourceSnapshots = mutableListOf<Map<String, Any?>>()
+
+        normalized.sourceCustomerIds.forEach { sourceCustomerId ->
+            val source = lockedCustomer(restaurant.id, sourceCustomerId)
+            sourceSnapshots += source.snapshot() + ("id" to source.id)
+            target.absorbMissingProfile(source)
+            movedReservationCount += reservationRepository.reassignCustomer(
+                restaurantId = restaurant.id,
+                sourceCustomerId = source.id,
+                targetCustomer = target,
+            )
+            movedNoteCount += customerNoteRepository.reassignCustomer(
+                restaurantId = restaurant.id,
+                sourceCustomerId = source.id,
+                targetCustomer = target,
+            )
+            val sourceBefore = sourceSnapshots.last()
+            source.anonymizeProfile(
+                displayName = MERGED_CUSTOMER_NAME,
+                phonePrefix = MERGED_PHONE_PREFIX,
+            )
+            audit(
+                actor = owner,
+                action = "CUSTOMER_MERGE_SOURCE_ANONYMIZED",
+                targetType = "customer",
+                targetId = source.id,
+                before = sourceBefore,
+                after = source.snapshot() + mapOf(
+                    "mergedIntoCustomerId" to target.id,
+                    "reason" to normalized.reason,
+                    "warning" to MERGE_WARNING,
+                ),
+                metadata = metadata,
+            )
+        }
+
+        audit(
+            actor = owner,
+            action = "CUSTOMER_MERGED",
+            targetType = "customer",
+            targetId = target.id,
+            before = before,
+            after = target.snapshot() + mapOf(
+                "sourceCustomerIds" to normalized.sourceCustomerIds,
+                "sourceSnapshots" to sourceSnapshots,
+                "movedReservationCount" to movedReservationCount,
+                "movedNoteCount" to movedNoteCount,
+                "reason" to normalized.reason,
+                "warning" to MERGE_WARNING,
+            ),
+            metadata = metadata,
+        )
+
+        return BusinessCustomerMergeResponse(
+            targetCustomerId = target.id,
+            mergedCustomerIds = normalized.sourceCustomerIds,
+            movedReservationCount = movedReservationCount,
+            movedNoteCount = movedNoteCount,
+            anonymizedCustomerIds = normalized.sourceCustomerIds,
+            warning = MERGE_WARNING,
+        )
+    }
+
+    @Transactional
+    fun anonymize(
+        principal: BusinessPrincipal,
+        customerId: Long,
+        request: BusinessCustomerAnonymizeRequest,
+        metadata: BusinessCustomerRequestMetadata,
+    ): BusinessCustomerAnonymizeResponse {
+        val owner = owner(principal)
+        val restaurant = ownedRestaurant(principal)
+        val normalized = request.normalizedAnonymizeRequest()
+        val customer = lockedCustomer(restaurant.id, customerId)
+        val before = customer.snapshot()
+        val notes = customerNoteRepository
+            .findByRestaurantIdAndCustomerIdAndDeletedAtIsNullOrderByCreatedAtDescIdDesc(restaurant.id, customer.id)
+        val now = Instant.now(clock)
+        notes.forEach { note ->
+            note.noteType = CustomerNoteType.PRIVACY_REQUEST
+            note.content = ANONYMIZED_NOTE_CONTENT
+            note.deletedAt = now
+        }
+        customer.anonymizeProfile(
+            displayName = ANONYMIZED_CUSTOMER_NAME,
+            phonePrefix = ANONYMIZED_PHONE_PREFIX,
+        )
+        audit(
+            actor = owner,
+            action = "CUSTOMER_ANONYMIZED",
+            targetType = "customer",
+            targetId = customer.id,
+            before = before,
+            after = customer.snapshot() + mapOf(
+                "deletedNoteCount" to notes.size,
+                "reason" to normalized.reason,
+                "warning" to ANONYMIZE_WARNING,
+            ),
+            metadata = metadata,
+        )
+        return BusinessCustomerAnonymizeResponse(
+            customerId = customer.id,
+            anonymized = true,
+            anonymizedName = customer.name,
+            anonymizedPhoneMasked = customer.phoneNumber.maskedPhone(),
+            deletedNoteCount = notes.size,
+            warning = ANONYMIZE_WARNING,
+        )
+    }
+
+    @Transactional
     fun createNote(
         principal: BusinessPrincipal,
         customerId: Long,
@@ -244,6 +411,13 @@ class BusinessCustomerService(
         customerId: Long,
     ): CustomerEntity =
         customerRepository.findByRestaurantIdAndId(restaurantId, customerId)
+            ?: throw ApiException(ErrorCode.NOT_FOUND, "고객을 찾을 수 없습니다.")
+
+    private fun lockedCustomer(
+        restaurantId: Long,
+        customerId: Long,
+    ): CustomerEntity =
+        customerRepository.findByRestaurantIdAndIdForUpdate(restaurantId, customerId)
             ?: throw ApiException(ErrorCode.NOT_FOUND, "고객을 찾을 수 없습니다.")
 
     private fun ownedNote(
@@ -349,16 +523,60 @@ class BusinessCustomerService(
         )
     }
 
+    private fun BusinessCustomerMergeRequest.normalizedMergeRequest(): NormalizedCustomerMergeRequest {
+        if (confirmIrreversible != true) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "되돌릴 수 없는 고객 병합 작업 확인이 필요합니다.")
+        }
+        val normalizedTargetCustomerId = targetCustomerId
+            ?: throw ApiException(ErrorCode.VALIDATION_ERROR, "targetCustomerId가 필요합니다.")
+        if (normalizedTargetCustomerId < 1) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "targetCustomerId가 올바르지 않습니다.")
+        }
+        val normalizedSourceCustomerIds = sourceCustomerIds
+            ?.distinct()
+            ?.takeIf { it.isNotEmpty() }
+            ?: throw ApiException(ErrorCode.VALIDATION_ERROR, "sourceCustomerIds가 필요합니다.")
+        if (normalizedSourceCustomerIds.any { it < 1 }) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "sourceCustomerIds가 올바르지 않습니다.")
+        }
+        if (normalizedTargetCustomerId in normalizedSourceCustomerIds) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "기준 고객과 병합 대상 고객은 달라야 합니다.")
+        }
+        return NormalizedCustomerMergeRequest(
+            targetCustomerId = normalizedTargetCustomerId,
+            sourceCustomerIds = normalizedSourceCustomerIds,
+            reason = reason.normalizedPrivacyReason(),
+        )
+    }
+
+    private fun BusinessCustomerAnonymizeRequest.normalizedAnonymizeRequest(): NormalizedCustomerAnonymizeRequest {
+        if (confirmIrreversible != true) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "되돌릴 수 없는 개인정보 익명화 작업 확인이 필요합니다.")
+        }
+        return NormalizedCustomerAnonymizeRequest(reason = reason.normalizedPrivacyReason())
+    }
+
+    private fun String?.normalizedPrivacyReason(): String? {
+        val normalized = trimOrNull() ?: return null
+        if (normalized.length > MAX_CUSTOMER_PRIVACY_REASON_LENGTH) {
+            throw ApiException(ErrorCode.VALIDATION_ERROR, "reason은 255자 이하여야 합니다.")
+        }
+        return normalized
+    }
+
     private fun String?.normalizedText(
         maxLength: Int,
         fieldName: String,
     ): String? {
-        val normalized = this?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        val normalized = trimOrNull() ?: return null
         if (normalized.length > maxLength) {
             throw ApiException(ErrorCode.VALIDATION_ERROR, "${fieldName}은 ${maxLength}자 이하여야 합니다.")
         }
         return normalized
     }
+
+    private fun String?.trimOrNull(): String? =
+        this?.trim()?.takeIf { it.isNotBlank() }
 
     private fun String?.normalizedOptionalText(
         maxLength: Int,
@@ -384,6 +602,23 @@ class BusinessCustomerService(
             (email?.contains(query, ignoreCase = true) == true) ||
             (digits.isNotBlank() && phoneNumber.contains(digits))
     }
+
+    private fun List<CustomerEntity>.toDuplicateItems(): List<BusinessCustomerDuplicateCandidateItemResponse> =
+        sortedBy { it.id }.map { customer ->
+            BusinessCustomerDuplicateCandidateItemResponse(
+                id = customer.id,
+                name = customer.name,
+                phoneMasked = customer.phoneNumber.maskedPhone(),
+                email = customer.email,
+                reservationCount = reservationRepository.countByCustomerId(customer.id),
+                noteCount = customerNoteRepository.countByCustomerIdAndDeletedAtIsNull(customer.id),
+                vip = customer.vip,
+                caution = customer.caution,
+                blocked = customer.blocked,
+                createdAt = customer.createdAt,
+                updatedAt = customer.updatedAt,
+            )
+        }
 
     private fun CustomerEntity.toListItem(): BusinessCustomerListItemResponse {
         val stats = stats()
@@ -461,6 +696,42 @@ class BusinessCustomerService(
             blockedReason = blockedReason,
             updatedAt = updatedAt,
         )
+
+    private fun CustomerEntity.absorbMissingProfile(source: CustomerEntity) {
+        email = email ?: source.email
+        allergyNote = allergyNote ?: source.allergyNote
+        anniversaryType = anniversaryType ?: source.anniversaryType
+        anniversaryDate = anniversaryDate ?: source.anniversaryDate
+        preferenceNote = preferenceNote ?: source.preferenceNote
+        internalNote = internalNote ?: source.internalNote
+        vip = vip || source.vip
+        caution = caution || source.caution
+        cautionReason = cautionReason ?: source.cautionReason
+        blocked = blocked || source.blocked
+        blockedReason = blockedReason ?: source.blockedReason
+    }
+
+    private fun CustomerEntity.anonymizeProfile(
+        displayName: String,
+        phonePrefix: String,
+    ) {
+        name = displayName
+        phoneNumber = syntheticPhoneNumber(phonePrefix, id)
+        email = null
+        allergyNote = null
+        anniversaryType = null
+        anniversaryDate = null
+        preferenceNote = null
+        internalNote = null
+        vip = false
+        caution = false
+        cautionReason = null
+        blocked = false
+        blockedReason = null
+    }
+
+    private fun CustomerEntity.isAnonymizedCustomer(): Boolean =
+        phoneNumber.startsWith(ANONYMIZED_PHONE_PREFIX) || phoneNumber.startsWith(MERGED_PHONE_PREFIX)
 
     private fun CustomerEntity.stats(): BusinessCustomerStatsResponse =
         BusinessCustomerStatsResponse(
@@ -558,6 +829,27 @@ class BusinessCustomerService(
             length >= 8 -> "****${takeLast(4)}"
             else -> "****"
         }
+
+    private fun String.maskedEmail(): String {
+        val atIndex = indexOf("@")
+        if (atIndex <= 0) {
+            return "***"
+        }
+        val local = take(atIndex)
+        val domain = drop(atIndex + 1)
+        val maskedLocal = when {
+            local.length == 1 -> "*"
+            local.length == 2 -> "${local.first()}*"
+            else -> "${local.first()}***${local.last()}"
+        }
+        return "$maskedLocal@$domain"
+    }
+
+    private fun syntheticPhoneNumber(
+        prefix: String,
+        customerId: Long,
+    ): String =
+        prefix + customerId.toString().padStart(12, '0').takeLast(12)
 }
 
 private data class NormalizedCustomer(
@@ -582,4 +874,14 @@ private data class NormalizedCustomerFlags(
     val cautionReason: String?,
     val blocked: Boolean,
     val blockedReason: String?,
+)
+
+private data class NormalizedCustomerMergeRequest(
+    val targetCustomerId: Long,
+    val sourceCustomerIds: List<Long>,
+    val reason: String?,
+)
+
+private data class NormalizedCustomerAnonymizeRequest(
+    val reason: String?,
 )

@@ -3,6 +3,7 @@ package com.example.restaurant.reservation
 import jakarta.persistence.LockModeType
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Lock
+import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 import java.time.LocalDate
@@ -28,6 +29,21 @@ interface ReservationRepository : JpaRepository<ReservationEntity, Long> {
         restaurantId: Long,
         customerId: Long,
     ): List<ReservationEntity>
+
+    @Modifying
+    @Query(
+        """
+        update ReservationEntity r
+        set r.customer = :targetCustomer
+        where r.restaurant.id = :restaurantId
+          and r.customer.id = :sourceCustomerId
+        """,
+    )
+    fun reassignCustomer(
+        @Param("restaurantId") restaurantId: Long,
+        @Param("sourceCustomerId") sourceCustomerId: Long,
+        @Param("targetCustomer") targetCustomer: CustomerEntity,
+    ): Int
 
     fun findByCustomerIdOrderByVisitDateDescStartTimeDescIdDesc(customerId: Long): List<ReservationEntity>
 

@@ -26,6 +26,36 @@ data class BusinessCustomerListItemResponse(
     val updatedAt: Instant?,
 )
 
+data class BusinessCustomerDuplicateCandidatesResponse(
+    val totalGroups: Int,
+    val groups: List<BusinessCustomerDuplicateCandidateGroupResponse>,
+)
+
+data class BusinessCustomerDuplicateCandidateGroupResponse(
+    val matchType: BusinessCustomerDuplicateMatchType,
+    val matchKeyMasked: String,
+    val customers: List<BusinessCustomerDuplicateCandidateItemResponse>,
+)
+
+enum class BusinessCustomerDuplicateMatchType {
+    PHONE,
+    EMAIL,
+}
+
+data class BusinessCustomerDuplicateCandidateItemResponse(
+    val id: Long,
+    val name: String,
+    val phoneMasked: String,
+    val email: String?,
+    val reservationCount: Long,
+    val noteCount: Long,
+    val vip: Boolean,
+    val caution: Boolean,
+    val blocked: Boolean,
+    val createdAt: Instant?,
+    val updatedAt: Instant?,
+)
+
 data class BusinessCustomerDetailResponse(
     val id: Long,
     val name: String,
@@ -123,6 +153,36 @@ data class BusinessCustomerFlagsResponse(
     val blocked: Boolean,
     val blockedReason: String?,
     val updatedAt: Instant?,
+)
+
+data class BusinessCustomerMergeRequest(
+    val targetCustomerId: Long? = null,
+    val sourceCustomerIds: List<Long>? = null,
+    val confirmIrreversible: Boolean? = null,
+    val reason: String? = null,
+)
+
+data class BusinessCustomerMergeResponse(
+    val targetCustomerId: Long,
+    val mergedCustomerIds: List<Long>,
+    val movedReservationCount: Int,
+    val movedNoteCount: Int,
+    val anonymizedCustomerIds: List<Long>,
+    val warning: String,
+)
+
+data class BusinessCustomerAnonymizeRequest(
+    val confirmIrreversible: Boolean? = null,
+    val reason: String? = null,
+)
+
+data class BusinessCustomerAnonymizeResponse(
+    val customerId: Long,
+    val anonymized: Boolean,
+    val anonymizedName: String,
+    val anonymizedPhoneMasked: String,
+    val deletedNoteCount: Int,
+    val warning: String,
 )
 
 data class BusinessCustomerNoteSaveRequest(
