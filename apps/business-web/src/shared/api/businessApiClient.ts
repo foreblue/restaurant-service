@@ -185,6 +185,39 @@ export interface ReservationPageSaveRequest {
   status: "PUBLIC" | "PRIVATE";
 }
 
+export interface ReservationProductSaveRequest {
+  name?: string | null;
+  description?: string | null;
+  priceAmount?: number | null;
+  visible?: boolean | null;
+  minPartySize?: number | null;
+  maxPartySize?: number | null;
+  availableDays?: BusinessDayOfWeek[] | null;
+  availableStartTime?: string | null;
+  availableEndTime?: string | null;
+  slotCapacity?: number | null;
+}
+
+export interface ReservationProductResponse {
+  id: number;
+  restaurantId: number;
+  name: string;
+  description: string | null;
+  priceAmount: number;
+  visible: boolean;
+  status: "ACTIVE" | "DELETED";
+  minPartySize: number;
+  maxPartySize: number;
+  availableDays: BusinessDayOfWeek[];
+  availableStartTime: string | null;
+  availableEndTime: string | null;
+  slotCapacity: number;
+  paymentPolicyType: "NONE";
+  paymentAmount: number | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
 export interface RestaurantSettingsResponse {
   id: number;
   status: "DRAFT" | "APPROVAL_REQUESTED" | "APPROVED" | "REJECTED" | "SUSPENDED";
@@ -263,6 +296,15 @@ export interface BusinessApiClient {
     restaurantId: number,
     request: ReservationPageSaveRequest,
   ): Promise<ReservationPageSettingsResponse>;
+  listReservationProducts(): Promise<ReservationProductResponse[]>;
+  createReservationProduct(
+    request: ReservationProductSaveRequest,
+  ): Promise<ReservationProductResponse>;
+  updateReservationProduct(
+    productId: number,
+    request: ReservationProductSaveRequest,
+  ): Promise<ReservationProductResponse>;
+  deleteReservationProduct(productId: number): Promise<void>;
 }
 
 export function createBusinessQueryClient() {
@@ -403,6 +445,33 @@ class HttpBusinessApiClient implements BusinessApiClient {
     );
   }
 
+  listReservationProducts() {
+    return this.request<ReservationProductResponse[]>("/api/business/reservation-products");
+  }
+
+  createReservationProduct(request: ReservationProductSaveRequest) {
+    return this.request<ReservationProductResponse>("/api/business/reservation-products", {
+      method: "POST",
+      body: request,
+    });
+  }
+
+  updateReservationProduct(productId: number, request: ReservationProductSaveRequest) {
+    return this.request<ReservationProductResponse>(
+      `/api/business/reservation-products/${productId}`,
+      {
+        method: "PUT",
+        body: request,
+      },
+    );
+  }
+
+  async deleteReservationProduct(productId: number) {
+    await this.request<void>(`/api/business/reservation-products/${productId}`, {
+      method: "DELETE",
+    });
+  }
+
   private async request<T>(path: string, init: { method?: string; body?: unknown } = {}) {
     const requestInit: RequestInit = {
       method: init.method ?? "GET",
@@ -445,9 +514,12 @@ class MockBusinessApiClient implements BusinessApiClient {
   private readonly storageKey = "restaurant-business-web.mock-session";
   private readonly applicationStorageKey = "restaurant-business-web.mock-application";
   private readonly restaurantStorageKey = "restaurant-business-web.mock-restaurant";
+  private readonly reservationProductsStorageKey =
+    "restaurant-business-web.mock-reservation-products";
   private memoryUser: BusinessUser | null = null;
   private memoryApplication: RestaurantApplicationResponse | null = null;
   private memoryRestaurant: RestaurantSettingsResponse | null = null;
+  private memoryReservationProducts: ReservationProductResponse[] | null = null;
   private nextFileId = 3001;
 
   async getCurrentUser() {
@@ -679,6 +751,59 @@ class MockBusinessApiClient implements BusinessApiClient {
     return page;
   }
 
+  async listReservationProducts() {
+    return sortMockReservationProducts(
+      this.readReservationProducts().filter((product) => product.status === "ACTIVE"),
+    );
+  }
+
+  async createReservationProduct(request: ReservationProductSaveRequest) {
+    const products = this.readReservationProducts();
+    const product = toMockReservationProduct(nextReservationProductId(products), request);
+    this.writeReservationProducts(sortMockReservationProducts([...products, product]));
+    return product;
+  }
+
+  async updateReservationProduct(productId: number, request: ReservationProductSaveRequest) {
+    const products = this.readReservationProducts();
+    const current = products.find(
+      (product) => product.id === productId && product.status === "ACTIVE",
+    );
+
+    if (!current) {
+      throw new ApiError("예약 상품을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    const updated = toMockReservationProduct(productId, request, current);
+    this.writeReservationProducts(
+      sortMockReservationProducts(
+        products.map((product) => (product.id === productId ? updated : product)),
+      ),
+    );
+    return updated;
+  }
+
+  async deleteReservationProduct(productId: number) {
+    const products = this.readReservationProducts();
+    const current = products.find(
+      (product) => product.id === productId && product.status === "ACTIVE",
+    );
+
+    if (!current) {
+      throw new ApiError("예약 상품을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    const deleted: ReservationProductResponse = {
+      ...current,
+      visible: false,
+      status: "DELETED",
+      updatedAt: new Date().toISOString(),
+    };
+    this.writeReservationProducts(
+      products.map((product) => (product.id === productId ? deleted : product)),
+    );
+  }
+
   private readUser() {
     const storage = getBrowserStorage();
 
@@ -759,6 +884,37 @@ class MockBusinessApiClient implements BusinessApiClient {
       storage.setItem(this.restaurantStorageKey, JSON.stringify(restaurant));
     } else {
       this.memoryRestaurant = restaurant;
+    }
+  }
+
+  private readReservationProducts() {
+    const storage = getBrowserStorage();
+
+    if (!storage) {
+      return this.memoryReservationProducts ?? [];
+    }
+
+    const raw = storage.getItem(this.reservationProductsStorageKey);
+
+    if (!raw) {
+      return [];
+    }
+
+    try {
+      return JSON.parse(raw) as ReservationProductResponse[];
+    } catch {
+      storage.removeItem(this.reservationProductsStorageKey);
+      return [];
+    }
+  }
+
+  private writeReservationProducts(products: ReservationProductResponse[]) {
+    const storage = getBrowserStorage();
+
+    if (storage) {
+      storage.setItem(this.reservationProductsStorageKey, JSON.stringify(products));
+    } else {
+      this.memoryReservationProducts = products;
     }
   }
 }
@@ -924,4 +1080,131 @@ function reservationPageBlockers(restaurant: RestaurantSettingsResponse, slug: s
   if (restaurant.businessHours.length === 0) blockers.push("businessHours");
 
   return blockers;
+}
+
+const defaultReservationProductDays: BusinessDayOfWeek[] = [
+  "MONDAY",
+  "TUESDAY",
+  "WEDNESDAY",
+  "THURSDAY",
+  "FRIDAY",
+  "SATURDAY",
+  "SUNDAY",
+];
+
+function toMockReservationProduct(
+  id: number,
+  request: ReservationProductSaveRequest,
+  current?: ReservationProductResponse,
+): ReservationProductResponse {
+  const now = new Date().toISOString();
+  const name = request.name === undefined ? (current?.name ?? "") : (request.name?.trim() ?? "");
+  const description =
+    request.description === undefined
+      ? (current?.description ?? null)
+      : trimToNull(request.description);
+  const priceAmount = request.priceAmount ?? current?.priceAmount ?? 0;
+  const minPartySize = request.minPartySize ?? current?.minPartySize ?? 1;
+  const maxPartySize = request.maxPartySize ?? current?.maxPartySize ?? minPartySize;
+  const slotCapacity = request.slotCapacity ?? current?.slotCapacity ?? 1;
+  const availableStartTime =
+    request.availableStartTime === undefined
+      ? (current?.availableStartTime ?? null)
+      : trimToNull(request.availableStartTime);
+  const availableEndTime =
+    request.availableEndTime === undefined
+      ? (current?.availableEndTime ?? null)
+      : trimToNull(request.availableEndTime);
+
+  if (!name) {
+    throw new ApiError("상품명이 필요합니다.", 400, "VALIDATION_ERROR");
+  }
+  if (!Number.isFinite(priceAmount) || priceAmount < 0) {
+    throw new ApiError("가격은 0 이상이어야 합니다.", 400, "VALIDATION_ERROR");
+  }
+  if (
+    !Number.isInteger(minPartySize) ||
+    !Number.isInteger(maxPartySize) ||
+    minPartySize < 1 ||
+    maxPartySize < 1 ||
+    minPartySize > maxPartySize
+  ) {
+    throw new ApiError("예약 인원 범위가 올바르지 않습니다.", 400, "VALIDATION_ERROR");
+  }
+  if (maxPartySize > 20) {
+    throw new ApiError("단체 예약 상품은 MVP 범위에서 제외됩니다.", 400, "VALIDATION_ERROR");
+  }
+  if (!Number.isInteger(slotCapacity) || slotCapacity < 1) {
+    throw new ApiError("슬롯 재고는 1 이상이어야 합니다.", 400, "VALIDATION_ERROR");
+  }
+  if (Boolean(availableStartTime) !== Boolean(availableEndTime)) {
+    throw new ApiError("예약 가능 시작/종료 시간을 함께 입력해야 합니다.", 400, "VALIDATION_ERROR");
+  }
+  if (availableStartTime && availableEndTime && availableStartTime >= availableEndTime) {
+    throw new ApiError(
+      "예약 가능 시작 시간은 종료 시간보다 빨라야 합니다.",
+      400,
+      "VALIDATION_ERROR",
+    );
+  }
+
+  return {
+    id,
+    restaurantId: current?.restaurantId ?? 1,
+    name,
+    description,
+    priceAmount,
+    visible: request.visible ?? current?.visible ?? true,
+    status: current?.status ?? "ACTIVE",
+    minPartySize,
+    maxPartySize,
+    availableDays: normalizeReservationProductDays(request.availableDays, current),
+    availableStartTime,
+    availableEndTime,
+    slotCapacity,
+    paymentPolicyType: current?.paymentPolicyType ?? "NONE",
+    paymentAmount: current?.paymentAmount ?? null,
+    createdAt: current?.createdAt ?? now,
+    updatedAt: now,
+  };
+}
+
+function normalizeReservationProductDays(
+  requestedDays: BusinessDayOfWeek[] | null | undefined,
+  current?: ReservationProductResponse,
+) {
+  if (requestedDays === undefined) {
+    return current?.availableDays ?? defaultReservationProductDays;
+  }
+
+  if (!requestedDays || requestedDays.length === 0) {
+    return defaultReservationProductDays;
+  }
+
+  return Array.from(new Set(requestedDays));
+}
+
+function nextReservationProductId(products: ReservationProductResponse[]) {
+  return products.reduce((maxId, product) => Math.max(maxId, product.id), 6000) + 1;
+}
+
+function sortMockReservationProducts(products: ReservationProductResponse[]) {
+  return [...products].sort((a, b) => {
+    const createdAtDiff = timestamp(b.createdAt) - timestamp(a.createdAt);
+
+    if (createdAtDiff !== 0) {
+      return createdAtDiff;
+    }
+
+    return b.id - a.id;
+  });
+}
+
+function timestamp(value: string | null) {
+  return value ? Date.parse(value) || 0 : 0;
+}
+
+function trimToNull(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
 }

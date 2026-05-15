@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import {
   type BusinessApiClient,
   type RestaurantApplicationResponse,
+  type ReservationProductResponse,
   type RestaurantSettingsResponse,
 } from "@/shared/api/businessApiClient";
 
@@ -46,6 +47,26 @@ const mockRestaurant: RestaurantSettingsResponse = {
   },
   businessHours: [],
   holidayRules: [],
+};
+
+const mockReservationProduct: ReservationProductResponse = {
+  id: 1,
+  restaurantId: 1,
+  name: "디너 코스",
+  description: "계절 메뉴 코스",
+  priceAmount: 80000,
+  visible: true,
+  status: "ACTIVE",
+  minPartySize: 1,
+  maxPartySize: 4,
+  availableDays: ["FRIDAY", "SATURDAY"],
+  availableStartTime: "18:00",
+  availableEndTime: "21:00",
+  slotCapacity: 8,
+  paymentPolicyType: "NONE",
+  paymentAmount: null,
+  createdAt: "2026-05-15T00:00:00.000Z",
+  updatedAt: "2026-05-15T00:00:00.000Z",
 };
 
 describe("App routing", () => {
@@ -263,6 +284,10 @@ describe("App routing", () => {
       saveBusinessHours: async () => [],
       saveHolidayRules: async () => [],
       updateReservationPage: async () => mockRestaurant.reservationPage!,
+      listReservationProducts: async () => [],
+      createReservationProduct: async () => mockReservationProduct,
+      updateReservationProduct: async () => mockReservationProduct,
+      deleteReservationProduct: async () => undefined,
     };
     window.history.pushState({}, "", "/onboarding");
 
@@ -372,5 +397,68 @@ describe("App routing", () => {
     fireEvent.click(screen.getByRole("button", { name: "공유 링크 복사" }));
 
     expect(await screen.findByText("공유 링크를 복사했습니다.")).toBeInTheDocument();
+  });
+
+  it("manages reservation products with the mock adapter", async () => {
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText("이메일"), {
+      target: { value: "owner@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("비밀번호"), {
+      target: { value: "password123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "로그인" }));
+
+    await screen.findByRole("heading", { name: "운영 현황" });
+    fireEvent.click(screen.getByRole("link", { name: "예약 상품" }));
+
+    expect(await screen.findByRole("heading", { name: "예약 상품" })).toBeInTheDocument();
+    expect(await screen.findByText("등록된 예약 상품이 없습니다.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "상품 추가" }));
+    fireEvent.click(screen.getByRole("button", { name: "상품 저장" }));
+
+    expect(await screen.findByText("상품명을 입력해 주세요.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("상품명"), {
+      target: { value: "디너 코스" },
+    });
+    fireEvent.change(screen.getByLabelText("가격"), {
+      target: { value: "80000" },
+    });
+    fireEvent.change(screen.getByLabelText("상품 설명"), {
+      target: { value: "계절 메뉴 코스" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "상품 저장" }));
+
+    expect(await screen.findByText("상품이 생성되었습니다.")).toBeInTheDocument();
+    expect(await screen.findByText("디너 코스")).toBeInTheDocument();
+    expect(screen.getByText("80,000원")).toBeInTheDocument();
+    expect(screen.getAllByText("노출").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "디너 코스 수정" }));
+    fireEvent.change(await screen.findByLabelText("상품명"), {
+      target: { value: "런치 코스" },
+    });
+    fireEvent.change(screen.getByLabelText("가격"), {
+      target: { value: "50000" },
+    });
+    fireEvent.click(screen.getByLabelText("예약 페이지 노출"));
+    fireEvent.click(screen.getByRole("button", { name: "상품 저장" }));
+
+    expect(await screen.findByText("상품이 수정되었습니다.")).toBeInTheDocument();
+    expect(await screen.findByText("런치 코스")).toBeInTheDocument();
+    expect(screen.getByText("50,000원")).toBeInTheDocument();
+    expect(screen.getAllByText("비노출").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "런치 코스 삭제" }));
+
+    expect(await screen.findByRole("dialog", { name: "예약 상품 삭제" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "삭제/비활성화" }));
+
+    expect(await screen.findByText("상품이 삭제되었습니다.")).toBeInTheDocument();
+    expect(await screen.findByText("등록된 예약 상품이 없습니다.")).toBeInTheDocument();
   });
 });

@@ -5,6 +5,7 @@ import {
   ClipboardList,
   LayoutDashboard,
   LogOut,
+  Package,
   Search,
   Store,
   UtensilsCrossed,
@@ -19,6 +20,7 @@ const navigationItems = [
   { to: "/", label: "대시보드", icon: LayoutDashboard },
   { to: "/onboarding", label: "입점 신청", icon: ClipboardList },
   { to: "/reservations", label: "예약 운영", icon: CalendarClock },
+  { to: "/products", label: "예약 상품", icon: Package },
   { to: "/store", label: "매장 설정", icon: Store },
   { to: "/customers", label: "고객 관리", icon: UsersRound },
 ];
