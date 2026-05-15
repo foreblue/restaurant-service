@@ -328,6 +328,40 @@ describe("App routing", () => {
         to: "2026-05-15",
         days: [],
       }),
+      getBusinessReservationDetail: async () => ({
+        id: 1,
+        reservationNumber: "RSV-1",
+        status: "CONFIRMED",
+        statusLabel: "확정",
+        statusTone: "success",
+        source: "ONLINE",
+        reservedStartAt: "2026-05-15T02:30:00.000Z",
+        reservedEndAt: "2026-05-15T04:00:00.000Z",
+        visitDate: "2026-05-15",
+        startTime: "11:30:00",
+        endTime: "13:00:00",
+        partySize: 2,
+        product: {
+          id: mockReservationProduct.id,
+          name: mockReservationProduct.name,
+        },
+        customer: {
+          id: 1,
+          name: "김예약",
+          phoneNumber: "010-1234-5678",
+          visitCount: 1,
+          noShowCount: 0,
+        },
+        customerRequest: null,
+        ownerNote: null,
+        paymentStatus: "NOT_REQUIRED",
+        paymentActionRequired: false,
+        cancelledAt: null,
+        cancelReason: null,
+        completedAt: null,
+        noShowAt: null,
+        auditLogs: [],
+      }),
     };
     window.history.pushState({}, "", "/onboarding");
 
@@ -598,6 +632,15 @@ describe("App routing", () => {
     expect(await screen.findByText("김예약")).toBeInTheDocument();
     expect(screen.getAllByText("확정").length).toBeGreaterThan(0);
     expect(screen.getByText("총 예약")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "김예약 상세 열기" }));
+
+    expect(await screen.findByRole("heading", { name: "예약 상세" })).toBeInTheDocument();
+    expect(screen.getByText("RSV-7001")).toBeInTheDocument();
+    expect(await screen.findByText("010-1234-5678")).toBeInTheDocument();
+    expect(await screen.findByText("창가 좌석 요청, 알레르기 확인 필요")).toBeInTheDocument();
+    expect(screen.getByText("VIP/주의 고객 표시는 CRM 단계에서 연결됩니다.")).toBeInTheDocument();
+    expect(screen.getByText("변경, 취소, 방문 완료, 노쇼 처리 가능")).toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText("예약번호, 고객명, 연락처, 상품명"), {
       target: { value: "박취소" },

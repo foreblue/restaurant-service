@@ -25,3 +25,13 @@ export function useBusinessReservationCalendarQuery(query: BusinessReservationCa
     queryFn: () => apiClient.listBusinessReservationCalendar(query),
   });
 }
+
+export function useBusinessReservationDetailQuery(reservationId: number | null) {
+  const apiClient = useBusinessApiClient();
+
+  return useQuery({
+    queryKey: [...businessReservationsQueryKey, "detail", reservationId],
+    queryFn: () => apiClient.getBusinessReservationDetail(reservationId ?? 0),
+    enabled: reservationId !== null,
+  });
+}

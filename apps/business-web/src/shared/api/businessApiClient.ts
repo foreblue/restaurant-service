@@ -363,6 +363,51 @@ export interface BusinessReservationCalendarResponse {
   days: BusinessReservationCalendarDayResponse[];
 }
 
+export interface BusinessReservationProductSummaryResponse {
+  id: number;
+  name: string;
+}
+
+export interface BusinessReservationCustomerDetailResponse {
+  id: number;
+  name: string;
+  phoneNumber: string;
+  visitCount: number;
+  noShowCount: number;
+}
+
+export interface BusinessReservationAuditLogResponse {
+  id: number;
+  action: string;
+  createdAt: string | null;
+}
+
+export interface BusinessReservationDetailResponse {
+  id: number;
+  reservationNumber: string;
+  status: BusinessReservationStatus;
+  statusLabel: string;
+  statusTone: string;
+  source: BusinessReservationSource;
+  reservedStartAt: string;
+  reservedEndAt: string;
+  visitDate: string;
+  startTime: string;
+  endTime: string;
+  partySize: number;
+  product: BusinessReservationProductSummaryResponse;
+  customer: BusinessReservationCustomerDetailResponse;
+  customerRequest: string | null;
+  ownerNote: string | null;
+  paymentStatus: string;
+  paymentActionRequired: boolean;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  completedAt: string | null;
+  noShowAt: string | null;
+  auditLogs: BusinessReservationAuditLogResponse[];
+}
+
 export interface RestaurantSettingsResponse {
   id: number;
   status: "DRAFT" | "APPROVAL_REQUESTED" | "APPROVED" | "REJECTED" | "SUSPENDED";
@@ -464,6 +509,7 @@ export interface BusinessApiClient {
   listBusinessReservationCalendar(
     query: BusinessReservationCalendarQuery,
   ): Promise<BusinessReservationCalendarResponse>;
+  getBusinessReservationDetail(reservationId: number): Promise<BusinessReservationDetailResponse>;
 }
 
 export function createBusinessQueryClient() {
@@ -666,6 +712,12 @@ class HttpBusinessApiClient implements BusinessApiClient {
   listBusinessReservationCalendar(query: BusinessReservationCalendarQuery) {
     return this.request<BusinessReservationCalendarResponse>(
       `/api/business/reservations/calendar${queryString(query)}`,
+    );
+  }
+
+  getBusinessReservationDetail(reservationId: number) {
+    return this.request<BusinessReservationDetailResponse>(
+      `/api/business/reservations/${reservationId}`,
     );
   }
 
@@ -1122,6 +1174,16 @@ class MockBusinessApiClient implements BusinessApiClient {
         };
       }),
     } satisfies BusinessReservationCalendarResponse;
+  }
+
+  async getBusinessReservationDetail(reservationId: number) {
+    const reservation = defaultMockBusinessReservations().find((item) => item.id === reservationId);
+
+    if (!reservation) {
+      throw new ApiError("예약을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    return toMockBusinessReservationDetail(reservation);
   }
 
   private readUser() {
@@ -1760,6 +1822,61 @@ function toMockBusinessReservation({
   };
 }
 
+function toMockBusinessReservationDetail(
+  reservation: BusinessReservationListItemResponse,
+): BusinessReservationDetailResponse {
+  return {
+    id: reservation.id,
+    reservationNumber: reservation.reservationNumber,
+    status: reservation.status,
+    statusLabel: reservation.statusLabel,
+    statusTone: reservation.statusTone,
+    source: reservation.source,
+    reservedStartAt: reservation.reservedStartAt,
+    reservedEndAt: reservation.reservedEndAt,
+    visitDate: reservation.visitDate,
+    startTime: reservation.startTime,
+    endTime: reservation.endTime,
+    partySize: reservation.partySize,
+    product: {
+      id: reservation.productId,
+      name: reservation.productName,
+    },
+    customer: {
+      id: reservation.customer.id,
+      name: reservation.customer.name,
+      phoneNumber: mockCustomerPhoneNumber(reservation.id),
+      visitCount: reservation.status === "COMPLETED" ? 3 : 1,
+      noShowCount: reservation.status === "NO_SHOW" ? 1 : 0,
+    },
+    customerRequest: reservation.hasCustomerRequest ? "창가 좌석 요청, 알레르기 확인 필요" : null,
+    ownerNote: reservation.hasOwnerNote ? "전화 확인 완료. 방문 전 좌석 배정 확인." : null,
+    paymentStatus: reservation.paymentStatus,
+    paymentActionRequired: reservation.paymentActionRequired,
+    cancelledAt: isCancelledReservation(reservation)
+      ? toDateTimeIsoString(reservation.visitDate, reservation.startTime)
+      : null,
+    cancelReason: isCancelledReservation(reservation) ? "고객 요청" : null,
+    completedAt:
+      reservation.status === "COMPLETED"
+        ? toDateTimeIsoString(reservation.visitDate, reservation.endTime)
+        : null,
+    noShowAt:
+      reservation.status === "NO_SHOW"
+        ? toDateTimeIsoString(reservation.visitDate, reservation.endTime)
+        : null,
+    auditLogs: reservation.hasOwnerNote
+      ? [
+          {
+            id: reservation.id + 9000,
+            action: "reservation.owner_note_updated",
+            createdAt: toDateTimeIsoString(reservation.visitDate, reservation.startTime),
+          },
+        ]
+      : [],
+  };
+}
+
 function filterMockBusinessReservations(
   reservations: BusinessReservationListItemResponse[],
   query: BusinessReservationListQuery,
@@ -1805,6 +1922,18 @@ function filterMockBusinessReservations(
 
       return a.id - b.id;
     });
+}
+
+function mockCustomerPhoneNumber(reservationId: number) {
+  const phoneNumbers: Record<number, string> = {
+    7001: "010-1234-5678",
+    7002: "010-8899-9988",
+    7003: "010-9999-0000",
+    7004: "010-2211-1122",
+    7005: "010-3344-4455",
+  };
+
+  return phoneNumbers[reservationId] ?? "010-0000-0000";
 }
 
 function toBusinessReservationSummary(items: BusinessReservationListItemResponse[]) {
