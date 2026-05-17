@@ -1,5 +1,6 @@
 package com.example.restaurant.reservationproduct
 
+import com.example.restaurant.inventory.SeatType
 import jakarta.validation.constraints.Min
 import jakarta.validation.constraints.Max
 import jakarta.validation.constraints.Size
@@ -144,6 +145,12 @@ data class PublicReservationProductResponse(
     val depositAmount: Long,
     val paymentPolicyType: ReservationProductPaymentPolicyType,
     val paymentAmount: Long?,
+    val seatTypes: List<PublicReservationProductSeatTypeResponse> = emptyList(),
+)
+
+data class PublicReservationProductSeatTypeResponse(
+    val code: SeatType,
+    val label: String,
 )
 
 data class ReservationProductRequestMetadata(

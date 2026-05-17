@@ -22,6 +22,10 @@ const products: PublicReservationProduct[] = [
     depositAmount: 0,
     paymentPolicyType: "FREE",
     paymentAmount: null,
+    seatTypes: [
+      { code: "ROOM", label: "룸" },
+      { code: "HALL", label: "홀" },
+    ],
   },
   {
     id: 20,
@@ -37,6 +41,7 @@ const products: PublicReservationProduct[] = [
     depositAmount: 10000,
     paymentPolicyType: "DEPOSIT",
     paymentAmount: 10000,
+    seatTypes: [{ code: "COUNTER", label: "카운터" }],
   },
 ];
 
@@ -72,10 +77,18 @@ function createMockClient(): PublicApiClient {
             },
             {
               timeSlotId: "slot-2",
+              startTime: "19:00",
+              endTime: "20:30",
+              remainingCapacity: 2,
+              available: true,
+            },
+            {
+              timeSlotId: "slot-3",
               startTime: "20:00",
               endTime: "21:30",
               remainingCapacity: 0,
               available: false,
+              unavailableReason: "BLOCKED",
             },
           ],
         });
@@ -130,15 +143,20 @@ describe("ReservationSelectionPanel", () => {
     const availableDate = await screen.findByRole("button", { name: /2026-05-18/ });
     const unavailableDate = screen.getByRole("button", { name: /2026-05-19/ });
     expect(unavailableDate).toBeDisabled();
+    expect(screen.getByText("룸")).toBeInTheDocument();
+    expect(screen.getByText("홀")).toBeInTheDocument();
 
     fireEvent.click(availableDate);
 
     const availableTime = await screen.findByRole("button", { name: /18:00/ });
     expect(screen.getByRole("button", { name: /20:00/ })).toBeDisabled();
+    expect(screen.getByText("잔여 4명")).toBeInTheDocument();
+    expect(screen.getByText("임시 마감")).toBeInTheDocument();
 
     fireEvent.click(availableTime);
 
     expect(screen.getByText("디너 코스 · 2명 · 2026-05-18 · 18:00")).toBeInTheDocument();
+    expect(screen.getByText("룸, 홀")).toBeInTheDocument();
   });
 
   it("shows payment policy summary and branches the submit copy", async () => {
@@ -156,6 +174,7 @@ describe("ReservationSelectionPanel", () => {
 
     expect(screen.getByText("예약금")).toBeInTheDocument();
     expect(screen.getByText("₩10,000")).toBeInTheDocument();
+    expect(screen.getAllByText("카운터").length).toBeGreaterThan(0);
     expect(screen.getByText("예약 후 예약금 결제")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "예약 후 결제 진행" })).toBeInTheDocument();
   });
@@ -255,6 +274,8 @@ describe("ReservationSelectionPanel", () => {
     expect(
       await screen.findByText("예약 상태가 변경되었습니다. 최신 정보를 다시 확인해 주세요."),
     ).toBeInTheDocument();
+    expect(screen.getByText("다른 가능 시간")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /19:00/ }).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "가능 시간 다시 조회" }));
 
     await waitFor(() => {

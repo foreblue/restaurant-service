@@ -24,6 +24,12 @@ export interface PublicReservationProduct {
   depositAmount: number;
   paymentPolicyType?: ReservationProductPaymentPolicyType;
   paymentAmount?: number | null;
+  seatTypes?: PublicReservationProductSeatType[];
+}
+
+export interface PublicReservationProductSeatType {
+  code: string;
+  label: string;
 }
 
 export interface AvailabilityDatesResponse {
@@ -52,4 +58,5 @@ export interface AvailableTimeSlot {
   endTime: string;
   remainingCapacity: number;
   available: boolean;
+  unavailableReason?: string | null;
 }

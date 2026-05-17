@@ -6,6 +6,11 @@ import com.example.restaurant.auth.BusinessUserEntity
 import com.example.restaurant.auth.BusinessUserRepository
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.example.restaurant.inventory.ReservationProductSeatRuleEntity
+import com.example.restaurant.inventory.ReservationProductSeatRuleRepository
+import com.example.restaurant.inventory.RestaurantTableEntity
+import com.example.restaurant.inventory.RestaurantTableRepository
+import com.example.restaurant.inventory.SeatType
 import com.example.restaurant.payment.CancellationPolicyEntity
 import com.example.restaurant.payment.CancellationPolicyRepository
 import com.example.restaurant.restaurant.ReservationPageRepository
@@ -30,6 +35,8 @@ class ReservationProductService(
     private val reservationPageRepository: ReservationPageRepository,
     private val reservationProductRepository: ReservationProductRepository,
     private val cancellationPolicyRepository: CancellationPolicyRepository,
+    private val seatRuleRepository: ReservationProductSeatRuleRepository,
+    private val tableRepository: RestaurantTableRepository,
     private val auditLogService: AuditLogService,
 ) {
     private val objectMapper = jacksonObjectMapper()
@@ -444,7 +451,53 @@ class ReservationProductService(
             depositAmount = paymentAmount ?: 0,
             paymentPolicyType = paymentPolicyType,
             paymentAmount = paymentAmount,
+            seatTypes = publicSeatTypes(),
         )
+
+    private fun ReservationProductEntity.publicSeatTypes(): List<PublicReservationProductSeatTypeResponse> {
+        val activeTables = tableRepository.findByRestaurantIdOrderBySortOrderAscIdAsc(restaurant.id)
+            .filter { it.active }
+        if (activeTables.isEmpty()) {
+            return emptyList()
+        }
+
+        val rule = seatRuleRepository.findByReservationProductId(id)
+        val allowedTableIds = rule.allowedTableIds().toSet()
+        val allowedSeatTypes = rule.allowedSeatTypes().toSet()
+        val candidateTables = when {
+            allowedTableIds.isNotEmpty() -> activeTables.filter { it.id in allowedTableIds }
+            allowedSeatTypes.isNotEmpty() -> activeTables.filter { it.seatType in allowedSeatTypes }
+            else -> activeTables
+        }
+
+        return candidateTables
+            .groupBy { it.seatType }
+            .toSortedMap(compareBy<SeatType> { it.name })
+            .map { (seatType, tables) ->
+                PublicReservationProductSeatTypeResponse(
+                    code = seatType,
+                    label = tables.displayLabel(),
+                )
+            }
+    }
+
+    private fun ReservationProductSeatRuleEntity?.allowedSeatTypes(): List<SeatType> =
+        this?.allowedSeatTypesJson
+            ?.takeIf { it.isNotBlank() }
+            ?.let { objectMapper.readValue<List<String>>(it).map(SeatType::valueOf) }
+            .orEmpty()
+
+    private fun ReservationProductSeatRuleEntity?.allowedTableIds(): List<Long> =
+        this?.allowedTableIdsJson
+            ?.takeIf { it.isNotBlank() }
+            ?.let { objectMapper.readValue<List<Long>>(it) }
+            .orEmpty()
+
+    private fun List<RestaurantTableEntity>.displayLabel(): String =
+        map { it.seatTypeLabel.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .joinToString(" / ")
 
     private fun ReservationProductEntity.snapshot(): Map<String, Any?> =
         mapOf(
