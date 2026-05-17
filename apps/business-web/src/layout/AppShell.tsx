@@ -1,4 +1,5 @@
 import {
+  BarChart3,
   Bell,
   CalendarClock,
   ChevronDown,
@@ -27,6 +28,7 @@ const navigationItems = [
   { to: "/products", label: "예약 상품", icon: Package },
   { to: "/store", label: "매장 설정", icon: Store },
   { to: "/customers", label: "고객 관리", icon: UsersRound },
+  { to: "/analytics", label: "운영 통계", icon: BarChart3 },
 ];
 
 export function AppShell() {

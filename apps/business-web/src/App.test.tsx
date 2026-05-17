@@ -526,6 +526,43 @@ describe("App routing", () => {
         },
         items: [],
       }),
+      getBusinessAnalyticsSummary: async () => ({
+        restaurantId: 1,
+        period: {
+          from: "2026-05-01",
+          to: "2026-05-15",
+        },
+        reservationMetricBasis: "VISIT_DATE",
+        paymentMetricBasis: "PAID_AT",
+        refundMetricBasis: "SUCCEEDED_AT",
+        generatedAt: "2026-05-15T00:00:00.000Z",
+        settlementNotice: "운영 참고용 통계이며 정산 자동화 또는 세금 처리 기준 금액이 아닙니다.",
+        reservations: {
+          total: 0,
+          confirmed: 0,
+          modified: 0,
+          completed: 0,
+          cancelledByCustomer: 0,
+          cancelledByRestaurant: 0,
+          cancelled: 0,
+          noShow: 0,
+        },
+        payments: {
+          depositAmount: 0,
+          prepaidAmount: 0,
+          guaranteeChargeAmount: 0,
+          paymentAmount: 0,
+          refundAmount: 0,
+          netAmount: 0,
+          cardGuaranteeCount: 0,
+          refundCount: 0,
+        },
+        rates: {
+          completionRate: 0,
+          cancellationRate: 0,
+          noShowRate: 0,
+        },
+      }),
       listBusinessCustomers: async () => ({
         summary: {
           totalCount: 0,
@@ -1198,6 +1235,45 @@ describe("App routing", () => {
     fireEvent.click(screen.getByRole("button", { name: "필터 초기화" }));
 
     expect(await screen.findByText("REF-9202")).toBeInTheDocument();
+  });
+
+  it("shows analytics summary with period filters", async () => {
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText("이메일"), {
+      target: { value: "owner@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("비밀번호"), {
+      target: { value: "password123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "로그인" }));
+
+    await screen.findByRole("heading", { name: "운영 현황" });
+    fireEvent.click(screen.getByRole("link", { name: "운영 통계" }));
+
+    expect(await screen.findByRole("heading", { name: "운영 통계" })).toBeInTheDocument();
+    expect(await screen.findByText("예약 수")).toBeInTheDocument();
+    expect(screen.getByText("방문 완료")).toBeInTheDocument();
+    expect(screen.getByText("취소 수")).toBeInTheDocument();
+    expect(screen.getByText("노쇼 수")).toBeInTheDocument();
+    expect(screen.getByText("예약금 매출")).toBeInTheDocument();
+    expect(screen.getByText("환불 금액")).toBeInTheDocument();
+    expect(screen.getByText("방문일 기준")).toBeInTheDocument();
+    expect(screen.getByText("결제일 기준")).toBeInTheDocument();
+    expect(screen.getByText("환불 완료일 기준")).toBeInTheDocument();
+    expect(
+      screen.getByText("운영 참고용 통계이며 정산 자동화 또는 세금 처리 기준 금액이 아닙니다."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/멀티지점 비교/)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("기간"), {
+      target: { value: "TODAY" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "조회" }));
+
+    expect(await screen.findByText("조회 기준일")).toBeInTheDocument();
+    expect(screen.getByLabelText("기간")).toHaveValue("TODAY");
+    expect(screen.getAllByText(/최근 갱신/).length).toBeGreaterThan(0);
   });
 
   it("manages seat tables with the mock adapter", async () => {
