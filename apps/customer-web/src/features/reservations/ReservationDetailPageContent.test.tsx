@@ -87,6 +87,80 @@ describe("ReservationDetailPageContent", () => {
     expect(screen.getByText("디너 코스")).toBeInTheDocument();
     expect(screen.getByText("2026-05-18 18:00-19:30")).toBeInTheDocument();
     expect(screen.getByText("창가 좌석 요청")).toBeInTheDocument();
+    expect(screen.getByText(/취소 가능 기한:/)).toBeInTheDocument();
+    expect(screen.getByText("예약 변경 안내")).toBeInTheDocument();
+    expect(screen.getByText(/온라인 예약 변경은 지원하지 않습니다/)).toBeInTheDocument();
+  });
+
+  it.each([
+    [
+      "PENDING",
+      "예약 접수",
+      "매장에서 예약을 확인 중입니다",
+      "예약 접수 상태에서는 온라인 고객 취소를 진행할 수 없습니다.",
+    ],
+    ["MODIFIED", "예약 변경", "매장에서 변경한 방문 정보가 반영된 예약입니다", "예약 변경 안내"],
+    [
+      "CANCELLED_BY_CUSTOMER",
+      "고객 취소",
+      "고객 요청으로 취소가 완료된 예약입니다",
+      "고객 요청으로 이미 취소된 예약입니다.",
+    ],
+    [
+      "CANCELLED_BY_RESTAURANT",
+      "매장 취소",
+      "매장 사정으로 취소된 예약입니다",
+      "매장에서 취소한 예약입니다.",
+    ],
+    [
+      "COMPLETED",
+      "방문 완료",
+      "방문이 완료된 예약입니다",
+      "방문이 완료된 예약은 취소할 수 없습니다.",
+    ],
+    [
+      "NO_SHOW",
+      "노쇼",
+      "노쇼로 처리된 예약입니다",
+      "노쇼 처리된 예약은 고객 취소로 변경할 수 없습니다.",
+    ],
+  ] as const)(
+    "shows status-specific guidance for %s",
+    async (status, label, statusDescription, cancellationMessage) => {
+      const client = createMockClient({
+        ...reservationDetail,
+        status,
+        cancelable: status === "MODIFIED",
+      });
+
+      render(
+        <AppProviders apiClient={client}>
+          <ReservationDetailPageContent lookupToken="lookup-token" reservationId={300} />
+        </AppProviders>,
+      );
+
+      expect(await screen.findByText(label)).toBeInTheDocument();
+      expect(screen.getByText(new RegExp(statusDescription))).toBeInTheDocument();
+      expect(screen.getByText(new RegExp(cancellationMessage))).toBeInTheDocument();
+    },
+  );
+
+  it("explains when the cancellation deadline has passed", async () => {
+    const client = createMockClient({
+      ...reservationDetail,
+      cancelable: false,
+      cancelDeadline: "2000-01-01T00:00:00.000Z",
+    });
+
+    render(
+      <AppProviders apiClient={client}>
+        <ReservationDetailPageContent lookupToken="lookup-token" reservationId={300} />
+      </AppProviders>,
+    );
+
+    expect(
+      await screen.findByText("취소 가능 기한이 지나 온라인 취소를 진행할 수 없습니다."),
+    ).toBeInTheDocument();
   });
 
   it("cancels a cancelable reservation and refreshes the visible status", async () => {

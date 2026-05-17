@@ -16,7 +16,11 @@ import {
   reservationDetailQueryKey,
 } from "./reservationDetailApi";
 import { type PublicReservationDetailResponse } from "./reservationDetailTypes";
-import { formatReservationStatus, isCancelledReservationStatus } from "./reservationDisplay";
+import {
+  getReservationStatusView,
+  isActiveReservationStatus,
+  isCancelledReservationStatus,
+} from "./reservationDisplay";
 
 interface ReservationDetailPageContentProps {
   lookupToken: string | null;
@@ -128,13 +132,13 @@ function ReservationDetailPanel({ lookupToken, reservationId }: ReservationDetai
 }
 
 function ReservationDetailCard({ reservation }: { reservation: PublicReservationDetailResponse }) {
+  const statusView = getReservationStatusView(reservation.status);
+
   return (
     <section className="grid gap-4 rounded-lg border bg-white p-4 shadow-sm">
-      <Alert
-        title={formatReservationStatus(reservation.status)}
-        variant={isCancelledReservationStatus(reservation.status) ? "warning" : "success"}
-      >
-        예약번호 {reservation.reservationNumber}
+      <Alert title={statusView.label} variant={statusView.variant}>
+        <p>{statusView.description}</p>
+        <p className="mt-1">예약번호 {reservation.reservationNumber}</p>
       </Alert>
 
       <dl className="grid gap-3 text-sm">
@@ -179,19 +183,17 @@ function CancelReservationPanel({
   onConfirmCancel: () => void;
   reservation: PublicReservationDetailResponse;
 }) {
-  if (isCancelledReservationStatus(reservation.status)) {
-    return (
-      <Alert title="취소 완료" variant="warning">
-        예약이 취소된 상태입니다.
-      </Alert>
-    );
-  }
+  const cancellationRestriction = getCancellationRestriction(reservation);
 
-  if (!reservation.cancelable) {
+  if (cancellationRestriction) {
     return (
-      <Alert title="취소 불가" variant="warning">
-        현재 상태 또는 방문 시간 기준으로 고객 취소를 진행할 수 없습니다.
-      </Alert>
+      <section className="grid gap-3 rounded-lg border bg-white p-4 shadow-sm">
+        <Alert title={cancellationRestriction.title} variant="warning">
+          {cancellationRestriction.description}
+        </Alert>
+        <CancellationPolicyNote reservation={reservation} />
+        <ReservationChangeNotice reservation={reservation} />
+      </section>
     );
   }
 
@@ -203,6 +205,9 @@ function CancelReservationPanel({
           취소 사유는 선택 입력입니다. 취소 후 상태는 즉시 갱신됩니다.
         </p>
       </div>
+
+      <CancellationPolicyNote reservation={reservation} />
+      <ReservationChangeNotice reservation={reservation} />
 
       <label className="grid gap-2 text-sm font-semibold text-slate-800">
         취소 사유
@@ -246,6 +251,80 @@ function CancelReservationPanel({
   );
 }
 
+function CancellationPolicyNote({ reservation }: { reservation: PublicReservationDetailResponse }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700">
+      취소 가능 기한: {formatDateTime(reservation.cancelDeadline)}
+    </div>
+  );
+}
+
+function ReservationChangeNotice({
+  reservation,
+}: {
+  reservation: PublicReservationDetailResponse;
+}) {
+  if (!isActiveReservationStatus(reservation.status)) {
+    return null;
+  }
+
+  return (
+    <Alert title="예약 변경 안내" variant="info">
+      온라인 예약 변경은 지원하지 않습니다. 일정이나 인원 변경이 필요하면 예약을 취소한 뒤 다시
+      예약해 주세요.
+    </Alert>
+  );
+}
+
+function getCancellationRestriction(reservation: PublicReservationDetailResponse) {
+  if (isCancelledReservationStatus(reservation.status)) {
+    return {
+      description:
+        reservation.status === "CANCELLED_BY_CUSTOMER"
+          ? "고객 요청으로 이미 취소된 예약입니다."
+          : "매장에서 취소한 예약입니다. 필요한 경우 매장에 문의해 주세요.",
+      title: "취소 완료",
+    };
+  }
+
+  if (reservation.status === "PENDING") {
+    return {
+      description: "예약 접수 상태에서는 온라인 고객 취소를 진행할 수 없습니다.",
+      title: "취소 불가",
+    };
+  }
+
+  if (reservation.status === "COMPLETED") {
+    return {
+      description: "방문이 완료된 예약은 취소할 수 없습니다.",
+      title: "취소 불가",
+    };
+  }
+
+  if (reservation.status === "NO_SHOW") {
+    return {
+      description: "노쇼 처리된 예약은 고객 취소로 변경할 수 없습니다.",
+      title: "취소 불가",
+    };
+  }
+
+  if (reservation.cancelable) {
+    return null;
+  }
+
+  if (isActiveReservationStatus(reservation.status) && isPastDateTime(reservation.cancelDeadline)) {
+    return {
+      description: "취소 가능 기한이 지나 온라인 취소를 진행할 수 없습니다.",
+      title: "취소 불가",
+    };
+  }
+
+  return {
+    description: "현재 예약 상태에서는 온라인 고객 취소를 진행할 수 없습니다.",
+    title: "취소 불가",
+  };
+}
+
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="grid gap-1 border-b border-slate-100 pb-3 last:border-b-0 last:pb-0">
@@ -266,4 +345,10 @@ function formatDateTime(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
+}
+
+function isPastDateTime(value: string) {
+  const date = new Date(value);
+
+  return !Number.isNaN(date.getTime()) && date.getTime() <= Date.now();
 }
