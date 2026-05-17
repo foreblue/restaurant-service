@@ -4,6 +4,7 @@ import { Alert } from "@/components/ui";
 
 import { type PublicReservationResponse } from "./reservationCreateTypes";
 import { formatReservationStatus } from "./reservationDisplay";
+import { ReservationPaymentActionPanel } from "./ReservationPaymentActionPanel";
 import { type ReservationPaymentPolicyView } from "./reservationPaymentPolicy";
 
 interface ReservationCompletionCardProps {
@@ -49,6 +50,10 @@ export function ReservationCompletionCard({
           <p className="font-semibold text-slate-950">다음 단계</p>
           <p>{paymentPolicy.nextStepLabel}</p>
         </div>
+      ) : null}
+
+      {paymentPolicy ? (
+        <ReservationPaymentActionPanel paymentPolicy={paymentPolicy} reservation={reservation} />
       ) : null}
 
       <Link
