@@ -563,6 +563,42 @@ describe("App routing", () => {
           noShowRate: 0,
         },
       }),
+      getBusinessAnalyticsTimeSlots: async () => ({
+        restaurantId: 1,
+        date: "2026-05-15",
+        slotMinutes: 30,
+        metricBasis: "VISIT_DATE",
+        generatedAt: "2026-05-15T00:00:00.000Z",
+        settlementNotice: "운영 참고용 통계이며 정산 자동화 또는 세금 처리 기준 금액이 아닙니다.",
+        slots: [],
+      }),
+      getBusinessAnalyticsProducts: async () => ({
+        restaurantId: 1,
+        period: {
+          from: "2026-05-01",
+          to: "2026-05-15",
+        },
+        reservationMetricBasis: "VISIT_DATE",
+        paymentMetricBasis: "PAID_AT",
+        refundMetricBasis: "SUCCEEDED_AT",
+        generatedAt: "2026-05-15T00:00:00.000Z",
+        settlementNotice: "운영 참고용 통계이며 정산 자동화 또는 세금 처리 기준 금액이 아닙니다.",
+        items: [],
+      }),
+      requestBusinessAnalyticsExport: async () => ({
+        id: 1,
+        restaurantId: 1,
+        type: "RESERVATION_SUMMARY",
+        status: "COMPLETED",
+        fileName: "analytics-reservation_summary-2026-05-01-2026-05-15.csv",
+        contentType: "text/csv; charset=utf-8",
+        rowCount: 1,
+        csvContent: "metric,value\nreservations,0",
+        requestedAt: "2026-05-15T00:00:00.000Z",
+        completedAt: "2026-05-15T00:00:00.000Z",
+        privacyNotice:
+          "내보내기 CSV에는 고객 전화번호 전체, 이메일, 상세 요청사항을 포함하지 않습니다.",
+      }),
       listBusinessCustomers: async () => ({
         summary: {
           totalCount: 0,
@@ -1262,9 +1298,27 @@ describe("App routing", () => {
     expect(screen.getByText("결제일 기준")).toBeInTheDocument();
     expect(screen.getByText("환불 완료일 기준")).toBeInTheDocument();
     expect(
-      screen.getByText("운영 참고용 통계이며 정산 자동화 또는 세금 처리 기준 금액이 아닙니다."),
-    ).toBeInTheDocument();
+      screen.getAllByText("운영 참고용 통계이며 정산 자동화 또는 세금 처리 기준 금액이 아닙니다.")
+        .length,
+    ).toBeGreaterThan(0);
+    expect(await screen.findByText("시간대별 예약률")).toBeInTheDocument();
+    expect(await screen.findByText("상품별 성과")).toBeInTheDocument();
+    expect(screen.getAllByText("디너 코스").length).toBeGreaterThan(0);
     expect(screen.queryByText(/멀티지점 비교/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "CSV 내보내기" }));
+
+    expect(await screen.findByRole("dialog", { name: "CSV 내보내기" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("CSV 타입"), {
+      target: { value: "product_performance" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "내보내기 요청" }));
+
+    expect(await screen.findByText("CSV 내보내기 요청이 완료되었습니다.")).toBeInTheDocument();
+    expect((await screen.findAllByText(/analytics-product_performance/)).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/고객 전화번호 전체/).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "닫기" }));
 
     fireEvent.change(screen.getByLabelText("기간"), {
       target: { value: "TODAY" },

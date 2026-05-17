@@ -1,10 +1,23 @@
-import { BarChart3, CalendarDays, Clock3, ReceiptText } from "lucide-react";
+import { BarChart3, CalendarDays, Clock3, Download, ReceiptText, Table2, X } from "lucide-react";
 import { useState } from "react";
 
+import { useToastStore } from "@/components/feedback/toastStore";
 import { Alert, Button, DateInput, Field, Select } from "@/components/ui";
-import { useBusinessAnalyticsSummaryQuery } from "@/features/analytics/analyticsQueries";
+import {
+  useBusinessAnalyticsProductsQuery,
+  useBusinessAnalyticsSummaryQuery,
+  useBusinessAnalyticsTimeSlotsQuery,
+  useRequestBusinessAnalyticsExportMutation,
+} from "@/features/analytics/analyticsQueries";
 import { useStoreSettingsQuery } from "@/features/store/storeSettingsQueries";
-import { type BusinessAnalyticsSummaryResponse } from "@/shared/api/businessApiClient";
+import {
+  type BusinessAnalyticsExportResponse,
+  type BusinessAnalyticsExportType,
+  type BusinessAnalyticsPeriodQuery,
+  type BusinessAnalyticsProductResponse,
+  type BusinessAnalyticsSummaryResponse,
+  type BusinessAnalyticsTimeSlotResponse,
+} from "@/shared/api/businessApiClient";
 
 type PeriodPreset =
   | "TODAY"
@@ -25,6 +38,13 @@ const periodPresetOptions: Array<{ label: string; value: PeriodPreset }> = [
   { label: "사용자 지정", value: "CUSTOM" },
 ];
 
+const analyticsExportOptions: Array<{ label: string; value: BusinessAnalyticsExportType }> = [
+  { label: "예약 요약", value: "reservation_summary" },
+  { label: "결제/환불 요약", value: "payment_refund_summary" },
+  { label: "상품별 성과", value: "product_performance" },
+  { label: "시간대별 예약률", value: "time_slot_reservation_rate" },
+];
+
 const initialPeriod = periodForPreset("LAST_30_DAYS");
 
 export function AnalyticsDashboardPage() {
@@ -33,8 +53,14 @@ export function AnalyticsDashboardPage() {
   const [from, setFrom] = useState(initialPeriod.from);
   const [to, setTo] = useState(initialPeriod.to);
   const [appliedPeriod, setAppliedPeriod] = useState(initialPeriod);
+  const [slotDate, setSlotDate] = useState(initialPeriod.to);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const restaurantId = storeSettings.data?.id ?? null;
   const summaryQuery = useBusinessAnalyticsSummaryQuery(restaurantId, appliedPeriod);
+  const timeSlotsQuery = useBusinessAnalyticsTimeSlotsQuery(restaurantId, { date: slotDate });
+  const productsQuery = useBusinessAnalyticsProductsQuery(restaurantId, appliedPeriod);
+  const exportMutation = useRequestBusinessAnalyticsExportMutation();
+  const pushToast = useToastStore((state) => state.pushToast);
   const summary = summaryQuery.data ?? null;
 
   function changePreset(value: PeriodPreset) {
@@ -49,6 +75,35 @@ export function AnalyticsDashboardPage() {
 
   function applyPeriod() {
     setAppliedPeriod({ from, to });
+    setSlotDate(to);
+  }
+
+  async function requestExport(type: BusinessAnalyticsExportType) {
+    if (restaurantId === null) {
+      throw new Error("매장 정보를 불러오지 못했습니다.");
+    }
+
+    try {
+      const response = await exportMutation.mutateAsync({
+        restaurantId,
+        request: exportRequestForType(type, appliedPeriod, slotDate),
+      });
+
+      pushToast({
+        title: "CSV 내보내기 요청이 완료되었습니다.",
+        description: `${response.fileName} · ${response.rowCount}행`,
+        variant: "success",
+      });
+
+      return response;
+    } catch (error) {
+      pushToast({
+        title: "CSV 내보내기 요청에 실패했습니다.",
+        description: error instanceof Error ? error.message : "잠시 후 다시 시도해 주세요.",
+        variant: "danger",
+      });
+      throw error;
+    }
   }
 
   return (
@@ -120,6 +175,29 @@ export function AnalyticsDashboardPage() {
       {summary ? <AnalyticsSummary summary={summary} /> : null}
       {!summary && (storeSettings.isLoading || summaryQuery.isLoading) ? (
         <Panel title="운영 통계를 불러오는 중입니다." />
+      ) : null}
+      <AnalyticsDetailSections
+        slotDate={slotDate}
+        onSlotDateChange={setSlotDate}
+        timeSlots={timeSlotsQuery.data ?? null}
+        products={productsQuery.data ?? null}
+        isTimeSlotsLoading={timeSlotsQuery.isLoading}
+        isProductsLoading={productsQuery.isLoading}
+        isTimeSlotsError={timeSlotsQuery.isError}
+        isProductsError={productsQuery.isError}
+        onOpenExport={() => {
+          exportMutation.reset();
+          setExportDialogOpen(true);
+        }}
+      />
+      {exportDialogOpen ? (
+        <AnalyticsExportDialog
+          period={appliedPeriod}
+          slotDate={slotDate}
+          isPending={exportMutation.isPending}
+          onClose={() => setExportDialogOpen(false)}
+          onRequest={requestExport}
+        />
       ) : null}
     </>
   );
@@ -199,6 +277,297 @@ function AnalyticsSummary({ summary }: { summary: BusinessAnalyticsSummaryRespon
   );
 }
 
+function AnalyticsDetailSections({
+  slotDate,
+  onSlotDateChange,
+  timeSlots,
+  products,
+  isTimeSlotsLoading,
+  isProductsLoading,
+  isTimeSlotsError,
+  isProductsError,
+  onOpenExport,
+}: {
+  slotDate: string;
+  onSlotDateChange: (value: string) => void;
+  timeSlots: BusinessAnalyticsTimeSlotResponse | null;
+  products: BusinessAnalyticsProductResponse | null;
+  isTimeSlotsLoading: boolean;
+  isProductsLoading: boolean;
+  isTimeSlotsError: boolean;
+  isProductsError: boolean;
+  onOpenExport: () => void;
+}) {
+  return (
+    <div className="mt-5 space-y-5">
+      <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-medium text-primary">
+              <Clock3 aria-hidden className="size-4" />
+              시간대별 예약률
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              방문일 기준 예약 인원을 좌석 수용량과 비교합니다.
+            </p>
+          </div>
+          <Field id="analytics-slot-date" label="시간대 기준일">
+            <DateInput
+              id="analytics-slot-date"
+              value={slotDate}
+              onChange={(event) => onSlotDateChange(event.target.value)}
+            />
+          </Field>
+        </div>
+
+        {isTimeSlotsError ? (
+          <div className="mt-4">
+            <Alert variant="danger">시간대별 예약률을 불러오지 못했습니다.</Alert>
+          </div>
+        ) : null}
+        {isTimeSlotsLoading && !timeSlots ? (
+          <p className="mt-4 text-sm text-muted-foreground">시간대별 예약률을 불러오는 중입니다.</p>
+        ) : null}
+        {timeSlots ? <AnalyticsTimeSlotTable timeSlots={timeSlots} /> : null}
+      </section>
+
+      <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-medium text-primary">
+              <Table2 aria-hidden className="size-4" />
+              상품별 성과
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              예약, 방문, 취소, 노쇼와 결제/환불 지표를 상품 단위로 확인합니다.
+            </p>
+          </div>
+          <Button type="button" variant="outline" onClick={onOpenExport}>
+            <Download aria-hidden className="size-4" />
+            CSV 내보내기
+          </Button>
+        </div>
+
+        {products ? (
+          <div className="mt-4">
+            <Alert title="정산 기준 아님">{products.settlementNotice}</Alert>
+          </div>
+        ) : null}
+        {isProductsError ? (
+          <div className="mt-4">
+            <Alert variant="danger">상품별 성과를 불러오지 못했습니다.</Alert>
+          </div>
+        ) : null}
+        {isProductsLoading && !products ? (
+          <p className="mt-4 text-sm text-muted-foreground">상품별 성과를 불러오는 중입니다.</p>
+        ) : null}
+        {products ? <AnalyticsProductTable products={products} /> : null}
+      </section>
+    </div>
+  );
+}
+
+function AnalyticsTimeSlotTable({ timeSlots }: { timeSlots: BusinessAnalyticsTimeSlotResponse }) {
+  if (timeSlots.slots.length === 0) {
+    return <p className="mt-4 text-sm text-muted-foreground">조회된 시간대가 없습니다.</p>;
+  }
+
+  return (
+    <div className="mt-4 overflow-x-auto">
+      <table className="min-w-full text-left text-sm" aria-label="시간대별 예약률 표">
+        <thead className="border-b border-border text-xs text-muted-foreground">
+          <tr>
+            <th className="py-2 pr-4 font-medium">시간대</th>
+            <th className="py-2 pr-4 font-medium">예약 인원</th>
+            <th className="py-2 pr-4 font-medium">수용량</th>
+            <th className="py-2 font-medium">예약률</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {timeSlots.slots.map((slot) => (
+            <tr key={`${slot.startTime}-${slot.endTime}`}>
+              <td className="py-3 pr-4 font-medium">
+                {formatTime(slot.startTime)}-{formatTime(slot.endTime)}
+              </td>
+              <td className="py-3 pr-4">{slot.reserved}명</td>
+              <td className="py-3 pr-4">{slot.capacity}명</td>
+              <td className="py-3">
+                <div className="flex min-w-48 items-center gap-3">
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary"
+                      style={{ width: `${Math.min(slot.reservationRate, 1) * 100}%` }}
+                    />
+                  </div>
+                  <span className="w-12 text-right font-medium">
+                    {formatRate(slot.reservationRate)}
+                  </span>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-3 text-xs text-muted-foreground">
+        기준일 {formatDateLabel(timeSlots.date)} · {basisLabel(timeSlots.metricBasis)} · 최근 갱신{" "}
+        {formatDateTime(timeSlots.generatedAt)}
+      </p>
+    </div>
+  );
+}
+
+function AnalyticsProductTable({ products }: { products: BusinessAnalyticsProductResponse }) {
+  if (products.items.length === 0) {
+    return <p className="mt-4 text-sm text-muted-foreground">조회된 상품별 성과가 없습니다.</p>;
+  }
+
+  return (
+    <div className="mt-4 overflow-x-auto">
+      <table className="min-w-[860px] text-left text-sm" aria-label="상품별 성과 표">
+        <thead className="border-b border-border text-xs text-muted-foreground">
+          <tr>
+            <th className="py-2 pr-4 font-medium">상품</th>
+            <th className="py-2 pr-4 font-medium">예약</th>
+            <th className="py-2 pr-4 font-medium">방문</th>
+            <th className="py-2 pr-4 font-medium">취소</th>
+            <th className="py-2 pr-4 font-medium">노쇼</th>
+            <th className="py-2 pr-4 font-medium">결제</th>
+            <th className="py-2 pr-4 font-medium">환불</th>
+            <th className="py-2 pr-4 font-medium">순액</th>
+            <th className="py-2 font-medium">평균 인원</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {products.items.map((product) => (
+            <tr key={product.reservationProductId}>
+              <td className="py-3 pr-4 font-medium">{product.name}</td>
+              <td className="py-3 pr-4">{product.reservations}건</td>
+              <td className="py-3 pr-4">{product.completed}건</td>
+              <td className="py-3 pr-4">{product.cancelled}건</td>
+              <td className="py-3 pr-4">{product.noShow}건</td>
+              <td className="py-3 pr-4">{formatPrice(product.paymentAmount)}</td>
+              <td className="py-3 pr-4">{formatPrice(product.refundAmount)}</td>
+              <td className="py-3 pr-4 font-medium">{formatPrice(product.netAmount)}</td>
+              <td className="py-3">{formatPartySize(product.averagePartySize)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-3 text-xs text-muted-foreground">
+        {formatDateLabel(products.period.from)}-{formatDateLabel(products.period.to)} · 예약{" "}
+        {basisLabel(products.reservationMetricBasis)} · 결제{" "}
+        {basisLabel(products.paymentMetricBasis)} · 환불 {basisLabel(products.refundMetricBasis)}
+      </p>
+    </div>
+  );
+}
+
+function AnalyticsExportDialog({
+  period,
+  slotDate,
+  isPending,
+  onClose,
+  onRequest,
+}: {
+  period: BusinessAnalyticsPeriodQuery;
+  slotDate: string;
+  isPending: boolean;
+  onClose: () => void;
+  onRequest: (type: BusinessAnalyticsExportType) => Promise<BusinessAnalyticsExportResponse>;
+}) {
+  const [exportType, setExportType] = useState<BusinessAnalyticsExportType>("reservation_summary");
+  const [result, setResult] = useState<BusinessAnalyticsExportResponse | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  async function submitExport() {
+    setErrorMessage(null);
+    setResult(null);
+
+    try {
+      const response = await onRequest(exportType);
+      setResult(response);
+    } catch {
+      setErrorMessage("CSV 내보내기 요청에 실패했습니다.");
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <form
+        aria-labelledby="analytics-export-title"
+        aria-modal="true"
+        className="w-full max-w-lg rounded-lg border border-border bg-card p-5 shadow-xl"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submitExport();
+        }}
+        role="dialog"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 id="analytics-export-title" className="text-lg font-semibold">
+              CSV 내보내기
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              운영 통계 원자료를 선택한 기준으로 생성합니다.
+            </p>
+          </div>
+          <Button type="button" variant="ghost" size="icon" aria-label="닫기" onClick={onClose}>
+            <X aria-hidden className="size-4" />
+          </Button>
+        </div>
+
+        <div className="mt-5 space-y-4">
+          <Field id="analytics-export-type" label="CSV 타입">
+            <Select
+              id="analytics-export-type"
+              value={exportType}
+              options={analyticsExportOptions}
+              onChange={(event) => {
+                setExportType(event.target.value as BusinessAnalyticsExportType);
+                setResult(null);
+                setErrorMessage(null);
+              }}
+            />
+          </Field>
+
+          <div className="rounded-md border border-border bg-background p-3 text-sm">
+            <p className="text-xs text-muted-foreground">내보내기 범위</p>
+            <p className="mt-1 font-medium">{exportScopeLabel(exportType, period, slotDate)}</p>
+          </div>
+
+          <Alert title="개인정보 마스킹 안내">
+            기본 CSV에는 고객 전화번호 전체, 이메일, 상세 요청사항을 포함하지 않습니다.
+          </Alert>
+          <Alert title="리포트 구분">
+            CSV 파일은 운영 참고용 원자료이며 정산 자동화 리포트가 아닙니다.
+          </Alert>
+
+          {errorMessage ? <Alert variant="danger">{errorMessage}</Alert> : null}
+          {result ? (
+            <div className="rounded-md border border-border bg-background p-3 text-sm">
+              <p className="font-medium">{result.fileName}</p>
+              <p className="mt-1 text-muted-foreground">
+                {result.rowCount}행 · {exportStatusLabel(result.status)}
+              </p>
+              <p className="mt-2 text-xs text-muted-foreground">{result.privacyNotice}</p>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            취소
+          </Button>
+          <Button type="submit" isLoading={isPending}>
+            내보내기 요청
+          </Button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function MetricCard({
   label,
   value,
@@ -237,6 +606,40 @@ function Panel({ title }: { title: string }) {
       <p className="text-sm text-muted-foreground">{title}</p>
     </section>
   );
+}
+
+function exportRequestForType(
+  type: BusinessAnalyticsExportType,
+  period: BusinessAnalyticsPeriodQuery,
+  slotDate: string,
+) {
+  if (type === "time_slot_reservation_rate") {
+    return { type, date: slotDate };
+  }
+
+  return { type, from: period.from ?? null, to: period.to ?? null };
+}
+
+function exportScopeLabel(
+  type: BusinessAnalyticsExportType,
+  period: BusinessAnalyticsPeriodQuery,
+  slotDate: string,
+) {
+  if (type === "time_slot_reservation_rate") {
+    return `${formatDateLabel(slotDate)} 시간대`;
+  }
+
+  return `${formatDateLabel(period.from ?? slotDate)}-${formatDateLabel(period.to ?? slotDate)}`;
+}
+
+function exportStatusLabel(value: string) {
+  const labels: Record<string, string> = {
+    PROCESSING: "생성 중",
+    COMPLETED: "생성 완료",
+    FAILED: "생성 실패",
+  };
+
+  return labels[value] ?? value;
 }
 
 function periodForPreset(preset: PeriodPreset) {
@@ -297,6 +700,18 @@ function formatPrice(value: number) {
 
 function formatRate(value: number) {
   return `${Math.round(value * 1000) / 10}%`;
+}
+
+function formatTime(value: string) {
+  return value.slice(0, 5);
+}
+
+function formatPartySize(value: number) {
+  if (value <= 0) {
+    return "-";
+  }
+
+  return `${value.toFixed(value % 1 === 0 ? 0 : 1)}명`;
 }
 
 function formatDateLabel(value: string) {

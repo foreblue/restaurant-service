@@ -717,6 +717,87 @@ export interface BusinessAnalyticsSummaryResponse {
   rates: BusinessAnalyticsRateMetricsResponse;
 }
 
+export interface BusinessAnalyticsTimeSlotQuery {
+  date?: string | null;
+}
+
+export interface BusinessAnalyticsTimeSlotItemResponse {
+  startTime: string;
+  endTime: string;
+  capacity: number;
+  reserved: number;
+  reservationRate: number;
+}
+
+export interface BusinessAnalyticsTimeSlotResponse {
+  restaurantId: number;
+  date: string;
+  slotMinutes: number;
+  metricBasis: string;
+  generatedAt: string | null;
+  settlementNotice: string;
+  slots: BusinessAnalyticsTimeSlotItemResponse[];
+}
+
+export interface BusinessAnalyticsProductItemResponse {
+  reservationProductId: number;
+  name: string;
+  reservations: number;
+  completed: number;
+  cancelled: number;
+  noShow: number;
+  paymentAmount: number;
+  refundAmount: number;
+  netAmount: number;
+  averagePartySize: number;
+}
+
+export interface BusinessAnalyticsProductResponse {
+  restaurantId: number;
+  period: BusinessAnalyticsPeriodResponse;
+  reservationMetricBasis: string;
+  paymentMetricBasis: string;
+  refundMetricBasis: string;
+  generatedAt: string | null;
+  settlementNotice: string;
+  items: BusinessAnalyticsProductItemResponse[];
+}
+
+export type BusinessAnalyticsExportType =
+  | "reservation_summary"
+  | "payment_refund_summary"
+  | "product_performance"
+  | "time_slot_reservation_rate";
+
+export interface BusinessAnalyticsExportRequest {
+  type?: BusinessAnalyticsExportType | string | null;
+  from?: string | null;
+  to?: string | null;
+  date?: string | null;
+}
+
+export type BusinessAnalyticsExportResponseType =
+  | "RESERVATION_SUMMARY"
+  | "PAYMENT_REFUND_SUMMARY"
+  | "PRODUCT_PERFORMANCE"
+  | "TIME_SLOT_RESERVATION_RATE";
+
+export type BusinessAnalyticsExportStatus = "PROCESSING" | "COMPLETED" | "FAILED";
+
+export interface BusinessAnalyticsExportResponse {
+  id: number;
+  restaurantId: number;
+  type: BusinessAnalyticsExportResponseType;
+  status: BusinessAnalyticsExportStatus;
+  fileName: string;
+  contentType: string;
+  rowCount: number;
+  csvContent: string;
+  requestedAt: string | null;
+  completedAt: string | null;
+  privacyNotice: string;
+}
+
 export type BusinessCustomerSegment =
   | "ALL"
   | "HAS_VISIT_HISTORY"
@@ -1032,6 +1113,18 @@ export interface BusinessApiClient {
     restaurantId: number,
     query: BusinessAnalyticsPeriodQuery,
   ): Promise<BusinessAnalyticsSummaryResponse>;
+  getBusinessAnalyticsTimeSlots(
+    restaurantId: number,
+    query: BusinessAnalyticsTimeSlotQuery,
+  ): Promise<BusinessAnalyticsTimeSlotResponse>;
+  getBusinessAnalyticsProducts(
+    restaurantId: number,
+    query: BusinessAnalyticsPeriodQuery,
+  ): Promise<BusinessAnalyticsProductResponse>;
+  requestBusinessAnalyticsExport(
+    restaurantId: number,
+    request: BusinessAnalyticsExportRequest,
+  ): Promise<BusinessAnalyticsExportResponse>;
   listBusinessCustomers(query: BusinessCustomerListQuery): Promise<BusinessCustomerListResponse>;
   getBusinessCustomer(customerId: number): Promise<BusinessCustomerDetailResponse>;
   listBusinessCustomerReservations(
@@ -1399,6 +1492,28 @@ class HttpBusinessApiClient implements BusinessApiClient {
   getBusinessAnalyticsSummary(restaurantId: number, query: BusinessAnalyticsPeriodQuery) {
     return this.request<BusinessAnalyticsSummaryResponse>(
       `/api/business/restaurants/${restaurantId}/analytics/summary${queryString(query)}`,
+    );
+  }
+
+  getBusinessAnalyticsTimeSlots(restaurantId: number, query: BusinessAnalyticsTimeSlotQuery) {
+    return this.request<BusinessAnalyticsTimeSlotResponse>(
+      `/api/business/restaurants/${restaurantId}/analytics/time-slots${queryString(query)}`,
+    );
+  }
+
+  getBusinessAnalyticsProducts(restaurantId: number, query: BusinessAnalyticsPeriodQuery) {
+    return this.request<BusinessAnalyticsProductResponse>(
+      `/api/business/restaurants/${restaurantId}/analytics/products${queryString(query)}`,
+    );
+  }
+
+  requestBusinessAnalyticsExport(restaurantId: number, request: BusinessAnalyticsExportRequest) {
+    return this.request<BusinessAnalyticsExportResponse>(
+      `/api/business/restaurants/${restaurantId}/analytics/exports`,
+      {
+        method: "POST",
+        body: request,
+      },
     );
   }
 
@@ -2338,6 +2453,58 @@ class MockBusinessApiClient implements BusinessApiClient {
       this.readBusinessReservations(),
       defaultMockBusinessPayments(),
       defaultMockBusinessRefunds(),
+    );
+  }
+
+  async getBusinessAnalyticsTimeSlots(restaurantId: number, query: BusinessAnalyticsTimeSlotQuery) {
+    const restaurant = this.readRestaurant() ?? defaultMockRestaurant();
+
+    if (restaurant.id !== restaurantId) {
+      throw new ApiError("매장을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    return toMockBusinessAnalyticsTimeSlots(
+      restaurantId,
+      query,
+      this.readBusinessReservations(),
+      this.readReservationProducts(),
+    );
+  }
+
+  async getBusinessAnalyticsProducts(restaurantId: number, query: BusinessAnalyticsPeriodQuery) {
+    const restaurant = this.readRestaurant() ?? defaultMockRestaurant();
+
+    if (restaurant.id !== restaurantId) {
+      throw new ApiError("매장을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    return toMockBusinessAnalyticsProducts(
+      restaurantId,
+      query,
+      this.readBusinessReservations(),
+      defaultMockBusinessPayments(),
+      defaultMockBusinessRefunds(),
+      this.readReservationProducts(),
+    );
+  }
+
+  async requestBusinessAnalyticsExport(
+    restaurantId: number,
+    request: BusinessAnalyticsExportRequest,
+  ) {
+    const restaurant = this.readRestaurant() ?? defaultMockRestaurant();
+
+    if (restaurant.id !== restaurantId) {
+      throw new ApiError("매장을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    return toMockBusinessAnalyticsExport(
+      restaurantId,
+      request,
+      this.readBusinessReservations(),
+      defaultMockBusinessPayments(),
+      defaultMockBusinessRefunds(),
+      this.readReservationProducts(),
     );
   }
 
@@ -4438,6 +4605,401 @@ function toMockBusinessAnalyticsSummary(
       noShowRate: ratio(reservationsMetrics.noShow, activeReservationCount),
     },
   } satisfies BusinessAnalyticsSummaryResponse;
+}
+
+function toMockBusinessAnalyticsTimeSlots(
+  restaurantId: number,
+  query: BusinessAnalyticsTimeSlotQuery,
+  reservations: BusinessReservationListItemResponse[],
+  products: ReservationProductResponse[] = [],
+): BusinessAnalyticsTimeSlotResponse {
+  const date = query.date?.trim() || todayDateString();
+  const timeSlotProducts = businessTimeSlotProducts(products);
+  const slotMap = new Map<
+    string,
+    Pick<BusinessAnalyticsTimeSlotItemResponse, "startTime" | "endTime" | "capacity" | "reserved">
+  >();
+
+  function ensureSlot(startTime: string, endTime: string, capacity: number, addCapacity = true) {
+    const key = `${startTime}-${endTime}`;
+    const existing = slotMap.get(key);
+
+    if (existing) {
+      if (addCapacity) {
+        existing.capacity += capacity;
+      }
+      return existing;
+    }
+
+    const slot = { startTime, endTime, capacity, reserved: 0 };
+    slotMap.set(key, slot);
+    return slot;
+  }
+
+  timeSlotProducts.forEach((product) => {
+    businessTimeSlotStartTimes(product).forEach((startTime) => {
+      ensureSlot(startTime, addMinutes(startTime, 90), product.slotCapacity);
+    });
+  });
+
+  reservations
+    .filter(
+      (reservation) =>
+        reservation.visitDate === date &&
+        reservation.status !== "CANCELLED_BY_CUSTOMER" &&
+        reservation.status !== "CANCELLED_BY_RESTAURANT",
+    )
+    .forEach((reservation) => {
+      const productCapacity =
+        timeSlotProducts.find((product) => product.id === reservation.productId)?.slotCapacity ??
+        reservation.partySize;
+      const slot = ensureSlot(reservation.startTime, reservation.endTime, productCapacity, false);
+      slot.reserved += reservation.partySize;
+    });
+
+  return {
+    restaurantId,
+    date,
+    slotMinutes: 30,
+    metricBasis: "VISIT_DATE",
+    generatedAt: new Date().toISOString(),
+    settlementNotice: "운영 참고용 통계이며 정산 자동화 또는 세금 처리 기준 금액이 아닙니다.",
+    slots: Array.from(slotMap.values())
+      .sort((a, b) => {
+        const startDiff = a.startTime.localeCompare(b.startTime);
+        return startDiff !== 0 ? startDiff : a.endTime.localeCompare(b.endTime);
+      })
+      .map((slot) => ({
+        ...slot,
+        reservationRate: ratio(slot.reserved, slot.capacity),
+      })),
+  } satisfies BusinessAnalyticsTimeSlotResponse;
+}
+
+function toMockBusinessAnalyticsProducts(
+  restaurantId: number,
+  query: BusinessAnalyticsPeriodQuery,
+  reservations: BusinessReservationListItemResponse[],
+  payments: BusinessPaymentListItemResponse[],
+  refunds: BusinessRefundListItemResponse[],
+  products: ReservationProductResponse[] = [],
+): BusinessAnalyticsProductResponse {
+  const period = analyticsPeriodFromQuery(query);
+  const analyticsProducts = businessTimeSlotProducts(products);
+  const metrics = new Map<
+    number,
+    BusinessAnalyticsProductItemResponse & { partySizeTotal: number }
+  >();
+
+  function ensureProduct(productId: number, name: string) {
+    const existing = metrics.get(productId);
+
+    if (existing) {
+      return existing;
+    }
+
+    const productMetric = {
+      reservationProductId: productId,
+      name,
+      reservations: 0,
+      completed: 0,
+      cancelled: 0,
+      noShow: 0,
+      paymentAmount: 0,
+      refundAmount: 0,
+      netAmount: 0,
+      averagePartySize: 0,
+      partySizeTotal: 0,
+    };
+    metrics.set(productId, productMetric);
+    return productMetric;
+  }
+
+  function productForReservationId(reservationId: number) {
+    return reservations.find((reservation) => reservation.id === reservationId);
+  }
+
+  function productIdForName(name: string) {
+    return analyticsProducts.find((product) => product.name === name)?.id ?? 0;
+  }
+
+  reservations
+    .filter(
+      (reservation) => reservation.visitDate >= period.from && reservation.visitDate <= period.to,
+    )
+    .forEach((reservation) => {
+      const metric = ensureProduct(reservation.productId, reservation.productName);
+      metric.reservations += 1;
+      metric.partySizeTotal += reservation.partySize;
+
+      if (reservation.status === "COMPLETED") {
+        metric.completed += 1;
+      }
+      if (isCancelledReservation(reservation)) {
+        metric.cancelled += 1;
+      }
+      if (reservation.status === "NO_SHOW") {
+        metric.noShow += 1;
+      }
+    });
+
+  payments
+    .filter((payment) => {
+      const paidDate = payment.paidAt?.slice(0, 10);
+
+      return (
+        paidDate !== undefined &&
+        paidDate >= period.from &&
+        paidDate <= period.to &&
+        ["PAID", "REFUND_PENDING"].includes(payment.status) &&
+        ["DEPOSIT", "PREPAID", "GUARANTEE_CHARGE"].includes(payment.paymentType)
+      );
+    })
+    .forEach((payment) => {
+      const reservation = productForReservationId(payment.reservationId);
+      const metric = ensureProduct(
+        reservation?.productId ?? productIdForName(payment.productName),
+        reservation?.productName ?? payment.productName,
+      );
+      metric.paymentAmount += payment.amount;
+    });
+
+  refunds
+    .filter((refund) => {
+      const completedDate = (refund.completedAt ?? refund.requestedAt)?.slice(0, 10);
+
+      return (
+        refund.status === "SUCCEEDED" &&
+        completedDate !== undefined &&
+        completedDate >= period.from &&
+        completedDate <= period.to
+      );
+    })
+    .forEach((refund) => {
+      const reservation = productForReservationId(refund.reservationId);
+      const metric = ensureProduct(
+        reservation?.productId ?? productIdForName(refund.productName),
+        reservation?.productName ?? refund.productName,
+      );
+      metric.refundAmount += refund.refundAmount;
+    });
+
+  return {
+    restaurantId,
+    period,
+    reservationMetricBasis: "VISIT_DATE",
+    paymentMetricBasis: "PAID_AT",
+    refundMetricBasis: "SUCCEEDED_AT",
+    generatedAt: new Date().toISOString(),
+    settlementNotice: "운영 참고용 통계이며 정산 자동화 또는 세금 처리 기준 금액이 아닙니다.",
+    items: Array.from(metrics.values())
+      .map(({ partySizeTotal, ...metric }) => ({
+        ...metric,
+        netAmount: metric.paymentAmount - metric.refundAmount,
+        averagePartySize:
+          metric.reservations > 0
+            ? Math.round((partySizeTotal / metric.reservations) * 10) / 10
+            : 0,
+      }))
+      .sort((a, b) => {
+        const reservationDiff = b.reservations - a.reservations;
+        return reservationDiff !== 0 ? reservationDiff : a.name.localeCompare(b.name);
+      }),
+  } satisfies BusinessAnalyticsProductResponse;
+}
+
+function toMockBusinessAnalyticsExport(
+  restaurantId: number,
+  request: BusinessAnalyticsExportRequest,
+  reservations: BusinessReservationListItemResponse[],
+  payments: BusinessPaymentListItemResponse[],
+  refunds: BusinessRefundListItemResponse[],
+  products: ReservationProductResponse[] = [],
+): BusinessAnalyticsExportResponse {
+  const type = normalizeMockBusinessAnalyticsExportType(request.type);
+  let rows: string[][];
+  let rowCount: number;
+  let fileName: string;
+
+  if (type === "RESERVATION_SUMMARY") {
+    const summary = toMockBusinessAnalyticsSummary(
+      restaurantId,
+      request,
+      reservations,
+      payments,
+      refunds,
+    );
+    rows = [
+      ["metric", "value"],
+      ["total", String(summary.reservations.total)],
+      ["completed", String(summary.reservations.completed)],
+      ["cancelled", String(summary.reservations.cancelled)],
+      ["no_show", String(summary.reservations.noShow)],
+    ];
+    rowCount = rows.length - 1;
+    fileName = mockBusinessAnalyticsExportFileName(type, summary.period, summary.period.to);
+  } else if (type === "PAYMENT_REFUND_SUMMARY") {
+    const summary = toMockBusinessAnalyticsSummary(
+      restaurantId,
+      request,
+      reservations,
+      payments,
+      refunds,
+    );
+    rows = [
+      ["metric", "amount"],
+      ["deposit_amount", String(summary.payments.depositAmount)],
+      ["prepaid_amount", String(summary.payments.prepaidAmount)],
+      ["refund_amount", String(summary.payments.refundAmount)],
+      ["net_amount", String(summary.payments.netAmount)],
+    ];
+    rowCount = rows.length - 1;
+    fileName = mockBusinessAnalyticsExportFileName(type, summary.period, summary.period.to);
+  } else if (type === "PRODUCT_PERFORMANCE") {
+    const productMetrics = toMockBusinessAnalyticsProducts(
+      restaurantId,
+      request,
+      reservations,
+      payments,
+      refunds,
+      products,
+    );
+    rows = [
+      [
+        "product_id",
+        "product_name",
+        "reservations",
+        "completed",
+        "cancelled",
+        "no_show",
+        "payment_amount",
+        "refund_amount",
+        "net_amount",
+        "average_party_size",
+      ],
+      ...productMetrics.items.map((item) => [
+        String(item.reservationProductId),
+        item.name,
+        String(item.reservations),
+        String(item.completed),
+        String(item.cancelled),
+        String(item.noShow),
+        String(item.paymentAmount),
+        String(item.refundAmount),
+        String(item.netAmount),
+        String(item.averagePartySize),
+      ]),
+    ];
+    rowCount = productMetrics.items.length;
+    fileName = mockBusinessAnalyticsExportFileName(
+      type,
+      productMetrics.period,
+      productMetrics.period.to,
+    );
+  } else {
+    const timeSlots = toMockBusinessAnalyticsTimeSlots(
+      restaurantId,
+      request,
+      reservations,
+      products,
+    );
+    rows = [
+      ["date", "start_time", "end_time", "capacity", "reserved", "reservation_rate"],
+      ...timeSlots.slots.map((slot) => [
+        timeSlots.date,
+        slot.startTime,
+        slot.endTime,
+        String(slot.capacity),
+        String(slot.reserved),
+        String(slot.reservationRate),
+      ]),
+    ];
+    rowCount = timeSlots.slots.length;
+    fileName = mockBusinessAnalyticsExportFileName(
+      type,
+      { from: timeSlots.date, to: timeSlots.date },
+      timeSlots.date,
+    );
+  }
+
+  const now = new Date().toISOString();
+
+  return {
+    id: Date.now(),
+    restaurantId,
+    type,
+    status: "COMPLETED",
+    fileName,
+    contentType: "text/csv; charset=utf-8",
+    rowCount,
+    csvContent: rows.map((row) => row.map(csvCell).join(",")).join("\n"),
+    requestedAt: now,
+    completedAt: now,
+    privacyNotice:
+      "내보내기 CSV에는 고객 전화번호 전체, 이메일, 상세 요청사항을 포함하지 않습니다.",
+  } satisfies BusinessAnalyticsExportResponse;
+}
+
+function analyticsPeriodFromQuery(query: BusinessAnalyticsPeriodQuery) {
+  const today = todayDateString();
+  const to = query.to?.trim() || today;
+  const from = query.from?.trim() || addDays(to, -29);
+
+  if (from > to) {
+    throw new ApiError("from은 to보다 늦을 수 없습니다.", 400, "VALIDATION_ERROR");
+  }
+
+  return { from, to } satisfies BusinessAnalyticsPeriodResponse;
+}
+
+function normalizeMockBusinessAnalyticsExportType(
+  value: BusinessAnalyticsExportRequest["type"],
+): BusinessAnalyticsExportResponseType {
+  const normalized = value?.trim().toUpperCase().replace(/-/g, "_");
+
+  if (!normalized) {
+    throw new ApiError("type이 필요합니다.", 400, "VALIDATION_ERROR");
+  }
+
+  if (normalized === "RESERVATION_SUMMARY") {
+    return "RESERVATION_SUMMARY";
+  }
+  if (
+    normalized === "PAYMENT_REFUND_SUMMARY" ||
+    normalized === "PAYMENT_SUMMARY" ||
+    normalized === "REFUND_SUMMARY"
+  ) {
+    return "PAYMENT_REFUND_SUMMARY";
+  }
+  if (normalized === "PRODUCT_PERFORMANCE" || normalized === "PRODUCTS") {
+    return "PRODUCT_PERFORMANCE";
+  }
+  if (
+    normalized === "TIME_SLOT_RESERVATION_RATE" ||
+    normalized === "TIME_SLOTS" ||
+    normalized === "TIME_SLOT"
+  ) {
+    return "TIME_SLOT_RESERVATION_RATE";
+  }
+
+  throw new ApiError("type 값이 올바르지 않습니다.", 400, "VALIDATION_ERROR");
+}
+
+function mockBusinessAnalyticsExportFileName(
+  type: BusinessAnalyticsExportResponseType,
+  period: BusinessAnalyticsPeriodResponse,
+  date: string,
+) {
+  const suffix = type === "TIME_SLOT_RESERVATION_RATE" ? date : `${period.from}-${period.to}`;
+  return `analytics-${type.toLowerCase()}-${suffix}.csv`;
+}
+
+function csvCell(value: string) {
+  if (!/[",\n]/.test(value)) {
+    return value;
+  }
+
+  return `"${value.replace(/"/g, '""')}"`;
 }
 
 function ratio(numerator: number, denominator: number) {
