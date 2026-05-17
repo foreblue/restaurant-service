@@ -1177,6 +1177,97 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun openApiContractIncludesCoreApiPathsSchemasAndEnums() {
+        val openApiJson = mockMvc.get("/v3/api-docs")
+            .andExpect { status { isOk() } }
+            .andReturn()
+            .response
+            .contentAsString
+        val paths = JsonPath.read<Map<String, Any>>(openApiJson, "$.paths")
+        val schemas = JsonPath.read<Map<String, Any>>(openApiJson, "$.components.schemas")
+
+        assertThat(paths.keys).contains(
+            "/api/public/restaurants/{slug}",
+            "/api/public/restaurants/{restaurantId}/reservation-page",
+            "/api/public/restaurants/{restaurantId}/availability/dates",
+            "/api/public/restaurants/{restaurantId}/availability/times",
+            "/api/public/reservation-lookup-tokens",
+            "/api/public/reservations",
+            "/api/public/reservations/{reservationId}",
+            "/api/public/reservations/{reservationId}/cancel",
+            "/api/public/reservations/{reservationId}/payment-summary",
+            "/api/public/reservations/{reservationId}/payments",
+            "/api/pg/webhooks",
+            "/api/business/auth/login",
+            "/api/business/auth/logout",
+            "/api/business/me",
+            "/api/business/restaurant-applications",
+            "/api/business/restaurants/current",
+            "/api/business/reservation-products",
+            "/api/business/reservations",
+            "/api/business/reservations/manual",
+            "/api/business/payments",
+            "/api/business/refunds",
+            "/api/business/tables",
+            "/api/business/customers",
+            "/api/admin/restaurant-applications",
+            "/api/admin/refunds/{refundId}/retry",
+            "/api/admin/notifications/dispatch",
+        )
+        assertThat(schemas.keys).contains(
+            "BusinessLoginRequest",
+            "BusinessLoginResponse",
+            "BusinessMeResponse",
+            "RestaurantApplicationSaveRequest",
+            "RestaurantApplicationResponse",
+            "RestaurantSettingsResponse",
+            "ReservationProductSaveRequest",
+            "ReservationProductResponse",
+            "PublicReservationCreateRequest",
+            "PublicReservationResponse",
+            "PublicReservationDetailResponse",
+            "PublicPaymentSummaryResponse",
+            "PublicPaymentStartResponse",
+            "RefundPreviewResponse",
+            "BusinessReservationListResponse",
+            "BusinessReservationDetailResponse",
+            "BusinessManualReservationCreateRequest",
+            "BusinessPaymentListResponse",
+            "BusinessRefundListResponse",
+            "RestaurantTableResponse",
+            "BusinessCustomerDetailResponse",
+            "BusinessAnalyticsSummaryResponse",
+            "NotificationDispatchRequest",
+            "PgWebhookRequest",
+        )
+
+        assertThat(JsonPath.read<List<String>>(openApiJson, "$.components.schemas.PublicReservationResponse.properties.status.enum"))
+            .contains(
+                "CONFIRMED",
+                "MODIFIED",
+                "CANCELLED_BY_CUSTOMER",
+                "CANCELLED_BY_RESTAURANT",
+                "COMPLETED",
+                "NO_SHOW",
+            )
+        assertThat(JsonPath.read<List<String>>(openApiJson, "$.components.schemas.PublicPaymentSummaryResponse.properties.paymentStatus.enum"))
+            .contains(
+                "NOT_REQUIRED",
+                "PAY_ON_SITE",
+                "REQUIRES_PAYMENT",
+                "PENDING",
+                "PAID",
+                "FAILED",
+                "CANCELLED",
+                "EXPIRED",
+                "REFUND_FAILED",
+                "GUARANTEE_REGISTERED",
+            )
+        assertThat(JsonPath.read<List<String>>(openApiJson, "$.components.schemas.BusinessRefundListItemResponse.properties.status.enum"))
+            .contains("REQUESTED", "PENDING", "SUCCEEDED", "FAILED", "CANCELLED")
+    }
+
+    @Test
     fun initialBusinessUserIsSeededWithHashedPassword() {
         val user = userRepository.findByEmail("owner@example.com")
 

@@ -9,6 +9,11 @@ run_pnpm() {
   fi
 }
 
+(
+  cd apps/api
+  ./gradlew test
+)
+
 run_pnpm --filter @restaurant/business-web lint
 run_pnpm --filter @restaurant/business-web test
 run_pnpm --filter @restaurant/business-web build

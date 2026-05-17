@@ -13,6 +13,17 @@ docker compose up -d mysql
 ./gradlew bootRun
 ```
 
+## 테스트와 QA 회귀
+
+API 회귀 테스트는 Spring context, MockMvc, Flyway, JPA repository, Testcontainers MySQL을 함께 사용한다.
+
+```bash
+cd apps/api
+./gradlew test
+```
+
+qa-flow regression gate에서는 저장소 루트의 `./qa-regression.sh` 또는 `pnpm qa:regression`을 실행한다. 이 명령은 API 테스트를 먼저 실행한 뒤 사업자 FE lint/test/build/E2E를 실행한다. 실패 시 `apps/api/build/test-results/test/`와 `apps/api/build/reports/tests/test/index.html`을 우선 확인한다.
+
 로컬 기본 DB 접속 정보는 다음과 같습니다.
 
 | 항목 | 값 |
