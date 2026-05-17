@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { AppProviders } from "@/app/providers";
+import { PublicApiError } from "@/shared/api/apiError";
 import { type PublicApiClient } from "@/shared/api/publicApiClient";
 
 import { ReservationSelectionPanel } from "./ReservationSelectionPanel";
@@ -78,7 +79,30 @@ function createMockClient(): PublicApiClient {
 
       return Promise.reject(new Error(`Unhandled path: ${path}`));
     }),
-    post: vi.fn(),
+    post: vi.fn(() =>
+      Promise.resolve({
+        id: 300,
+        reservationNumber: "RSV-20260518-0001",
+        status: "CONFIRMED",
+        restaurantId: 1,
+        productId: 10,
+        customerId: 11,
+        visitDate: "2026-05-18",
+        startTime: "18:00",
+        endTime: "19:30",
+        partySize: 2,
+        customerName: "홍길동",
+        customerPhoneLast4: "5678",
+        customerEmail: null,
+        allergyNote: null,
+        anniversaryType: null,
+        anniversaryDate: null,
+        requestTemplateValues: [],
+        marketingOptIn: false,
+        lookupToken: "lookup-token",
+        lookupTokenExpiresAt: "2026-05-18T00:00:00.000Z",
+      }),
+    ),
     request: vi.fn(),
   };
 }
@@ -142,5 +166,79 @@ describe("ReservationSelectionPanel", () => {
     );
 
     expect(screen.getByText("예약 가능한 상품이 없습니다.")).toBeInTheDocument();
+  });
+
+  it("creates a reservation and shows the completion result", async () => {
+    const client = createMockClient();
+
+    render(
+      <AppProviders apiClient={client}>
+        <ReservationSelectionPanel products={products} restaurantId={1} />
+      </AppProviders>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /2026-05-18/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /18:00/ }));
+    fireEvent.change(screen.getByLabelText(/이름/), { target: { value: "홍길동" } });
+    fireEvent.change(screen.getByLabelText(/휴대폰 번호/), { target: { value: "010-1234-5678" } });
+    fireEvent.click(screen.getByLabelText("개인정보 수집에 동의합니다."));
+    fireEvent.click(screen.getByRole("button", { name: "예약 완료" }));
+
+    await waitFor(() => {
+      expect(client.post).toHaveBeenCalledWith(
+        "/api/public/reservations",
+        expect.objectContaining({
+          body: expect.objectContaining({
+            customerName: "홍길동",
+            customerPhone: "01012345678",
+            partySize: 2,
+            productId: 10,
+            restaurantId: 1,
+            startTime: "18:00",
+            visitDate: "2026-05-18",
+          }),
+          idempotencyKey: expect.any(String),
+        }),
+      );
+    });
+    expect(await screen.findByText("예약이 완료되었습니다.")).toBeInTheDocument();
+    expect(screen.getByText("RSV-20260518-0001")).toBeInTheDocument();
+  });
+
+  it("offers availability refresh when reservation creation conflicts", async () => {
+    const client = createMockClient();
+    vi.mocked(client.post).mockRejectedValueOnce(
+      new PublicApiError({
+        code: "CONFLICT",
+        message: "요청 상태가 충돌합니다.",
+        status: 409,
+        traceId: "trace-conflict",
+      }),
+    );
+
+    render(
+      <AppProviders apiClient={client}>
+        <ReservationSelectionPanel products={products} restaurantId={1} />
+      </AppProviders>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /2026-05-18/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /18:00/ }));
+    fireEvent.change(screen.getByLabelText(/이름/), { target: { value: "홍길동" } });
+    fireEvent.change(screen.getByLabelText(/휴대폰 번호/), { target: { value: "010-1234-5678" } });
+    fireEvent.click(screen.getByLabelText("개인정보 수집에 동의합니다."));
+    fireEvent.click(screen.getByRole("button", { name: "예약 완료" }));
+
+    expect(
+      await screen.findByText("예약 상태가 변경되었습니다. 최신 정보를 다시 확인해 주세요."),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "가능 시간 다시 조회" }));
+
+    await waitFor(() => {
+      expect(client.get).toHaveBeenCalledWith(
+        "/api/public/restaurants/1/availability/dates",
+        expect.any(Object),
+      );
+    });
   });
 });

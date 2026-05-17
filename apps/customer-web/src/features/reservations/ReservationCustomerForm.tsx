@@ -13,9 +13,15 @@ import {
 
 interface ReservationCustomerFormProps {
   onSubmit: SubmitHandler<ReservationCustomerFormValues>;
+  submitLabel?: string | undefined;
+  submitting?: boolean | undefined;
 }
 
-export function ReservationCustomerForm({ onSubmit }: ReservationCustomerFormProps) {
+export function ReservationCustomerForm({
+  onSubmit,
+  submitLabel = "입력 정보 확인",
+  submitting = false,
+}: ReservationCustomerFormProps) {
   const {
     formState: { errors, isSubmitting },
     handleSubmit,
@@ -137,8 +143,8 @@ export function ReservationCustomerForm({ onSubmit }: ReservationCustomerFormPro
         />
       </div>
 
-      <Button disabled={isSubmitting} type="submit">
-        입력 정보 확인
+      <Button disabled={isSubmitting || submitting} type="submit">
+        {submitting ? "예약 생성 중" : submitLabel}
       </Button>
     </form>
   );

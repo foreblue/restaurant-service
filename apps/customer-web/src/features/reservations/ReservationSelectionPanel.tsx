@@ -1,12 +1,15 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
 import { Alert, Button, Select, StateBlock } from "@/components/ui";
 import { usePublicApiClient } from "@/shared/api/usePublicApiClient";
+import { PublicApiError, toCustomerApiErrorMessage } from "@/shared/api/apiError";
 
 import { ReservationCustomerForm } from "./ReservationCustomerForm";
+import { buildReservationCreateRequest, createPublicReservation } from "./reservationCreateApi";
+import { ReservationCompletionCard } from "./ReservationCompletionCard";
 import { getAvailabilityDates, getAvailabilityTimes } from "./reservationOptionsApi";
 import {
   type AvailableDate,
@@ -32,7 +35,6 @@ export function ReservationSelectionPanel({
   const [partySize, setPartySize] = useState(() => selectedProduct?.minPartySize ?? 1);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTimeSlot, setSelectedTimeSlot] = useState<AvailableTimeSlot | null>(null);
-  const [customerInfo, setCustomerInfo] = useState<ReservationCustomerFormValues | null>(null);
 
   useEffect(() => {
     if (selectedProduct) {
@@ -52,7 +54,7 @@ export function ReservationSelectionPanel({
   }, [selectedDate]);
 
   useEffect(() => {
-    setCustomerInfo(null);
+    createReservationMutation.reset();
   }, [selectedProductId, partySize, selectedDate, selectedTimeSlot?.timeSlotId]);
 
   const partySizeOptions = useMemo(
@@ -87,6 +89,30 @@ export function ReservationSelectionPanel({
         apiClient,
       ),
     queryKey: ["availability-times", restaurantId, selectedProduct?.id, partySize, selectedDate],
+  });
+
+  const createReservationMutation = useMutation({
+    mutationFn: (customerInfo: ReservationCustomerFormValues) => {
+      if (!selectedProduct || !selectedDate || !selectedTimeSlot) {
+        throw new Error("예약 선택 정보가 완성되지 않았습니다.");
+      }
+
+      const idempotencyKey = createIdempotencyKey();
+
+      return createPublicReservation(
+        buildReservationCreateRequest({
+          customerInfo,
+          idempotencyKey,
+          partySize,
+          product: selectedProduct,
+          restaurantId,
+          selectedDate,
+          selectedTimeSlot,
+        }),
+        idempotencyKey,
+        apiClient,
+      );
+    },
   });
 
   if (products.length === 0) {
@@ -163,20 +189,53 @@ export function ReservationSelectionPanel({
         </div>
       ) : null}
 
-      {selectedProduct && selectedDate && selectedTimeSlot ? (
-        <ReservationCustomerForm onSubmit={setCustomerInfo} />
+      {createReservationMutation.data ? (
+        <ReservationCompletionCard reservation={createReservationMutation.data} />
+      ) : selectedProduct && selectedDate && selectedTimeSlot ? (
+        <ReservationCustomerForm
+          submitLabel="예약 완료"
+          submitting={createReservationMutation.isPending}
+          onSubmit={(values) => createReservationMutation.mutate(values)}
+        />
       ) : (
         <StateBlock title="고객 정보 입력 전입니다.">
           <p>상품, 날짜, 시간을 선택하면 고객 정보를 입력할 수 있습니다.</p>
         </StateBlock>
       )}
 
-      {customerInfo ? (
-        <Alert title="고객 정보가 확인되었습니다." variant="success">
-          {customerInfo.customerName} · {customerInfo.phoneNumber}
-        </Alert>
+      {createReservationMutation.isError ? (
+        <ReservationCreateError
+          error={createReservationMutation.error}
+          onRefresh={() => {
+            setSelectedTimeSlot(null);
+            void datesQuery.refetch();
+            void timesQuery.refetch();
+          }}
+        />
       ) : null}
     </section>
+  );
+}
+
+function ReservationCreateError({ error, onRefresh }: { error: unknown; onRefresh: () => void }) {
+  const isConflict = error instanceof PublicApiError && error.status === 409;
+
+  if (isConflict) {
+    return (
+      <StateBlock
+        action={{ label: "가능 시간 다시 조회", onClick: onRefresh }}
+        title={toCustomerApiErrorMessage(error)}
+        variant="error"
+      >
+        <p>방금 선택한 시간이 마감되었을 수 있습니다.</p>
+      </StateBlock>
+    );
+  }
+
+  return (
+    <Alert title="예약을 완료하지 못했습니다." variant="error">
+      {toCustomerApiErrorMessage(error)}
+    </Alert>
   );
 }
 
@@ -283,4 +342,12 @@ function formatCurrency(amount: number) {
     maximumFractionDigits: 0,
     style: "currency",
   }).format(amount);
+}
+
+function createIdempotencyKey() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
