@@ -66,7 +66,7 @@ class AvailabilityService(
         val dates = generateSequence(from) { it.plusDays(1) }
             .takeWhile { !it.isAfter(to) }
             .filter { it >= today }
-            .filter { availableTimeSlots(context, it).isNotEmpty() }
+            .filter { date -> availableTimeSlots(context, date).any { it.available } }
             .map { AvailableDateResponse(date = it) }
             .toList()
 
@@ -218,11 +218,20 @@ class AvailabilityService(
         )
         if (manualSlots.isNotEmpty()) {
             return manualSlots
-                .filter { it.status == TimeSlotStatus.OPEN }
                 .filter { it.inProductTimeRange(context.product) }
                 .filter { !isTemporaryHolidayOverlap(date, it.startTime, it.endTime, context.holidayRules) }
                 .filter { passesCutoff(context.restaurant, date, it.startTime) }
-                .mapNotNull {
+                .map {
+                    if (it.status != TimeSlotStatus.OPEN) {
+                        return@map AvailableTimeSlotResponse(
+                            timeSlotId = "slot-${it.id}",
+                            startTime = it.startTime,
+                            endTime = it.endTime,
+                            remainingCapacity = 0,
+                            available = false,
+                            unavailableReason = "BLOCKED",
+                        )
+                    }
                     val remainingCapacity = if (applyInventory) {
                         val inventory = seatInventoryService.availability(
                             product = context.product,
@@ -234,7 +243,14 @@ class AvailabilityService(
                             excludedReservationId = excludedReservationId,
                         )
                         if (!inventory.available) {
-                            return@mapNotNull null
+                            return@map AvailableTimeSlotResponse(
+                                timeSlotId = "slot-${it.id}",
+                                startTime = it.startTime,
+                                endTime = it.endTime,
+                                remainingCapacity = inventory.remainingCapacity,
+                                available = false,
+                                unavailableReason = "FULL",
+                            )
                         }
                         inventory.remainingCapacity
                     } else {
@@ -284,7 +300,7 @@ class AvailabilityService(
                 passesCutoff(context.restaurant, date, current) &&
                 !isTemporaryHolidayOverlap(date, current, endTime, context.holidayRules)
             ) {
-                val remainingCapacity = if (applyInventory) {
+                val slot = if (applyInventory) {
                     val inventory = seatInventoryService.availability(
                         product = context.product,
                         visitDate = date,
@@ -294,22 +310,23 @@ class AvailabilityService(
                         baseCapacity = context.product.slotCapacity,
                         excludedReservationId = excludedReservationId,
                     )
-                    if (!inventory.available) {
-                        null
-                    } else {
-                        inventory.remainingCapacity
-                    }
-                } else {
-                    context.product.slotCapacity
-                }
-                if (remainingCapacity != null) {
-                    slots += AvailableTimeSlotResponse(
+                    AvailableTimeSlotResponse(
                         timeSlotId = "dyn-${context.product.id}-${date}-${current.toSecondOfDay()}",
                         startTime = current,
                         endTime = endTime,
-                        remainingCapacity = remainingCapacity,
+                        remainingCapacity = inventory.remainingCapacity,
+                        available = inventory.available,
+                        unavailableReason = if (inventory.available) null else "FULL",
+                    )
+                } else {
+                    AvailableTimeSlotResponse(
+                        timeSlotId = "dyn-${context.product.id}-${date}-${current.toSecondOfDay()}",
+                        startTime = current,
+                        endTime = endTime,
+                        remainingCapacity = context.product.slotCapacity,
                     )
                 }
+                slots += slot
             }
             current = current.plus(SLOT_INTERVAL)
         }

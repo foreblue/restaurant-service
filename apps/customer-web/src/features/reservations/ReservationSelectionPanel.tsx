@@ -162,6 +162,7 @@ export function ReservationSelectionPanel({
             <span className="mt-2 block rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
               {getReservationPaymentPolicyView(product).summary}
             </span>
+            <ProductSeatTypes product={product} />
           </button>
         ))}
       </div>
@@ -199,6 +200,7 @@ export function ReservationSelectionPanel({
           partySize={partySize}
           paymentPolicy={selectedPaymentPolicy}
           productName={selectedProduct.name}
+          seatTypeLabels={seatTypeLabels(selectedProduct)}
           selectedDate={selectedDate}
           selectedTime={selectedTimeSlot.startTime}
         />
@@ -225,7 +227,9 @@ export function ReservationSelectionPanel({
 
       {createReservationMutation.isError ? (
         <ReservationCreateError
+          alternatives={timesQuery.data?.times.filter((timeSlot) => timeSlot.available) ?? []}
           error={createReservationMutation.error}
+          onSelectAlternative={setSelectedTimeSlot}
           onRefresh={() => {
             setSelectedTimeSlot(null);
             void datesQuery.refetch();
@@ -241,12 +245,14 @@ function ReservationCheckoutSummary({
   partySize,
   paymentPolicy,
   productName,
+  seatTypeLabels,
   selectedDate,
   selectedTime,
 }: {
   partySize: number;
   paymentPolicy: ReservationPaymentPolicyView;
   productName: string;
+  seatTypeLabels: string[];
   selectedDate: string;
   selectedTime: string;
 }) {
@@ -262,6 +268,9 @@ function ReservationCheckoutSummary({
         <SummaryRow label="결제 조건" value={paymentPolicy.label} />
         {paymentPolicy.amountLabel ? (
           <SummaryRow label="필요 금액" value={paymentPolicy.amountLabel} />
+        ) : null}
+        {seatTypeLabels.length > 0 ? (
+          <SummaryRow label="좌석 유형" value={seatTypeLabels.join(", ")} />
         ) : null}
         <SummaryRow label="다음 단계" value={paymentPolicy.nextStepLabel} />
       </dl>
@@ -279,7 +288,38 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ReservationCreateError({ error, onRefresh }: { error: unknown; onRefresh: () => void }) {
+function ProductSeatTypes({ product }: { product: PublicReservationProduct }) {
+  const labels = seatTypeLabels(product);
+
+  if (labels.length === 0) {
+    return null;
+  }
+
+  return (
+    <span className="mt-2 flex flex-wrap gap-1.5">
+      {labels.map((label) => (
+        <span
+          className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-600"
+          key={label}
+        >
+          {label}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function ReservationCreateError({
+  alternatives,
+  error,
+  onRefresh,
+  onSelectAlternative,
+}: {
+  alternatives: AvailableTimeSlot[];
+  error: unknown;
+  onRefresh: () => void;
+  onSelectAlternative: (timeSlot: AvailableTimeSlot) => void;
+}) {
   const isConflict = error instanceof PublicApiError && error.status === 409;
 
   if (isConflict) {
@@ -290,6 +330,23 @@ function ReservationCreateError({ error, onRefresh }: { error: unknown; onRefres
         variant="error"
       >
         <p>방금 선택한 시간이 마감되었을 수 있습니다.</p>
+        {alternatives.length > 0 ? (
+          <div className="mt-3 grid gap-2">
+            <p className="font-semibold">다른 가능 시간</p>
+            <div className="grid grid-cols-2 gap-2">
+              {alternatives.slice(0, 4).map((timeSlot) => (
+                <Button
+                  key={timeSlot.timeSlotId}
+                  type="button"
+                  variant="secondary"
+                  onClick={() => onSelectAlternative(timeSlot)}
+                >
+                  {timeSlot.startTime}
+                </Button>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </StateBlock>
     );
   }
@@ -379,12 +436,39 @@ function AvailabilityTimes({
             variant={timeSlot.timeSlotId === selectedTimeSlotId ? "primary" : "secondary"}
             onClick={() => onSelect(timeSlot)}
           >
-            {timeSlot.startTime}
+            <span className="grid gap-0.5 text-center leading-tight">
+              <span>{timeSlot.startTime}</span>
+              <span className="text-xs font-medium opacity-80">
+                {timeSlotInventoryLabel(timeSlot)}
+              </span>
+            </span>
           </Button>
         ))}
       </div>
     </div>
   );
+}
+
+function seatTypeLabels(product: PublicReservationProduct) {
+  const labels = product.seatTypes?.map((seatType) => seatType.label.trim()).filter(Boolean) ?? [];
+
+  return Array.from(new Set(labels));
+}
+
+function timeSlotInventoryLabel(timeSlot: AvailableTimeSlot) {
+  if (!timeSlot.available) {
+    if (timeSlot.unavailableReason === "BLOCKED") {
+      return "임시 마감";
+    }
+
+    return "마감";
+  }
+
+  if (timeSlot.remainingCapacity <= 0) {
+    return "잔여 확인 필요";
+  }
+
+  return `잔여 ${timeSlot.remainingCapacity}명`;
 }
 
 function createPartySizeOptions(product: PublicReservationProduct | null) {

@@ -29,4 +29,5 @@ data class AvailableTimeSlotResponse(
     val endTime: LocalTime,
     val remainingCapacity: Int,
     val available: Boolean = true,
+    val unavailableReason: String? = null,
 )
