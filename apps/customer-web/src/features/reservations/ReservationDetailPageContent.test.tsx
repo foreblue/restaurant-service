@@ -5,6 +5,10 @@ import { type PublicApiClient } from "@/shared/api/publicApiClient";
 
 import { ReservationDetailPageContent } from "./ReservationDetailPageContent";
 import { type PublicReservationDetailResponse } from "./reservationDetailTypes";
+import {
+  type PublicPaymentSummaryResponse,
+  type PublicRefundPreviewResponse,
+} from "./reservationPaymentTypes";
 
 const pushMock = vi.fn();
 
@@ -48,12 +52,55 @@ const reservationDetail: PublicReservationDetailResponse = {
   refund: null,
 };
 
+const paymentSummary: PublicPaymentSummaryResponse = {
+  reservationId: 300,
+  paymentMode: "DEPOSIT",
+  paymentStatus: "PAID",
+  paymentRequired: false,
+  amount: 10000,
+  currency: "KRW",
+  paymentDueAt: null,
+  cancellationPolicySummary: "예약 생성 시점 취소 정책이 적용됩니다.",
+};
+
+const refundPreview: PublicRefundPreviewResponse = {
+  reservationId: 300,
+  paymentId: 700,
+  paymentStatus: "PAID",
+  refundRequired: true,
+  refundableAmount: 8000,
+  nonRefundableAmount: 2000,
+  alreadyRefundedAmount: 0,
+  paidAmount: 10000,
+  currency: "KRW",
+  policyRuleId: "rule_24h_80",
+  reason: "CUSTOMER_CANCEL",
+  message: "취소 정책 환불률 80%가 적용됩니다.",
+};
+
 function createMockClient(
   detail: PublicReservationDetailResponse = reservationDetail,
+  options: {
+    paymentSummary?: PublicPaymentSummaryResponse;
+    refundPreview?: PublicRefundPreviewResponse;
+  } = {},
 ): PublicApiClient {
+  const summary = options.paymentSummary ?? paymentSummary;
+  const preview = options.refundPreview ?? refundPreview;
+
   return {
     baseUrl: "http://api.test",
-    get: vi.fn(() => Promise.resolve(detail)),
+    get: vi.fn((path: string) => {
+      if (path.endsWith("/payment-summary")) {
+        return Promise.resolve(summary);
+      }
+
+      if (path.endsWith("/refund-preview")) {
+        return Promise.resolve(preview);
+      }
+
+      return Promise.resolve(detail);
+    }),
     post: vi.fn(() =>
       Promise.resolve({
         ...detail,
@@ -61,6 +108,20 @@ function createMockClient(
         cancelable: false,
         cancelledAt: "2026-05-17T02:00:00.000Z",
         cancelReason: "일정 변경",
+        refund: {
+          refundId: 900,
+          paymentId: 700,
+          status: "SUCCEEDED",
+          paymentStatus: "REFUNDED",
+          refundRequired: true,
+          refundAmount: preview.refundableAmount,
+          nonRefundableAmount: preview.nonRefundableAmount,
+          alreadyRefundedAmount: preview.refundableAmount,
+          currency: preview.currency,
+          policyRuleId: preview.policyRuleId,
+          reason: "CUSTOMER_CANCEL",
+          message: "환불이 완료되었습니다.",
+        },
       } satisfies PublicReservationDetailResponse),
     ),
     request: vi.fn(),
@@ -88,6 +149,10 @@ describe("ReservationDetailPageContent", () => {
     expect(screen.getByText("2026-05-18 18:00-19:30")).toBeInTheDocument();
     expect(screen.getByText("창가 좌석 요청")).toBeInTheDocument();
     expect(screen.getByText(/취소 가능 기한:/)).toBeInTheDocument();
+    expect(screen.getByText("결제/환불 상태")).toBeInTheDocument();
+    expect(await screen.findByText("결제 완료")).toBeInTheDocument();
+    expect(await screen.findByText("취소 전 환불 예상")).toBeInTheDocument();
+    expect(await screen.findByText("₩8,000")).toBeInTheDocument();
     expect(screen.getByText("예약 변경 안내")).toBeInTheDocument();
     expect(screen.getByText(/온라인 예약 변경은 지원하지 않습니다/)).toBeInTheDocument();
   });
@@ -173,6 +238,7 @@ describe("ReservationDetailPageContent", () => {
     );
 
     await screen.findByText("예약 확정");
+    await screen.findByText("취소 전 환불 예상");
     fireEvent.change(screen.getByLabelText("취소 사유"), {
       target: { value: "일정 변경" },
     });
@@ -183,13 +249,47 @@ describe("ReservationDetailPageContent", () => {
       expect(client.post).toHaveBeenCalledWith(
         "/api/public/reservations/300/cancel",
         expect.objectContaining({
-          body: { reason: "일정 변경" },
+          body: { confirmRefundAmount: 8000, reason: "일정 변경" },
           lookupToken: "lookup-token",
         }),
       );
     });
     expect(await screen.findByText("고객 취소")).toBeInTheDocument();
     expect(screen.getByText("취소 완료")).toBeInTheDocument();
+    expect(await screen.findAllByText("환불 완료")).toHaveLength(2);
+  });
+
+  it("shows refund result details for a cancelled reservation", async () => {
+    const client = createMockClient({
+      ...reservationDetail,
+      status: "CANCELLED_BY_CUSTOMER",
+      cancelable: false,
+      cancelledAt: "2026-05-17T02:00:00.000Z",
+      refund: {
+        refundId: 900,
+        paymentId: 700,
+        status: "PENDING",
+        paymentStatus: "PAID",
+        refundRequired: true,
+        refundAmount: 8000,
+        nonRefundableAmount: 2000,
+        alreadyRefundedAmount: 0,
+        currency: "KRW",
+        policyRuleId: "rule_24h_80",
+        reason: "CUSTOMER_CANCEL",
+        message: "환불 처리가 진행 중입니다.",
+      },
+    });
+
+    render(
+      <AppProviders apiClient={client}>
+        <ReservationDetailPageContent lookupToken="lookup-token" reservationId={300} />
+      </AppProviders>,
+    );
+
+    expect(await screen.findAllByText("환불 처리 중")).toHaveLength(2);
+    expect(screen.getByText("환불 처리가 진행 중입니다.")).toBeInTheDocument();
+    expect(screen.getByText("₩8,000")).toBeInTheDocument();
   });
 
   it("requires a lookup token before fetching reservation detail", () => {
