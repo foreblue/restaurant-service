@@ -5,10 +5,12 @@ const baseDate = "2026-05-18";
 
 let nextReservationId = 300;
 let reservations = new Map();
+let currentScenario = "default";
 
 function resetState() {
   nextReservationId = 300;
   reservations = new Map();
+  currentScenario = "default";
   const seeded = createReservation({
     customerName: "조회고객",
     customerPhone: "01012345678",
@@ -86,6 +88,30 @@ const products = [
   },
 ];
 
+const longContentRestaurant = {
+  ...restaurant,
+  name: "청담 테스트 다이닝 프라이빗 셰프 테이블 긴 매장명 검증 지점",
+  description:
+    "모바일 화면에서 긴 매장 소개와 예약 안내 문구가 자연스럽게 줄바꿈되는지 검증하기 위한 공개 예약 페이지입니다.",
+  addressLine1: "서울특별시 강남구 아주긴테헤란로123길 45-67 모바일레이아웃검증빌딩",
+  addressLine2: "12층 프라이빗룸과 창가석이 함께 있는 긴 주소 상세",
+  cuisineTypes: ["코스 다이닝", "프라이빗 룸", "기념일"],
+};
+
+const longContentProducts = products.map((product) =>
+  product.id === 10
+    ? {
+        ...product,
+        name: "계절 한정 셰프 테이스팅 디너 코스와 긴 상품명 표시 검증 메뉴",
+        description:
+          "제철 재료 설명, 알레르기 안내, 기념일 요청까지 포함된 긴 상품 설명이 모바일에서 겹치지 않는지 확인합니다.",
+      }
+    : {
+        ...product,
+        name: "예약금 결제가 필요한 프라이빗 룸 코스 긴 상품명",
+      },
+);
+
 resetState();
 
 const server = http.createServer(async (request, response) => {
@@ -116,8 +142,23 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/__mock/scenario") {
+    if (!["default", "long-content"].includes(body.scenario)) {
+      sendJson(
+        response,
+        { code: "INVALID_SCENARIO", message: "지원하지 않는 시나리오입니다." },
+        400,
+      );
+      return;
+    }
+
+    currentScenario = body.scenario;
+    sendJson(response, { ok: true, scenario: currentScenario });
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/public/restaurants/cheongdam-main") {
-    sendJson(response, restaurant);
+    sendJson(response, activeRestaurant());
     return;
   }
 
@@ -125,7 +166,7 @@ const server = http.createServer(async (request, response) => {
     request.method === "GET" &&
     url.pathname === `/api/public/restaurants/${restaurant.id}/reservation-page`
   ) {
-    sendJson(response, restaurant);
+    sendJson(response, activeRestaurant());
     return;
   }
 
@@ -133,7 +174,7 @@ const server = http.createServer(async (request, response) => {
     request.method === "GET" &&
     url.pathname === `/api/public/restaurants/${restaurant.id}/reservation-products`
   ) {
-    sendJson(response, { products });
+    sendJson(response, { products: activeProducts() });
     return;
   }
 
@@ -338,14 +379,14 @@ function createReservation(payload) {
 function detailResponse(reservation) {
   return {
     ...reservation,
-    restaurantName: restaurant.name,
+    restaurantName: activeRestaurant().name,
     productName:
-      products.find((product) => product.id === reservation.productId)?.name ?? "예약 상품",
+      activeProducts().find((product) => product.id === reservation.productId)?.name ?? "예약 상품",
   };
 }
 
 function paymentSummary(reservation) {
-  const product = products.find((item) => item.id === reservation.productId);
+  const product = activeProducts().find((item) => item.id === reservation.productId);
   const paymentMode = product?.paymentPolicyType === "DEPOSIT" ? "DEPOSIT" : "FREE";
 
   return {
@@ -358,6 +399,14 @@ function paymentSummary(reservation) {
     paymentDueAt: paymentMode === "DEPOSIT" ? "2026-05-17T03:30:00.000Z" : null,
     cancellationPolicySummary: "예약 생성 시점 취소 정책이 적용됩니다.",
   };
+}
+
+function activeRestaurant() {
+  return currentScenario === "long-content" ? longContentRestaurant : restaurant;
+}
+
+function activeProducts() {
+  return currentScenario === "long-content" ? longContentProducts : products;
 }
 
 function refundPreview(reservation) {

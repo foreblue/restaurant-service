@@ -9,7 +9,9 @@ describe("toCustomerApiErrorMessage", () => {
       traceId: "trace-1",
     });
 
-    expect(toCustomerApiErrorMessage(error)).toBe("입력한 예약 정보를 다시 확인해 주세요.");
+    expect(toCustomerApiErrorMessage(error)).toBe(
+      "입력한 예약 정보를 다시 확인해 주세요. 추적 ID: trace-1",
+    );
   });
 
   it("keeps a recovery path for network failures", () => {

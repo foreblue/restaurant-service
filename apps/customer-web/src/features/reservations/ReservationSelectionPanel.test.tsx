@@ -272,7 +272,9 @@ describe("ReservationSelectionPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "예약 완료" }));
 
     expect(
-      await screen.findByText("예약 상태가 변경되었습니다. 최신 정보를 다시 확인해 주세요."),
+      await screen.findByText(
+        "예약 상태가 변경되었습니다. 최신 정보를 다시 확인해 주세요. 추적 ID: trace-conflict",
+      ),
     ).toBeInTheDocument();
     expect(screen.getByText("다른 가능 시간")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /19:00/ }).length).toBeGreaterThan(0);
