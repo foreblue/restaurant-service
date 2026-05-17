@@ -1,6 +1,9 @@
+import Link from "next/link";
+
 import { Alert } from "@/components/ui";
 
 import { type PublicReservationResponse } from "./reservationCreateTypes";
+import { formatReservationStatus } from "./reservationDisplay";
 
 interface ReservationCompletionCardProps {
   reservation: PublicReservationResponse;
@@ -33,20 +36,13 @@ export function ReservationCompletionCard({ reservation }: ReservationCompletion
           </dd>
         </div>
       </dl>
+
+      <Link
+        className="mt-4 inline-flex min-h-11 w-full items-center justify-center rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2"
+        href={`/reservations/${reservation.id}?token=${encodeURIComponent(reservation.lookupToken)}`}
+      >
+        예약 상세 확인
+      </Link>
     </section>
   );
-}
-
-function formatReservationStatus(status: PublicReservationResponse["status"]) {
-  const labels: Record<PublicReservationResponse["status"], string> = {
-    CANCELLED_BY_CUSTOMER: "고객 취소",
-    CANCELLED_BY_RESTAURANT: "매장 취소",
-    COMPLETED: "방문 완료",
-    CONFIRMED: "예약 확정",
-    MODIFIED: "예약 변경",
-    NO_SHOW: "노쇼",
-    PENDING: "예약 접수",
-  };
-
-  return labels[status] ?? status;
 }
