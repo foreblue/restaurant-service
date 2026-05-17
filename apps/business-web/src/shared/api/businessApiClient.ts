@@ -771,6 +771,49 @@ export interface BusinessCustomerAnonymizeResponse {
   notice: string;
 }
 
+export type BusinessCustomerDuplicateMatchType = "PHONE" | "EMAIL";
+
+export interface BusinessCustomerDuplicateCandidateItemResponse {
+  id: number;
+  name: string;
+  phoneMasked: string;
+  email: string | null;
+  reservationCount: number;
+  noteCount: number;
+  vip: boolean;
+  caution: boolean;
+  blocked: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface BusinessCustomerDuplicateCandidateGroupResponse {
+  matchType: BusinessCustomerDuplicateMatchType;
+  matchKeyMasked: string;
+  customers: BusinessCustomerDuplicateCandidateItemResponse[];
+}
+
+export interface BusinessCustomerDuplicateCandidatesResponse {
+  totalGroups: number;
+  groups: BusinessCustomerDuplicateCandidateGroupResponse[];
+}
+
+export interface BusinessCustomerMergeRequest {
+  targetCustomerId?: number | null;
+  sourceCustomerIds?: number[] | null;
+  confirmIrreversible?: boolean | null;
+  reason?: string | null;
+}
+
+export interface BusinessCustomerMergeResponse {
+  targetCustomerId: number;
+  mergedCustomerIds: number[];
+  movedReservationCount: number;
+  movedNoteCount: number;
+  anonymizedCustomerIds: number[];
+  warning: string;
+}
+
 export interface BusinessCustomerReservationHistoryItemResponse {
   id: number;
   reservationNumber: string;
@@ -956,6 +999,10 @@ export interface BusinessApiClient {
     customerId: number,
     request: BusinessCustomerAnonymizeRequest,
   ): Promise<BusinessCustomerAnonymizeResponse>;
+  listBusinessCustomerDuplicateCandidates(): Promise<BusinessCustomerDuplicateCandidatesResponse>;
+  mergeBusinessCustomers(
+    request: BusinessCustomerMergeRequest,
+  ): Promise<BusinessCustomerMergeResponse>;
 }
 
 export function createBusinessQueryClient() {
@@ -1351,6 +1398,19 @@ class HttpBusinessApiClient implements BusinessApiClient {
         body: request,
       },
     );
+  }
+
+  listBusinessCustomerDuplicateCandidates() {
+    return this.request<BusinessCustomerDuplicateCandidatesResponse>(
+      "/api/business/customers/duplicate-candidates",
+    );
+  }
+
+  mergeBusinessCustomers(request: BusinessCustomerMergeRequest) {
+    return this.request<BusinessCustomerMergeResponse>("/api/business/customers/merge", {
+      method: "POST",
+      body: request,
+    });
   }
 
   private async request<T>(path: string, init: { method?: string; body?: unknown } = {}) {
@@ -2353,6 +2413,112 @@ class MockBusinessApiClient implements BusinessApiClient {
       requestedAt: new Date().toISOString(),
       notice: "개인정보 삭제/익명화 요청이 접수되었습니다. 감사 로그와 운영 검토 후 처리합니다.",
     } satisfies BusinessCustomerAnonymizeResponse;
+  }
+
+  async listBusinessCustomerDuplicateCandidates() {
+    const customers = toMockBusinessCustomers(this.readBusinessReservations());
+    const duplicateGroups = defaultMockBusinessCustomerDuplicateGroups()
+      .map((group) => ({
+        matchType: group.matchType,
+        matchKeyMasked: group.matchKeyMasked,
+        customers: group.customerIds
+          .map((customerId) => customers.find((customer) => customer.id === customerId))
+          .filter(
+            (customer): customer is BusinessCustomerListItemResponse => customer !== undefined,
+          )
+          .map((customer) =>
+            toMockBusinessCustomerDuplicateCandidateItem(
+              customer,
+              this.readCustomerNotesForCustomer(customer.id),
+              this.readCustomerFlagStatus(customer.id),
+            ),
+          ),
+      }))
+      .filter((group) => group.customers.length > 1);
+
+    return {
+      totalGroups: duplicateGroups.length,
+      groups: duplicateGroups,
+    } satisfies BusinessCustomerDuplicateCandidatesResponse;
+  }
+
+  async mergeBusinessCustomers(request: BusinessCustomerMergeRequest) {
+    const normalized = normalizeBusinessCustomerMergeRequest(request);
+    const reservations = this.readBusinessReservations();
+    const targetReservations = reservations.filter(
+      (reservation) => reservation.customer.id === normalized.targetCustomerId,
+    );
+    const targetReservation = targetReservations[0];
+
+    if (!targetReservation) {
+      throw new ApiError("기준 고객을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    let movedReservationCount = 0;
+    normalized.sourceCustomerIds.forEach((sourceCustomerId) => {
+      this.assertCustomerExists(sourceCustomerId);
+      reservations
+        .filter((reservation) => reservation.customer.id === sourceCustomerId)
+        .forEach((reservation) => {
+          this.writeBusinessReservation({
+            ...reservation,
+            customer: {
+              ...targetReservation.customer,
+              id: normalized.targetCustomerId,
+            },
+          });
+          movedReservationCount += 1;
+        });
+    });
+
+    const notesByCustomer = this.readAllCustomerNotes();
+    const targetNotes = notesByCustomer[String(normalized.targetCustomerId)] ?? [];
+    const sourceNotes = normalized.sourceCustomerIds.flatMap(
+      (sourceCustomerId) => notesByCustomer[String(sourceCustomerId)] ?? [],
+    );
+    const movedNoteCount = sourceNotes.length;
+    this.writeCustomerNotes({
+      ...this.readCustomerNotes(),
+      [String(normalized.targetCustomerId)]: [
+        ...sourceNotes.map((note) => ({
+          ...note,
+          customerId: normalized.targetCustomerId,
+          auditActionLabel: "병합 이동",
+        })),
+        ...targetNotes,
+      ],
+      ...Object.fromEntries(
+        normalized.sourceCustomerIds.map((sourceCustomerId) => [sourceCustomerId, []]),
+      ),
+    });
+
+    const targetFlags = this.readCustomerFlagStatus(normalized.targetCustomerId);
+    const sourceFlags = normalized.sourceCustomerIds.map((sourceCustomerId) =>
+      this.readCustomerFlagStatus(sourceCustomerId),
+    );
+    const blockedFlag =
+      sourceFlags.find((flag) => flag.blockedScope !== "NONE") ??
+      (targetFlags.blockedScope !== "NONE" ? targetFlags : null);
+    this.writeCustomerFlags({
+      ...this.readCustomerFlags(),
+      [String(normalized.targetCustomerId)]: {
+        ...targetFlags,
+        vip: targetFlags.vip || sourceFlags.some((flag) => flag.vip),
+        caution: targetFlags.caution || sourceFlags.some((flag) => flag.caution),
+        blockedScope: blockedFlag?.blockedScope ?? targetFlags.blockedScope,
+        blockedScopeLabel: blockedFlag?.blockedScopeLabel ?? targetFlags.blockedScopeLabel,
+        updatedAt: new Date().toISOString(),
+      },
+    });
+
+    return {
+      targetCustomerId: normalized.targetCustomerId,
+      mergedCustomerIds: normalized.sourceCustomerIds,
+      movedReservationCount,
+      movedNoteCount,
+      anonymizedCustomerIds: normalized.sourceCustomerIds,
+      warning: "고객 병합은 되돌릴 수 없으며, 병합된 고객의 개인정보는 익명화됩니다.",
+    } satisfies BusinessCustomerMergeResponse;
   }
 
   private readBusinessReservations() {
@@ -3819,6 +3985,20 @@ function defaultMockBusinessCustomerProfiles(): Record<number, MockBusinessCusto
   };
 }
 
+function defaultMockBusinessCustomerDuplicateGroups(): Array<{
+  matchType: BusinessCustomerDuplicateMatchType;
+  matchKeyMasked: string;
+  customerIds: number[];
+}> {
+  return [
+    {
+      matchType: "EMAIL",
+      matchKeyMasked: "r***n@example.com",
+      customerIds: [8001, 8002],
+    },
+  ];
+}
+
 function defaultMockBusinessCustomerFlagStatus(
   customerId: number,
 ): BusinessCustomerFlagStatusResponse {
@@ -4433,6 +4613,26 @@ function toMockBusinessCustomerDetail(
   } satisfies BusinessCustomerDetailResponse;
 }
 
+function toMockBusinessCustomerDuplicateCandidateItem(
+  customer: BusinessCustomerListItemResponse,
+  notes: BusinessCustomerNoteResponse[],
+  flagStatus: BusinessCustomerFlagStatusResponse,
+): BusinessCustomerDuplicateCandidateItemResponse {
+  return {
+    id: customer.id,
+    name: customer.name,
+    phoneMasked: customer.phoneMasked,
+    email: mockBusinessCustomerEmail(customer.id),
+    reservationCount: customer.totalReservations,
+    noteCount: notes.length,
+    vip: flagStatus.vip,
+    caution: flagStatus.caution,
+    blocked: flagStatus.blockedScope !== "NONE",
+    createdAt: customer.lastVisitedAt,
+    updatedAt: flagStatus.updatedAt ?? customer.nextReservationAt ?? customer.lastVisitedAt,
+  };
+}
+
 function toMockBusinessCustomerReservationHistory(
   reservations: BusinessReservationListItemResponse[],
   customerId: number,
@@ -4670,6 +4870,34 @@ function normalizeBusinessCustomerNoteRequest(request: BusinessCustomerNoteSaveR
   return content;
 }
 
+function normalizeBusinessCustomerMergeRequest(request: BusinessCustomerMergeRequest) {
+  const targetCustomerId = request.targetCustomerId ?? 0;
+  const sourceCustomerIds = Array.from(new Set(request.sourceCustomerIds ?? []));
+  const reason = request.reason?.trim() ?? null;
+
+  if (request.confirmIrreversible !== true) {
+    throw new ApiError("되돌릴 수 없는 고객 병합 작업 확인이 필요합니다.", 400, "VALIDATION_ERROR");
+  }
+  if (!Number.isInteger(targetCustomerId) || targetCustomerId < 1) {
+    throw new ApiError("기준 고객을 선택해 주세요.", 400, "VALIDATION_ERROR");
+  }
+  if (sourceCustomerIds.length === 0) {
+    throw new ApiError("병합 대상 고객을 선택해 주세요.", 400, "VALIDATION_ERROR");
+  }
+  if (sourceCustomerIds.some((sourceCustomerId) => sourceCustomerId === targetCustomerId)) {
+    throw new ApiError("기준 고객과 병합 대상 고객은 달라야 합니다.", 400, "VALIDATION_ERROR");
+  }
+  if ((reason?.length ?? 0) > 255) {
+    throw new ApiError("병합 사유는 255자 이하로 입력해 주세요.", 400, "VALIDATION_ERROR");
+  }
+
+  return {
+    targetCustomerId,
+    sourceCustomerIds,
+    reason,
+  };
+}
+
 function nextBusinessCustomerNoteId(
   notesByCustomer: Record<string, BusinessCustomerNoteResponse[]>,
 ) {
@@ -4815,6 +5043,18 @@ function mockCustomerPhoneNumber(reservationId: number) {
   };
 
   return phoneNumbers[reservationId] ?? "010-0000-0000";
+}
+
+function mockBusinessCustomerEmail(customerId: number) {
+  const emails: Record<number, string | null> = {
+    8001: "reservation@example.com",
+    8002: "reservation@example.com",
+    8003: "cancel@example.com",
+    8004: "visit@example.com",
+    8005: "risk@example.com",
+  };
+
+  return emails[customerId] ?? null;
 }
 
 function mockBusinessCustomerProfile(customerId: number): MockBusinessCustomerProfile {
