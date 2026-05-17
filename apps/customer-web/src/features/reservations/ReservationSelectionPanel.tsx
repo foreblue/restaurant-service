@@ -3,15 +3,17 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
-import { Button, Select, StateBlock } from "@/components/ui";
+import { Alert, Button, Select, StateBlock } from "@/components/ui";
 import { usePublicApiClient } from "@/shared/api/usePublicApiClient";
 
+import { ReservationCustomerForm } from "./ReservationCustomerForm";
 import { getAvailabilityDates, getAvailabilityTimes } from "./reservationOptionsApi";
 import {
   type AvailableDate,
   type AvailableTimeSlot,
   type PublicReservationProduct,
 } from "./reservationOptionsTypes";
+import { type ReservationCustomerFormValues } from "./reservationCustomerSchema";
 
 interface ReservationSelectionPanelProps {
   products: PublicReservationProduct[];
@@ -30,6 +32,7 @@ export function ReservationSelectionPanel({
   const [partySize, setPartySize] = useState(() => selectedProduct?.minPartySize ?? 1);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTimeSlot, setSelectedTimeSlot] = useState<AvailableTimeSlot | null>(null);
+  const [customerInfo, setCustomerInfo] = useState<ReservationCustomerFormValues | null>(null);
 
   useEffect(() => {
     if (selectedProduct) {
@@ -47,6 +50,10 @@ export function ReservationSelectionPanel({
   useEffect(() => {
     setSelectedTimeSlot(null);
   }, [selectedDate]);
+
+  useEffect(() => {
+    setCustomerInfo(null);
+  }, [selectedProductId, partySize, selectedDate, selectedTimeSlot?.timeSlotId]);
 
   const partySizeOptions = useMemo(
     () => createPartySizeOptions(selectedProduct),
@@ -154,6 +161,20 @@ export function ReservationSelectionPanel({
         <div className="rounded-md border border-teal-200 bg-teal-50 p-3 text-sm font-semibold text-teal-950">
           {selectedProduct.name} · {partySize}명 · {selectedDate} · {selectedTimeSlot.startTime}
         </div>
+      ) : null}
+
+      {selectedProduct && selectedDate && selectedTimeSlot ? (
+        <ReservationCustomerForm onSubmit={setCustomerInfo} />
+      ) : (
+        <StateBlock title="고객 정보 입력 전입니다.">
+          <p>상품, 날짜, 시간을 선택하면 고객 정보를 입력할 수 있습니다.</p>
+        </StateBlock>
+      )}
+
+      {customerInfo ? (
+        <Alert title="고객 정보가 확인되었습니다." variant="success">
+          {customerInfo.customerName} · {customerInfo.phoneNumber}
+        </Alert>
       ) : null}
     </section>
   );
