@@ -12,6 +12,10 @@ interface PublicRestaurantPageContentProps {
 export function PublicRestaurantPageContent({ restaurant }: PublicRestaurantPageContentProps) {
   const address = formatAddress(restaurant);
 
+  if (!isReservationPageAvailable(restaurant)) {
+    return <UnavailableReservationPage restaurant={restaurant} />;
+  }
+
   return (
     <ReservationPageShell
       description={restaurant.description ?? "소개 문구가 준비 중입니다."}
@@ -70,6 +74,23 @@ export function PublicRestaurantPageContent({ restaurant }: PublicRestaurantPage
   );
 }
 
+function UnavailableReservationPage({ restaurant }: PublicRestaurantPageContentProps) {
+  const reason = getUnavailableReason(restaurant);
+
+  return (
+    <ReservationPageShell
+      description={`${restaurant.name} 예약 링크를 다시 확인해 주세요.`}
+      eyebrow="예약 불가"
+      title="예약 페이지를 이용할 수 없습니다."
+    >
+      <StateBlock title={reason.title} variant="empty">
+        <p>{reason.description}</p>
+        <p className="mt-2">문의가 필요하면 매장으로 연락해 주세요. {restaurant.phone}</p>
+      </StateBlock>
+    </ReservationPageShell>
+  );
+}
+
 function RestaurantCover({ restaurant }: PublicRestaurantPageContentProps) {
   if (restaurant.coverImageUrl) {
     return (
@@ -95,4 +116,35 @@ function RestaurantCover({ restaurant }: PublicRestaurantPageContentProps) {
 
 function formatAddress(restaurant: PublicRestaurantResponse) {
   return [restaurant.addressLine1, restaurant.addressLine2].filter(Boolean).join(" ");
+}
+
+function isReservationPageAvailable(restaurant: PublicRestaurantResponse) {
+  return (
+    restaurant.reservationPage.status === "PUBLIC" &&
+    restaurant.reservationPage.reservationAvailable
+  );
+}
+
+function getUnavailableReason(restaurant: PublicRestaurantResponse) {
+  if (
+    restaurant.reservationPage.status === "PRIVATE" ||
+    restaurant.reservationPage.status === "DRAFT"
+  ) {
+    return {
+      title: "아직 공개되지 않은 예약 페이지입니다.",
+      description: "매장이 예약 페이지를 공개하면 이 링크로 다시 예약할 수 있습니다.",
+    };
+  }
+
+  if (restaurant.reservationPage.status === "DISABLED") {
+    return {
+      title: "현재 운영이 중지된 예약 페이지입니다.",
+      description: "매장 사정으로 온라인 예약 접수가 잠시 중단되었습니다.",
+    };
+  }
+
+  return {
+    title: "현재 온라인 예약을 받을 수 없습니다.",
+    description: "매장 예약 가능 상태가 변경되었습니다.",
+  };
 }
