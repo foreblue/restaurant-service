@@ -5,6 +5,20 @@ describe("getCustomerWebEnv", () => {
     expect(getCustomerWebEnv({})).toEqual({
       apiBaseUrl: "http://localhost:8080",
       appBaseUrl: "http://localhost:3000",
+      errorReportingEndpoint: null,
+      release: "local",
+    });
+  });
+
+  it("normalizes observability env values", () => {
+    expect(
+      getCustomerWebEnv({
+        NEXT_PUBLIC_ERROR_REPORTING_ENDPOINT: "https://events.example.com/customer/",
+        NEXT_PUBLIC_RELEASE: "customer-web@2026.05.17",
+      }),
+    ).toMatchObject({
+      errorReportingEndpoint: "https://events.example.com/customer",
+      release: "customer-web@2026.05.17",
     });
   });
 

@@ -140,7 +140,7 @@ export function ReservationSelectionPanel({
         </p>
       </div>
 
-      <div className="grid gap-2" role="list">
+      <div className="grid gap-2">
         {products.map((product) => (
           <button
             aria-pressed={product.id === selectedProductId}
@@ -438,9 +438,7 @@ function AvailabilityTimes({
           >
             <span className="grid gap-0.5 text-center leading-tight">
               <span>{timeSlot.startTime}</span>
-              <span className="text-xs font-medium opacity-80">
-                {timeSlotInventoryLabel(timeSlot)}
-              </span>
+              <span className="text-xs font-medium">{timeSlotInventoryLabel(timeSlot)}</span>
             </span>
           </Button>
         ))}
