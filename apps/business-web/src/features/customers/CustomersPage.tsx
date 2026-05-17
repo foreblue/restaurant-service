@@ -10,15 +10,21 @@ import {
   useCreateBusinessCustomerNoteMutation,
   useDeleteBusinessCustomerNoteMutation,
   useBusinessCustomerDetailQuery,
+  useBusinessCustomerDuplicateCandidatesQuery,
   useBusinessCustomerReservationsQuery,
   useBusinessCustomersQuery,
+  useMergeBusinessCustomersMutation,
   useRequestBusinessCustomerAnonymizeMutation,
   useUpdateBusinessCustomerFlagsMutation,
   useUpdateBusinessCustomerNoteMutation,
 } from "@/features/customers/customerQueries";
 import {
   type BusinessCustomerDetailResponse,
+  type BusinessCustomerDuplicateCandidateGroupResponse,
+  type BusinessCustomerDuplicateCandidateItemResponse,
   type BusinessCustomerListItemResponse,
+  type BusinessCustomerMergeRequest,
+  type BusinessCustomerMergeResponse,
   type BusinessCustomerNoteResponse,
   type BusinessCustomerReservationHistoryItemResponse,
   type BusinessCustomerSegment,
@@ -32,6 +38,7 @@ const segmentOptions: Array<{ label: string; value: BusinessCustomerSegment }> =
 ];
 
 const emptyCustomers: BusinessCustomerListItemResponse[] = [];
+const emptyDuplicateGroups: BusinessCustomerDuplicateCandidateGroupResponse[] = [];
 
 export function CustomersPage() {
   const pushToast = useToastStore((state) => state.pushToast);
@@ -46,7 +53,9 @@ export function CustomersPage() {
     query: query || null,
     segment,
   });
+  const duplicateCandidatesQuery = useBusinessCustomerDuplicateCandidatesQuery();
   const customers = customersQuery.data?.items ?? emptyCustomers;
+  const duplicateGroups = duplicateCandidatesQuery.data?.groups ?? emptyDuplicateGroups;
   const selectedCustomerId = customers.some((customer) => customer.id === userSelectedCustomerId)
     ? userSelectedCustomerId
     : (customers[0]?.id ?? null);
@@ -57,6 +66,7 @@ export function CustomersPage() {
   const deleteNote = useDeleteBusinessCustomerNoteMutation();
   const updateFlags = useUpdateBusinessCustomerFlagsMutation();
   const requestAnonymize = useRequestBusinessCustomerAnonymizeMutation();
+  const mergeCustomers = useMergeBusinessCustomersMutation();
   const selectedCustomer = customerDetailQuery.data ?? null;
   const reservationHistory = reservationHistoryQuery.data?.items ?? [];
   const noteMutationPending = createNote.isPending || updateNote.isPending;
@@ -170,6 +180,22 @@ export function CustomersPage() {
         variant: "danger",
       });
     }
+  }
+
+  async function mergeDuplicateCustomers(
+    request: BusinessCustomerMergeRequest,
+  ): Promise<BusinessCustomerMergeResponse> {
+    const result = await mergeCustomers.mutateAsync(request);
+
+    resetCustomerCrmDrafts();
+    setUserSelectedCustomerId(result.targetCustomerId);
+    pushToast({
+      title: "고객 병합 요청이 완료되었습니다.",
+      description: `예약 ${result.movedReservationCount}건, 메모 ${result.movedNoteCount}건이 기준 고객으로 이동했습니다.`,
+      variant: "success",
+    });
+
+    return result;
   }
 
   const columns = useMemo<Array<ColumnDef<BusinessCustomerListItemResponse>>>(
@@ -336,6 +362,15 @@ export function CustomersPage() {
               getRowId={(row) => String(row.id)}
             />
           )}
+
+          <DuplicateCustomersPanel
+            groups={duplicateGroups}
+            isLoading={duplicateCandidatesQuery.isLoading}
+            isError={duplicateCandidatesQuery.isError}
+            isPending={mergeCustomers.isPending}
+            onSelectCustomer={selectCustomer}
+            onMerge={mergeDuplicateCustomers}
+          />
         </div>
 
         <CustomerDetailPanel
@@ -381,6 +416,292 @@ export function CustomersPage() {
         onConfirm={submitAnonymizeRequest}
       />
     </>
+  );
+}
+
+function DuplicateCustomersPanel({
+  groups,
+  isLoading,
+  isError,
+  isPending,
+  onSelectCustomer,
+  onMerge,
+}: {
+  groups: BusinessCustomerDuplicateCandidateGroupResponse[];
+  isLoading: boolean;
+  isError: boolean;
+  isPending: boolean;
+  onSelectCustomer: (customerId: number) => void;
+  onMerge: (request: BusinessCustomerMergeRequest) => Promise<BusinessCustomerMergeResponse>;
+}) {
+  const pushToast = useToastStore((state) => state.pushToast);
+  const [selectedGroupIndex, setSelectedGroupIndex] = useState(0);
+  const [mergeTargetCustomerId, setMergeTargetCustomerId] = useState<number | null>(null);
+  const [mergeSourceCustomerIds, setMergeSourceCustomerIds] = useState<number[]>([]);
+  const [sourceSelectionTouched, setSourceSelectionTouched] = useState(false);
+  const [mergeReason, setMergeReason] = useState("");
+  const [mergeConfirmOpen, setMergeConfirmOpen] = useState(false);
+  const selectedGroup = groups[selectedGroupIndex] ?? groups[0] ?? null;
+  const groupCustomerIds = selectedGroup?.customers.map((customer) => customer.id) ?? [];
+  const targetCustomerId =
+    mergeTargetCustomerId !== null && groupCustomerIds.includes(mergeTargetCustomerId)
+      ? mergeTargetCustomerId
+      : (selectedGroup?.customers[0]?.id ?? null);
+  const selectedSourceCustomerIds = mergeSourceCustomerIds.filter(
+    (customerId) => customerId !== targetCustomerId && groupCustomerIds.includes(customerId),
+  );
+  const sourceCustomerIds =
+    sourceSelectionTouched || selectedSourceCustomerIds.length > 0
+      ? selectedSourceCustomerIds
+      : (selectedGroup?.customers
+          .filter((customer) => customer.id !== targetCustomerId)
+          .map((customer) => customer.id) ?? []);
+  const targetCustomer =
+    selectedGroup?.customers.find((customer) => customer.id === targetCustomerId) ?? null;
+  const sourceCustomers =
+    selectedGroup?.customers.filter((customer) => sourceCustomerIds.includes(customer.id)) ?? [];
+  const impact = mergeImpact(sourceCustomers);
+
+  function selectGroup(index: number) {
+    const group = groups[index];
+
+    setSelectedGroupIndex(index);
+    setMergeConfirmOpen(false);
+    setMergeReason("");
+    setMergeTargetCustomerId(group?.customers[0]?.id ?? null);
+    setMergeSourceCustomerIds(group?.customers.slice(1).map((customer) => customer.id) ?? []);
+    setSourceSelectionTouched(false);
+  }
+
+  function selectTargetCustomer(customerId: number) {
+    setMergeTargetCustomerId(customerId);
+    setMergeSourceCustomerIds(
+      selectedGroup?.customers
+        .filter((customer) => customer.id !== customerId)
+        .map((customer) => customer.id) ?? [],
+    );
+    setSourceSelectionTouched(false);
+  }
+
+  function toggleSourceCustomer(customerId: number, checked: boolean) {
+    setSourceSelectionTouched(true);
+    setMergeSourceCustomerIds((current) =>
+      checked
+        ? Array.from(new Set([...current, customerId]))
+        : current.filter((currentCustomerId) => currentCustomerId !== customerId),
+    );
+  }
+
+  async function confirmMerge() {
+    if (!targetCustomerId || sourceCustomerIds.length === 0) {
+      return;
+    }
+
+    try {
+      const result = await onMerge({
+        targetCustomerId,
+        sourceCustomerIds,
+        confirmIrreversible: true,
+        reason: mergeReason || null,
+      });
+      setMergeConfirmOpen(false);
+      setMergeReason("");
+      setMergeTargetCustomerId(result.targetCustomerId);
+      setMergeSourceCustomerIds([]);
+      setSourceSelectionTouched(false);
+    } catch (error) {
+      setMergeConfirmOpen(false);
+      pushToast({
+        title: "고객 병합 요청에 실패했습니다.",
+        description: errorMessage(error),
+        variant: "danger",
+      });
+    }
+  }
+
+  return (
+    <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-base font-semibold">중복 고객 후보</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            같은 연락처나 이메일로 감지된 고객을 비교하고 기준 고객으로 병합합니다.
+          </p>
+        </div>
+        <Flag label={`${groups.length}개 후보`} tone={groups.length > 0 ? "warning" : "info"} />
+      </div>
+
+      <div className="mt-4 space-y-4">
+        <Alert title="병합 취소 불가 안내">
+          병합된 고객의 예약과 메모는 기준 고객으로 이동하고, 병합 대상 고객의 개인정보는
+          익명화됩니다.
+        </Alert>
+
+        {isError ? <Alert variant="danger">중복 고객 후보를 불러오지 못했습니다.</Alert> : null}
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">중복 후보를 확인하는 중입니다.</p>
+        ) : null}
+        {!isLoading && !isError && groups.length === 0 ? (
+          <p className="text-sm text-muted-foreground">현재 확인할 중복 고객 후보가 없습니다.</p>
+        ) : null}
+
+        {groups.length > 0 ? (
+          <>
+            <div className="flex flex-wrap gap-2" aria-label="중복 후보 그룹">
+              {groups.map((group, index) => (
+                <Button
+                  key={`${group.matchType}-${group.matchKeyMasked}`}
+                  type="button"
+                  variant={group === selectedGroup ? "secondary" : "outline"}
+                  size="sm"
+                  onClick={() => selectGroup(index)}
+                >
+                  {matchTypeLabel(group.matchType)} {group.matchKeyMasked} ·{" "}
+                  {group.customers.length}명
+                </Button>
+              ))}
+            </div>
+
+            {selectedGroup ? (
+              <div className="space-y-4">
+                <div className="grid gap-3 lg:grid-cols-2">
+                  {selectedGroup.customers.map((customer) => (
+                    <DuplicateCustomerCard
+                      key={customer.id}
+                      customer={customer}
+                      isTarget={customer.id === targetCustomerId}
+                      isSource={sourceCustomerIds.includes(customer.id)}
+                      onSelectTarget={() => selectTargetCustomer(customer.id)}
+                      onToggleSource={(checked) => toggleSourceCustomer(customer.id, checked)}
+                      onOpenDetail={() => onSelectCustomer(customer.id)}
+                    />
+                  ))}
+                </div>
+
+                <Field id="customer-merge-reason" label="병합 사유">
+                  <Input
+                    id="customer-merge-reason"
+                    placeholder="동일 고객 중복 정리"
+                    value={mergeReason}
+                    onChange={(event) => setMergeReason(event.target.value)}
+                  />
+                </Field>
+
+                <div className="grid gap-3 rounded-md border border-border bg-muted/40 p-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                  <DetailItem label="기준 고객" value={targetCustomer?.name ?? "-"} />
+                  <DetailItem
+                    label="병합 대상"
+                    value={sourceCustomers.map((customer) => customer.name).join(", ") || "-"}
+                  />
+                  <DetailItem label="이동 예약" value={`${impact.reservationCount}건`} />
+                  <DetailItem label="이동 메모" value={`${impact.noteCount}건`} />
+                </div>
+
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    variant="danger"
+                    disabled={!targetCustomerId || sourceCustomerIds.length === 0}
+                    isLoading={isPending}
+                    onClick={() => setMergeConfirmOpen(true)}
+                  >
+                    병합 요청
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </>
+        ) : null}
+      </div>
+
+      <ConfirmDialog
+        open={mergeConfirmOpen}
+        title="고객 병합 확인"
+        description={
+          targetCustomer
+            ? `${targetCustomer.name} 고객을 기준으로 ${sourceCustomers.length}명의 고객을 병합합니다. 예약 ${impact.reservationCount}건과 메모 ${impact.noteCount}건이 이동하며 이 작업은 되돌릴 수 없습니다.`
+            : "선택한 중복 고객을 병합합니다. 이 작업은 되돌릴 수 없습니다."
+        }
+        confirmLabel="병합 실행"
+        intent="danger"
+        isPending={isPending}
+        onCancel={() => setMergeConfirmOpen(false)}
+        onConfirm={confirmMerge}
+      />
+    </section>
+  );
+}
+
+function DuplicateCustomerCard({
+  customer,
+  isTarget,
+  isSource,
+  onSelectTarget,
+  onToggleSource,
+  onOpenDetail,
+}: {
+  customer: BusinessCustomerDuplicateCandidateItemResponse;
+  isTarget: boolean;
+  isSource: boolean;
+  onSelectTarget: () => void;
+  onToggleSource: (checked: boolean) => void;
+  onOpenDetail: () => void;
+}) {
+  return (
+    <article className="rounded-md border border-border bg-background p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="font-medium">{customer.name}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {customer.phoneMasked} · {customer.email ?? "이메일 없음"}
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-label={`${customer.name} 고객 상세 보기`}
+          onClick={onOpenDetail}
+        >
+          상세
+        </Button>
+      </div>
+
+      <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+        <DetailItem label="예약" value={`${customer.reservationCount}건`} />
+        <DetailItem label="메모" value={`${customer.noteCount}건`} />
+        <DetailItem label="등록" value={formatDateTime(customer.createdAt)} />
+        <DetailItem label="수정" value={formatDateTime(customer.updatedAt)} />
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {customer.vip ? <Flag label="VIP" tone="success" /> : null}
+        {customer.caution ? <Flag label="주의 고객" tone="danger" /> : null}
+        {customer.blocked ? <Flag label="차단 고객" tone="warning" /> : null}
+        {!customer.vip && !customer.caution && !customer.blocked ? (
+          <Flag label="일반 고객" />
+        ) : null}
+      </div>
+
+      <div className="mt-3 grid gap-2">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="radio"
+            className="size-4 accent-primary"
+            checked={isTarget}
+            onChange={onSelectTarget}
+          />
+          기준 고객
+        </label>
+        <Checkbox
+          id={`merge-source-${customer.id}`}
+          label="병합 대상"
+          checked={!isTarget && isSource}
+          disabled={isTarget}
+          onChange={(event) => onToggleSource(event.target.checked)}
+        />
+      </div>
+    </article>
   );
 }
 
@@ -800,6 +1121,25 @@ function sourceLabel(value: string) {
   };
 
   return labels[value] ?? value;
+}
+
+function matchTypeLabel(value: string) {
+  const labels: Record<string, string> = {
+    PHONE: "연락처",
+    EMAIL: "이메일",
+  };
+
+  return labels[value] ?? value;
+}
+
+function mergeImpact(customers: BusinessCustomerDuplicateCandidateItemResponse[]) {
+  return customers.reduce(
+    (impact, customer) => ({
+      reservationCount: impact.reservationCount + customer.reservationCount,
+      noteCount: impact.noteCount + customer.noteCount,
+    }),
+    { reservationCount: 0, noteCount: 0 },
+  );
 }
 
 function errorMessage(error: unknown) {

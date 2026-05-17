@@ -5,6 +5,7 @@ import {
   type BusinessCustomerAnonymizeRequest,
   type BusinessCustomerFlagsSaveRequest,
   type BusinessCustomerListQuery,
+  type BusinessCustomerMergeRequest,
   type BusinessCustomerNoteSaveRequest,
 } from "@/shared/api/businessApiClient";
 import { useBusinessApiClient } from "@/shared/api/useBusinessApiClient";
@@ -37,6 +38,15 @@ export function useBusinessCustomerReservationsQuery(customerId: number | null) 
     queryKey: [...businessCustomersQueryKey, "reservations", customerId],
     queryFn: () => apiClient.listBusinessCustomerReservations(customerId ?? 0),
     enabled: customerId !== null,
+  });
+}
+
+export function useBusinessCustomerDuplicateCandidatesQuery() {
+  const apiClient = useBusinessApiClient();
+
+  return useQuery({
+    queryKey: [...businessCustomersQueryKey, "duplicates"],
+    queryFn: () => apiClient.listBusinessCustomerDuplicateCandidates(),
   });
 }
 
@@ -114,6 +124,20 @@ export function useRequestBusinessCustomerAnonymizeMutation() {
       request: BusinessCustomerAnonymizeRequest;
     }) => apiClient.requestBusinessCustomerAnonymize(customerId, request),
     onSuccess: () => invalidateCustomerCrmQueries(queryClient),
+  });
+}
+
+export function useMergeBusinessCustomersMutation() {
+  const apiClient = useBusinessApiClient();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (request: BusinessCustomerMergeRequest) =>
+      apiClient.mergeBusinessCustomers(request),
+    onSuccess: () => {
+      invalidateCustomerCrmQueries(queryClient);
+      queryClient.invalidateQueries({ queryKey: businessReservationsQueryKey });
+    },
   });
 }
 

@@ -563,6 +563,18 @@ describe("App routing", () => {
         privacyNotice: "전화번호는 고객 상세에서만 표시합니다.",
       }),
       listBusinessCustomerReservations: async () => ({ items: [] }),
+      listBusinessCustomerDuplicateCandidates: async () => ({
+        totalGroups: 0,
+        groups: [],
+      }),
+      mergeBusinessCustomers: async () => ({
+        targetCustomerId: 1,
+        mergedCustomerIds: [2],
+        movedReservationCount: 0,
+        movedNoteCount: 0,
+        anonymizedCustomerIds: [2],
+        warning: "고객 병합은 되돌릴 수 없으며, 병합된 고객의 개인정보는 익명화됩니다.",
+      }),
       createBusinessCustomerNote: async () => ({
         id: 1,
         customerId: 1,
@@ -991,7 +1003,7 @@ describe("App routing", () => {
     expect(await screen.findByRole("heading", { name: "예약 운영" })).toBeInTheDocument();
     expect(await screen.findByText("일별 예약 리스트")).toBeInTheDocument();
     expect(await screen.findByText("주간 캘린더")).toBeInTheDocument();
-    expect(await screen.findByText("김예약")).toBeInTheDocument();
+    expect((await screen.findAllByText("김예약")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("확정").length).toBeGreaterThan(0);
     expect(screen.getByText("총 예약")).toBeInTheDocument();
 
@@ -1270,11 +1282,25 @@ describe("App routing", () => {
     fireEvent.click(screen.getByRole("link", { name: "고객 관리" }));
 
     expect(await screen.findByRole("heading", { name: "고객 관리" })).toBeInTheDocument();
-    expect(await screen.findByText("김예약")).toBeInTheDocument();
+    expect((await screen.findAllByText("김예약")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("010-****-5678").length).toBeGreaterThan(0);
     expect(screen.getByText("목록 연락처 마스킹")).toBeInTheDocument();
     expect(screen.getAllByText(/갑각류/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/결혼기념일/).length).toBeGreaterThan(0);
+    expect(await screen.findByText("중복 고객 후보")).toBeInTheDocument();
+    expect(screen.getByText(/이메일 r\*\*\*n@example.com/)).toBeInTheDocument();
+    expect(screen.getAllByText("이수정").length).toBeGreaterThan(0);
+    expect(screen.getByText("병합 취소 불가 안내")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("병합 사유"), {
+      target: { value: "동일 이메일 중복 정리" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "병합 요청" }));
+    fireEvent.click(await screen.findByRole("button", { name: "병합 실행" }));
+
+    expect(await screen.findByText("고객 병합 요청이 완료되었습니다.")).toBeInTheDocument();
+    expect(await screen.findByText("현재 확인할 중복 고객 후보가 없습니다.")).toBeInTheDocument();
+
     fireEvent.click(await screen.findByRole("button", { name: "김예약 고객 상세 보기" }));
     expect(
       await screen.findByText(
