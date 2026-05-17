@@ -12,6 +12,8 @@
     "test": "pnpm --filter @restaurant/business-web test",
     "test:business": "pnpm --filter @restaurant/business-web test",
     "test:customer": "pnpm --filter @restaurant/customer-web test",
+    "test:e2e:business": "pnpm --filter @restaurant/business-web test:e2e",
+    "qa:regression": "./qa-regression.sh",
     "lint": "pnpm --filter @restaurant/business-web lint",
     "lint:business": "pnpm --filter @restaurant/business-web lint",
     "lint:customer": "pnpm --filter @restaurant/customer-web lint",
