@@ -2,6 +2,14 @@ export interface PublicReservationProductListResponse {
   products: PublicReservationProduct[];
 }
 
+export type ReservationProductPaymentPolicyType =
+  | "NONE"
+  | "FREE"
+  | "PAY_ON_SITE"
+  | "DEPOSIT"
+  | "PREPAID"
+  | "CARD_GUARANTEE";
+
 export interface PublicReservationProduct {
   id: number;
   name: string;
@@ -14,6 +22,8 @@ export interface PublicReservationProduct {
   availableEndTime: string | null;
   requiresPayment: boolean;
   depositAmount: number;
+  paymentPolicyType?: ReservationProductPaymentPolicyType;
+  paymentAmount?: number | null;
 }
 
 export interface AvailabilityDatesResponse {
