@@ -374,6 +374,9 @@ export interface BusinessReservationCustomerDetailResponse {
   phoneNumber: string;
   visitCount: number;
   noShowCount: number;
+  vip: boolean;
+  caution: boolean;
+  blockedScopeLabel: string | null;
 }
 
 export interface BusinessReservationAuditLogResponse {
@@ -705,6 +708,27 @@ export interface BusinessCustomerAnniversaryResponse {
   date: string;
 }
 
+export type BusinessCustomerBlockedScope = "NONE" | "STORE_REVIEW_REQUIRED";
+
+export interface BusinessCustomerFlagStatusResponse {
+  customerId: number;
+  vip: boolean;
+  caution: boolean;
+  blockedScope: BusinessCustomerBlockedScope;
+  blockedScopeLabel: string | null;
+  updatedAt: string | null;
+}
+
+export interface BusinessCustomerNoteResponse {
+  id: number;
+  customerId: number;
+  content: string;
+  authorName: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  auditActionLabel: string;
+}
+
 export interface BusinessCustomerDetailResponse {
   id: number;
   name: string;
@@ -721,7 +745,30 @@ export interface BusinessCustomerDetailResponse {
   recentRequests: string[];
   allergies: string[];
   anniversaries: BusinessCustomerAnniversaryResponse[];
+  flagStatus: BusinessCustomerFlagStatusResponse;
+  notes: BusinessCustomerNoteResponse[];
   privacyNotice: string;
+}
+
+export interface BusinessCustomerNoteSaveRequest {
+  content?: string | null;
+}
+
+export interface BusinessCustomerFlagsSaveRequest {
+  vip?: boolean | null;
+  caution?: boolean | null;
+}
+
+export interface BusinessCustomerAnonymizeRequest {
+  reason?: string | null;
+  confirm?: boolean | null;
+}
+
+export interface BusinessCustomerAnonymizeResponse {
+  accepted: boolean;
+  customerId: number;
+  requestedAt: string | null;
+  notice: string;
 }
 
 export interface BusinessCustomerReservationHistoryItemResponse {
@@ -892,6 +939,23 @@ export interface BusinessApiClient {
   listBusinessCustomerReservations(
     customerId: number,
   ): Promise<BusinessCustomerReservationHistoryResponse>;
+  createBusinessCustomerNote(
+    customerId: number,
+    request: BusinessCustomerNoteSaveRequest,
+  ): Promise<BusinessCustomerNoteResponse>;
+  updateBusinessCustomerNote(
+    noteId: number,
+    request: BusinessCustomerNoteSaveRequest,
+  ): Promise<BusinessCustomerNoteResponse>;
+  deleteBusinessCustomerNote(noteId: number): Promise<void>;
+  updateBusinessCustomerFlags(
+    customerId: number,
+    request: BusinessCustomerFlagsSaveRequest,
+  ): Promise<BusinessCustomerFlagStatusResponse>;
+  requestBusinessCustomerAnonymize(
+    customerId: number,
+    request: BusinessCustomerAnonymizeRequest,
+  ): Promise<BusinessCustomerAnonymizeResponse>;
 }
 
 export function createBusinessQueryClient() {
@@ -1246,6 +1310,49 @@ class HttpBusinessApiClient implements BusinessApiClient {
     );
   }
 
+  createBusinessCustomerNote(customerId: number, request: BusinessCustomerNoteSaveRequest) {
+    return this.request<BusinessCustomerNoteResponse>(
+      `/api/business/customers/${customerId}/notes`,
+      {
+        method: "POST",
+        body: request,
+      },
+    );
+  }
+
+  updateBusinessCustomerNote(noteId: number, request: BusinessCustomerNoteSaveRequest) {
+    return this.request<BusinessCustomerNoteResponse>(`/api/business/customer-notes/${noteId}`, {
+      method: "PUT",
+      body: request,
+    });
+  }
+
+  async deleteBusinessCustomerNote(noteId: number) {
+    await this.request<void>(`/api/business/customer-notes/${noteId}`, {
+      method: "DELETE",
+    });
+  }
+
+  updateBusinessCustomerFlags(customerId: number, request: BusinessCustomerFlagsSaveRequest) {
+    return this.request<BusinessCustomerFlagStatusResponse>(
+      `/api/business/customers/${customerId}/flags`,
+      {
+        method: "POST",
+        body: request,
+      },
+    );
+  }
+
+  requestBusinessCustomerAnonymize(customerId: number, request: BusinessCustomerAnonymizeRequest) {
+    return this.request<BusinessCustomerAnonymizeResponse>(
+      `/api/business/customers/${customerId}/anonymize`,
+      {
+        method: "POST",
+        body: request,
+      },
+    );
+  }
+
   private async request<T>(path: string, init: { method?: string; body?: unknown } = {}) {
     const requestInit: RequestInit = {
       method: init.method ?? "GET",
@@ -1298,6 +1405,8 @@ class MockBusinessApiClient implements BusinessApiClient {
   private readonly reservationOverridesStorageKey =
     "restaurant-business-web.mock-reservation-overrides";
   private readonly reservationNotesStorageKey = "restaurant-business-web.mock-reservation-notes";
+  private readonly customerFlagsStorageKey = "restaurant-business-web.mock-customer-flags";
+  private readonly customerNotesStorageKey = "restaurant-business-web.mock-customer-notes";
   private memoryUser: BusinessUser | null = null;
   private memoryApplication: RestaurantApplicationResponse | null = null;
   private memoryRestaurant: RestaurantSettingsResponse | null = null;
@@ -1308,6 +1417,8 @@ class MockBusinessApiClient implements BusinessApiClient {
   private memoryManualReservations: BusinessReservationListItemResponse[] | null = null;
   private memoryReservationOverrides: BusinessReservationListItemResponse[] | null = null;
   private memoryReservationNotes: Record<string, string | null> | null = null;
+  private memoryCustomerFlags: Record<string, BusinessCustomerFlagStatusResponse> | null = null;
+  private memoryCustomerNotes: Record<string, BusinessCustomerNoteResponse[]> | null = null;
   private nextFileId = 3001;
 
   async getCurrentUser() {
@@ -1724,7 +1835,7 @@ class MockBusinessApiClient implements BusinessApiClient {
 
     const ownerNote = this.readReservationNoteOverride(reservation.id);
 
-    return toMockBusinessReservationDetail(
+    return this.toBusinessReservationDetail(
       reservation,
       ownerNote !== undefined ? { ownerNote } : {},
     );
@@ -1768,7 +1879,7 @@ class MockBusinessApiClient implements BusinessApiClient {
     this.writeManualReservations(
       sortMockBusinessReservations([...manualReservations, reservation]),
     );
-    return toMockBusinessReservationDetail(reservation, {
+    return this.toBusinessReservationDetail(reservation, {
       customerPhone: normalized.customerPhone,
       customerRequest: normalized.customerRequest,
     });
@@ -1803,7 +1914,7 @@ class MockBusinessApiClient implements BusinessApiClient {
     });
 
     this.writeBusinessReservation(updatedReservation);
-    return toMockBusinessReservationDetail(updatedReservation);
+    return this.toBusinessReservationDetail(updatedReservation);
   }
 
   async cancelBusinessReservation(
@@ -1817,7 +1928,7 @@ class MockBusinessApiClient implements BusinessApiClient {
     });
 
     this.writeBusinessReservation(cancelledReservation);
-    return toMockBusinessReservationDetail(cancelledReservation, {
+    return this.toBusinessReservationDetail(cancelledReservation, {
       cancelReason: reason,
     });
   }
@@ -1829,7 +1940,7 @@ class MockBusinessApiClient implements BusinessApiClient {
     });
 
     this.writeBusinessReservation(completedReservation);
-    return toMockBusinessReservationDetail(completedReservation);
+    return this.toBusinessReservationDetail(completedReservation);
   }
 
   async markBusinessReservationNoShow(
@@ -1843,7 +1954,7 @@ class MockBusinessApiClient implements BusinessApiClient {
     });
 
     this.writeBusinessReservation(noShowReservation);
-    return toMockBusinessReservationDetail(noShowReservation);
+    return this.toBusinessReservationDetail(noShowReservation);
   }
 
   async updateBusinessReservationOperationNote(
@@ -1864,7 +1975,7 @@ class MockBusinessApiClient implements BusinessApiClient {
     this.writeBusinessReservation(updatedReservation);
     this.writeReservationNoteOverride(reservationId, ownerNote);
 
-    return toMockBusinessReservationDetail(updatedReservation, {
+    return this.toBusinessReservationDetail(updatedReservation, {
       ownerNote,
     });
   }
@@ -2113,7 +2224,10 @@ class MockBusinessApiClient implements BusinessApiClient {
   }
 
   async getBusinessCustomer(customerId: number) {
-    const customer = toMockBusinessCustomerDetail(this.readBusinessReservations(), customerId);
+    const customer = toMockBusinessCustomerDetail(this.readBusinessReservations(), customerId, {
+      flagStatus: this.readCustomerFlagStatus(customerId),
+      notes: this.readCustomerNotesForCustomer(customerId),
+    });
 
     if (!customer) {
       throw new ApiError("고객을 찾을 수 없습니다.", 404, "NOT_FOUND");
@@ -2123,7 +2237,10 @@ class MockBusinessApiClient implements BusinessApiClient {
   }
 
   async listBusinessCustomerReservations(customerId: number) {
-    const customer = toMockBusinessCustomerDetail(this.readBusinessReservations(), customerId);
+    const customer = toMockBusinessCustomerDetail(this.readBusinessReservations(), customerId, {
+      flagStatus: this.readCustomerFlagStatus(customerId),
+      notes: this.readCustomerNotesForCustomer(customerId),
+    });
 
     if (!customer) {
       throw new ApiError("고객을 찾을 수 없습니다.", 404, "NOT_FOUND");
@@ -2134,6 +2251,110 @@ class MockBusinessApiClient implements BusinessApiClient {
     } satisfies BusinessCustomerReservationHistoryResponse;
   }
 
+  async createBusinessCustomerNote(customerId: number, request: BusinessCustomerNoteSaveRequest) {
+    this.assertCustomerExists(customerId);
+    const content = normalizeBusinessCustomerNoteRequest(request);
+    const notesByCustomer = this.readAllCustomerNotes();
+    const currentNotes = notesByCustomer[String(customerId)] ?? [];
+    const note = {
+      id: nextBusinessCustomerNoteId(notesByCustomer),
+      customerId,
+      content,
+      authorName: "청담 본점 오너",
+      createdAt: new Date().toISOString(),
+      updatedAt: null,
+      auditActionLabel: "메모 생성",
+    } satisfies BusinessCustomerNoteResponse;
+
+    this.writeCustomerNotes({
+      ...this.readCustomerNotes(),
+      [String(customerId)]: [note, ...currentNotes],
+    });
+
+    return note;
+  }
+
+  async updateBusinessCustomerNote(noteId: number, request: BusinessCustomerNoteSaveRequest) {
+    const content = normalizeBusinessCustomerNoteRequest(request);
+    const notesByCustomer = this.readAllCustomerNotes();
+    const entry = findBusinessCustomerNoteEntry(notesByCustomer, noteId);
+
+    if (!entry) {
+      throw new ApiError("고객 메모를 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    const [customerId, notes] = entry;
+    const updatedNote = {
+      ...notes.find((note) => note.id === noteId)!,
+      content,
+      updatedAt: new Date().toISOString(),
+      auditActionLabel: "메모 수정",
+    } satisfies BusinessCustomerNoteResponse;
+
+    this.writeCustomerNotes({
+      ...this.readCustomerNotes(),
+      [customerId]: notes.map((note) => (note.id === noteId ? updatedNote : note)),
+    });
+
+    return updatedNote;
+  }
+
+  async deleteBusinessCustomerNote(noteId: number) {
+    const notesByCustomer = this.readAllCustomerNotes();
+    const entry = findBusinessCustomerNoteEntry(notesByCustomer, noteId);
+
+    if (!entry) {
+      throw new ApiError("고객 메모를 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    const [customerId, notes] = entry;
+
+    this.writeCustomerNotes({
+      ...this.readCustomerNotes(),
+      [customerId]: notes.filter((note) => note.id !== noteId),
+    });
+  }
+
+  async updateBusinessCustomerFlags(customerId: number, request: BusinessCustomerFlagsSaveRequest) {
+    this.assertCustomerExists(customerId);
+    const current = this.readCustomerFlagStatus(customerId);
+    const updated = {
+      ...current,
+      vip: request.vip ?? current.vip,
+      caution: request.caution ?? current.caution,
+      updatedAt: new Date().toISOString(),
+    } satisfies BusinessCustomerFlagStatusResponse;
+
+    this.writeCustomerFlags({
+      ...this.readCustomerFlags(),
+      [String(customerId)]: updated,
+    });
+
+    return updated;
+  }
+
+  async requestBusinessCustomerAnonymize(
+    customerId: number,
+    request: BusinessCustomerAnonymizeRequest,
+  ) {
+    this.assertCustomerExists(customerId);
+    const reason = request.reason?.trim() ?? "";
+
+    if (!request.confirm) {
+      throw new ApiError("개인정보 처리 요청 확인이 필요합니다.", 400, "VALIDATION_ERROR");
+    }
+    if (reason.length < 5) {
+      throw new ApiError("요청 사유를 5자 이상 입력해 주세요.", 400, "VALIDATION_ERROR");
+    }
+
+    return {
+      accepted: true,
+      customerId,
+      requestedAt: new Date().toISOString(),
+      notice: "개인정보 삭제/익명화 요청이 접수되었습니다. 감사 로그와 운영 검토 후 처리합니다.",
+    } satisfies BusinessCustomerAnonymizeResponse;
+  }
+
   private readBusinessReservations() {
     const overrides = new Map(
       this.readReservationOverrides().map((reservation) => [reservation.id, reservation]),
@@ -2142,6 +2363,26 @@ class MockBusinessApiClient implements BusinessApiClient {
     return [...defaultMockBusinessReservations(), ...this.readManualReservations()].map(
       (reservation) => overrides.get(reservation.id) ?? reservation,
     );
+  }
+
+  private toBusinessReservationDetail(
+    reservation: BusinessReservationListItemResponse,
+    overrides: Parameters<typeof toMockBusinessReservationDetail>[1] = {},
+  ) {
+    return toMockBusinessReservationDetail(reservation, {
+      ...overrides,
+      customerFlags: this.readCustomerFlagStatus(reservation.customer.id),
+    });
+  }
+
+  private assertCustomerExists(customerId: number) {
+    const exists = this.readBusinessReservations().some(
+      (reservation) => reservation.customer.id === customerId,
+    );
+
+    if (!exists) {
+      throw new ApiError("고객을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
   }
 
   private findMockBusinessReservationForAction(reservationId: number) {
@@ -2274,6 +2515,86 @@ class MockBusinessApiClient implements BusinessApiClient {
       storage.setItem(this.reservationNotesStorageKey, JSON.stringify(notes));
     } else {
       this.memoryReservationNotes = notes;
+    }
+  }
+
+  private readCustomerFlagStatus(customerId: number) {
+    return (
+      this.readCustomerFlags()[String(customerId)] ??
+      defaultMockBusinessCustomerFlagStatus(customerId)
+    );
+  }
+
+  private readCustomerFlags() {
+    const storage = getBrowserStorage();
+
+    if (!storage) {
+      return this.memoryCustomerFlags ?? {};
+    }
+
+    const raw = storage.getItem(this.customerFlagsStorageKey);
+
+    if (!raw) {
+      return {};
+    }
+
+    try {
+      return JSON.parse(raw) as Record<string, BusinessCustomerFlagStatusResponse>;
+    } catch {
+      storage.removeItem(this.customerFlagsStorageKey);
+      return {};
+    }
+  }
+
+  private writeCustomerFlags(flags: Record<string, BusinessCustomerFlagStatusResponse>) {
+    const storage = getBrowserStorage();
+
+    if (storage) {
+      storage.setItem(this.customerFlagsStorageKey, JSON.stringify(flags));
+    } else {
+      this.memoryCustomerFlags = flags;
+    }
+  }
+
+  private readCustomerNotesForCustomer(customerId: number) {
+    return this.readAllCustomerNotes()[String(customerId)] ?? [];
+  }
+
+  private readAllCustomerNotes() {
+    return {
+      ...defaultMockBusinessCustomerNotes(),
+      ...this.readCustomerNotes(),
+    };
+  }
+
+  private readCustomerNotes() {
+    const storage = getBrowserStorage();
+
+    if (!storage) {
+      return this.memoryCustomerNotes ?? {};
+    }
+
+    const raw = storage.getItem(this.customerNotesStorageKey);
+
+    if (!raw) {
+      return {};
+    }
+
+    try {
+      return JSON.parse(raw) as Record<string, BusinessCustomerNoteResponse[]>;
+    } catch {
+      storage.removeItem(this.customerNotesStorageKey);
+      return {};
+    }
+  }
+
+  private writeCustomerNotes(notes: Record<string, BusinessCustomerNoteResponse[]>) {
+    const storage = getBrowserStorage();
+
+    if (storage) {
+      storage.setItem(this.customerNotesStorageKey, JSON.stringify(notes));
+    } else {
+      this.memoryCustomerNotes = notes;
     }
   }
 
@@ -3498,6 +3819,67 @@ function defaultMockBusinessCustomerProfiles(): Record<number, MockBusinessCusto
   };
 }
 
+function defaultMockBusinessCustomerFlagStatus(
+  customerId: number,
+): BusinessCustomerFlagStatusResponse {
+  const flagStatus: Record<number, Omit<BusinessCustomerFlagStatusResponse, "customerId">> = {
+    8001: {
+      vip: true,
+      caution: false,
+      blockedScope: "NONE",
+      blockedScopeLabel: null,
+      updatedAt: null,
+    },
+    8005: {
+      vip: false,
+      caution: true,
+      blockedScope: "STORE_REVIEW_REQUIRED",
+      blockedScopeLabel: "매장 검토 후 예약 확정",
+      updatedAt: null,
+    },
+  };
+
+  return {
+    customerId,
+    ...(flagStatus[customerId] ?? {
+      vip: false,
+      caution: false,
+      blockedScope: "NONE",
+      blockedScopeLabel: null,
+      updatedAt: null,
+    }),
+  };
+}
+
+function defaultMockBusinessCustomerNotes(): Record<string, BusinessCustomerNoteResponse[]> {
+  const now = new Date().toISOString();
+
+  return {
+    "8001": [
+      {
+        id: 10001,
+        customerId: 8001,
+        content: "창가 좌석을 선호하며, 갑각류 알레르기 확인 필요.",
+        authorName: "청담 본점 오너",
+        createdAt: now,
+        updatedAt: null,
+        auditActionLabel: "메모 생성",
+      },
+    ],
+    "8005": [
+      {
+        id: 10002,
+        customerId: 8005,
+        content: "최근 노쇼 이력이 있어 카드 보증 상태 확인 필요.",
+        authorName: "청담 본점 오너",
+        createdAt: now,
+        updatedAt: null,
+        auditActionLabel: "메모 생성",
+      },
+    ],
+  };
+}
+
 function defaultMockReservationProducts() {
   return [
     {
@@ -3861,8 +4243,12 @@ function toMockBusinessReservationDetail(
     customerRequest?: string | null;
     ownerNote?: string | null;
     cancelReason?: string | null;
+    customerFlags?: BusinessCustomerFlagStatusResponse;
   } = {},
 ): BusinessReservationDetailResponse {
+  const customerFlags =
+    overrides.customerFlags ?? defaultMockBusinessCustomerFlagStatus(reservation.customer.id);
+
   return {
     id: reservation.id,
     reservationNumber: reservation.reservationNumber,
@@ -3886,6 +4272,9 @@ function toMockBusinessReservationDetail(
       phoneNumber: overrides.customerPhone ?? mockCustomerPhoneNumber(reservation.id),
       visitCount: reservation.status === "COMPLETED" ? 3 : 1,
       noShowCount: reservation.status === "NO_SHOW" ? 1 : 0,
+      vip: customerFlags.vip,
+      caution: customerFlags.caution,
+      blockedScopeLabel: customerFlags.blockedScopeLabel,
     },
     customerRequest:
       overrides.customerRequest ??
@@ -3993,6 +4382,10 @@ function toMockBusinessCustomers(
 function toMockBusinessCustomerDetail(
   reservations: BusinessReservationListItemResponse[],
   customerId: number,
+  state: {
+    flagStatus?: BusinessCustomerFlagStatusResponse;
+    notes?: BusinessCustomerNoteResponse[];
+  } = {},
 ): BusinessCustomerDetailResponse | null {
   const customerReservations = reservations.filter(
     (reservation) => reservation.customer.id === customerId,
@@ -4033,6 +4426,8 @@ function toMockBusinessCustomerDetail(
     recentRequests: uniqueNonEmpty([...profile.recentRequests, ...requestNotes]).slice(0, 5),
     allergies: profile.allergies,
     anniversaries: profile.anniversaries,
+    flagStatus: state.flagStatus ?? defaultMockBusinessCustomerFlagStatus(customerId),
+    notes: state.notes ?? defaultMockBusinessCustomerNotes()[String(customerId)] ?? [],
     privacyNotice:
       "전화번호는 고객 상세에서만 표시하며, 고객 응대와 예약 확인 목적 외 사용하지 않습니다.",
   } satisfies BusinessCustomerDetailResponse;
@@ -4260,6 +4655,39 @@ function normalizeBusinessReservationOperationNoteRequest(
   }
 
   return ownerNote;
+}
+
+function normalizeBusinessCustomerNoteRequest(request: BusinessCustomerNoteSaveRequest) {
+  const content = request.content?.trim() ?? "";
+
+  if (content.length < 2) {
+    throw new ApiError("고객 메모를 2자 이상 입력해 주세요.", 400, "VALIDATION_ERROR");
+  }
+  if (content.length > 500) {
+    throw new ApiError("고객 메모는 500자 이하로 입력해 주세요.", 400, "VALIDATION_ERROR");
+  }
+
+  return content;
+}
+
+function nextBusinessCustomerNoteId(
+  notesByCustomer: Record<string, BusinessCustomerNoteResponse[]>,
+) {
+  return (
+    Object.values(notesByCustomer)
+      .flat()
+      .reduce((maxId, note) => Math.max(maxId, note.id), 10000) + 1
+  );
+}
+
+function findBusinessCustomerNoteEntry(
+  notesByCustomer: Record<string, BusinessCustomerNoteResponse[]>,
+  noteId: number,
+): [string, BusinessCustomerNoteResponse[]] | null {
+  return (
+    Object.entries(notesByCustomer).find(([, notes]) => notes.some((note) => note.id === noteId)) ??
+    null
+  );
 }
 
 function patchMockBusinessReservation(

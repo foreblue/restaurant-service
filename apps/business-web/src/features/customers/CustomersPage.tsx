@@ -1,16 +1,25 @@
 import { type ColumnDef } from "@tanstack/react-table";
 import { CalendarCheck, Search, ShieldCheck, UserRound } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
+import { ConfirmDialog } from "@/components/feedback/ConfirmDialog";
+import { useToastStore } from "@/components/feedback/toastStore";
 import { DataTable } from "@/components/table/DataTable";
-import { Alert, Button, Field, Input, Select } from "@/components/ui";
+import { Alert, Button, Checkbox, Field, Input, Select } from "@/components/ui";
 import {
+  useCreateBusinessCustomerNoteMutation,
+  useDeleteBusinessCustomerNoteMutation,
   useBusinessCustomerDetailQuery,
   useBusinessCustomerReservationsQuery,
   useBusinessCustomersQuery,
+  useRequestBusinessCustomerAnonymizeMutation,
+  useUpdateBusinessCustomerFlagsMutation,
+  useUpdateBusinessCustomerNoteMutation,
 } from "@/features/customers/customerQueries";
 import {
+  type BusinessCustomerDetailResponse,
   type BusinessCustomerListItemResponse,
+  type BusinessCustomerNoteResponse,
   type BusinessCustomerReservationHistoryItemResponse,
   type BusinessCustomerSegment,
 } from "@/shared/api/businessApiClient";
@@ -25,9 +34,14 @@ const segmentOptions: Array<{ label: string; value: BusinessCustomerSegment }> =
 const emptyCustomers: BusinessCustomerListItemResponse[] = [];
 
 export function CustomersPage() {
+  const pushToast = useToastStore((state) => state.pushToast);
   const [query, setQuery] = useState("");
   const [segment, setSegment] = useState<BusinessCustomerSegment>("ALL");
   const [userSelectedCustomerId, setUserSelectedCustomerId] = useState<number | null>(null);
+  const [noteContent, setNoteContent] = useState("");
+  const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
+  const [anonymizeReason, setAnonymizeReason] = useState("");
+  const [anonymizeConfirmOpen, setAnonymizeConfirmOpen] = useState(false);
   const customersQuery = useBusinessCustomersQuery({
     query: query || null,
     segment,
@@ -38,8 +52,125 @@ export function CustomersPage() {
     : (customers[0]?.id ?? null);
   const customerDetailQuery = useBusinessCustomerDetailQuery(selectedCustomerId);
   const reservationHistoryQuery = useBusinessCustomerReservationsQuery(selectedCustomerId);
+  const createNote = useCreateBusinessCustomerNoteMutation();
+  const updateNote = useUpdateBusinessCustomerNoteMutation();
+  const deleteNote = useDeleteBusinessCustomerNoteMutation();
+  const updateFlags = useUpdateBusinessCustomerFlagsMutation();
+  const requestAnonymize = useRequestBusinessCustomerAnonymizeMutation();
   const selectedCustomer = customerDetailQuery.data ?? null;
   const reservationHistory = reservationHistoryQuery.data?.items ?? [];
+  const noteMutationPending = createNote.isPending || updateNote.isPending;
+
+  const resetCustomerCrmDrafts = useCallback(() => {
+    setNoteContent("");
+    setEditingNoteId(null);
+    setAnonymizeReason("");
+    setAnonymizeConfirmOpen(false);
+  }, []);
+
+  const selectCustomer = useCallback(
+    (customerId: number) => {
+      if (customerId !== selectedCustomerId) {
+        resetCustomerCrmDrafts();
+      }
+      setUserSelectedCustomerId(customerId);
+    },
+    [resetCustomerCrmDrafts, selectedCustomerId],
+  );
+
+  async function saveCustomerNote() {
+    if (!selectedCustomerId) {
+      return;
+    }
+
+    try {
+      if (editingNoteId) {
+        await updateNote.mutateAsync({
+          noteId: editingNoteId,
+          request: { content: noteContent },
+        });
+        pushToast({ title: "고객 메모가 수정되었습니다.", variant: "success" });
+      } else {
+        await createNote.mutateAsync({
+          customerId: selectedCustomerId,
+          request: { content: noteContent },
+        });
+        pushToast({ title: "고객 메모가 추가되었습니다.", variant: "success" });
+      }
+      setEditingNoteId(null);
+      setNoteContent("");
+    } catch (error) {
+      pushToast({
+        title: "고객 메모를 저장하지 못했습니다.",
+        description: errorMessage(error),
+        variant: "danger",
+      });
+    }
+  }
+
+  async function removeCustomerNote(noteId: number) {
+    try {
+      await deleteNote.mutateAsync(noteId);
+      if (editingNoteId === noteId) {
+        setEditingNoteId(null);
+        setNoteContent("");
+      }
+      pushToast({ title: "고객 메모가 삭제되었습니다.", variant: "success" });
+    } catch (error) {
+      pushToast({
+        title: "고객 메모를 삭제하지 못했습니다.",
+        description: errorMessage(error),
+        variant: "danger",
+      });
+    }
+  }
+
+  async function changeCustomerFlags(request: { vip?: boolean; caution?: boolean }) {
+    if (!selectedCustomerId) {
+      return;
+    }
+
+    try {
+      await updateFlags.mutateAsync({ customerId: selectedCustomerId, request });
+      pushToast({ title: "고객 표시가 저장되었습니다.", variant: "success" });
+    } catch (error) {
+      pushToast({
+        title: "고객 표시를 저장하지 못했습니다.",
+        description: errorMessage(error),
+        variant: "danger",
+      });
+    }
+  }
+
+  async function submitAnonymizeRequest() {
+    if (!selectedCustomerId) {
+      return;
+    }
+
+    try {
+      const result = await requestAnonymize.mutateAsync({
+        customerId: selectedCustomerId,
+        request: {
+          reason: anonymizeReason,
+          confirm: true,
+        },
+      });
+      setAnonymizeConfirmOpen(false);
+      setAnonymizeReason("");
+      pushToast({
+        title: "개인정보 처리 요청이 접수되었습니다.",
+        description: result.notice,
+        variant: "success",
+      });
+    } catch (error) {
+      setAnonymizeConfirmOpen(false);
+      pushToast({
+        title: "개인정보 처리 요청에 실패했습니다.",
+        description: errorMessage(error),
+        variant: "danger",
+      });
+    }
+  }
 
   const columns = useMemo<Array<ColumnDef<BusinessCustomerListItemResponse>>>(
     () => [
@@ -99,14 +230,14 @@ export function CustomersPage() {
             variant={row.original.id === selectedCustomerId ? "secondary" : "ghost"}
             size="sm"
             aria-label={`${row.original.name} 고객 상세 보기`}
-            onClick={() => setUserSelectedCustomerId(row.original.id)}
+            onClick={() => selectCustomer(row.original.id)}
           >
             상세
           </Button>
         ),
       },
     ],
-    [selectedCustomerId],
+    [selectedCustomerId, selectCustomer],
   );
 
   return (
@@ -158,7 +289,10 @@ export function CustomersPage() {
                   className="pl-9"
                   placeholder="고객명, 연락처, 요청사항"
                   value={query}
-                  onChange={(event) => setQuery(event.target.value)}
+                  onChange={(event) => {
+                    resetCustomerCrmDrafts();
+                    setQuery(event.target.value);
+                  }}
                 />
               </div>
             </Field>
@@ -167,7 +301,10 @@ export function CustomersPage() {
                 id="customer-segment"
                 value={segment}
                 options={segmentOptions}
-                onChange={(event) => setSegment(event.target.value as BusinessCustomerSegment)}
+                onChange={(event) => {
+                  resetCustomerCrmDrafts();
+                  setSegment(event.target.value as BusinessCustomerSegment);
+                }}
               />
             </Field>
             <div className="flex items-end">
@@ -175,6 +312,7 @@ export function CustomersPage() {
                 type="button"
                 variant="outline"
                 onClick={() => {
+                  resetCustomerCrmDrafts();
                   setQuery("");
                   setSegment("ALL");
                 }}
@@ -205,8 +343,43 @@ export function CustomersPage() {
           reservations={reservationHistory}
           isLoading={customerDetailQuery.isLoading || reservationHistoryQuery.isLoading}
           isError={customerDetailQuery.isError || reservationHistoryQuery.isError}
+          noteContent={noteContent}
+          editingNoteId={editingNoteId}
+          isNotePending={noteMutationPending}
+          isFlagPending={updateFlags.isPending}
+          anonymizeReason={anonymizeReason}
+          isAnonymizePending={requestAnonymize.isPending}
+          onNoteContentChange={setNoteContent}
+          onSaveNote={saveCustomerNote}
+          onCancelNoteEdit={() => {
+            setEditingNoteId(null);
+            setNoteContent("");
+          }}
+          onEditNote={(note) => {
+            setEditingNoteId(note.id);
+            setNoteContent(note.content);
+          }}
+          onDeleteNote={removeCustomerNote}
+          onChangeFlags={changeCustomerFlags}
+          onAnonymizeReasonChange={setAnonymizeReason}
+          onRequestAnonymize={() => setAnonymizeConfirmOpen(true)}
         />
       </section>
+
+      <ConfirmDialog
+        open={anonymizeConfirmOpen}
+        title="개인정보 삭제/익명화 요청"
+        description={
+          selectedCustomer
+            ? `${selectedCustomer.name} 고객의 개인정보 처리 요청을 접수합니다. 이 작업은 감사 로그에 남고 운영 검토 후 처리됩니다.`
+            : "고객 개인정보 처리 요청을 접수합니다."
+        }
+        confirmLabel="요청 접수"
+        intent="danger"
+        isPending={requestAnonymize.isPending}
+        onCancel={() => setAnonymizeConfirmOpen(false)}
+        onConfirm={submitAnonymizeRequest}
+      />
     </>
   );
 }
@@ -216,11 +389,39 @@ function CustomerDetailPanel({
   reservations,
   isLoading,
   isError,
+  noteContent,
+  editingNoteId,
+  isNotePending,
+  isFlagPending,
+  anonymizeReason,
+  isAnonymizePending,
+  onNoteContentChange,
+  onSaveNote,
+  onCancelNoteEdit,
+  onEditNote,
+  onDeleteNote,
+  onChangeFlags,
+  onAnonymizeReasonChange,
+  onRequestAnonymize,
 }: {
-  customer: ReturnType<typeof useBusinessCustomerDetailQuery>["data"] | null;
+  customer: BusinessCustomerDetailResponse | null;
   reservations: BusinessCustomerReservationHistoryItemResponse[];
   isLoading: boolean;
   isError: boolean;
+  noteContent: string;
+  editingNoteId: number | null;
+  isNotePending: boolean;
+  isFlagPending: boolean;
+  anonymizeReason: string;
+  isAnonymizePending: boolean;
+  onNoteContentChange: (value: string) => void;
+  onSaveNote: () => void;
+  onCancelNoteEdit: () => void;
+  onEditNote: (note: BusinessCustomerNoteResponse) => void;
+  onDeleteNote: (noteId: number) => void;
+  onChangeFlags: (request: { vip?: boolean; caution?: boolean }) => void;
+  onAnonymizeReasonChange: (value: string) => void;
+  onRequestAnonymize: () => void;
 }) {
   if (isError) {
     return <Alert variant="danger">고객 상세 정보를 불러오지 못했습니다.</Alert>;
@@ -262,6 +463,33 @@ function CustomerDetailPanel({
           <DetailItem label="다음 예약" value={formatDateTime(customer.nextReservationAt)} />
         </dl>
 
+        <div className="mt-4 rounded-md border border-border bg-muted/40 p-3">
+          <div className="flex flex-wrap gap-1.5">
+            {customer.flagStatus.vip ? <Flag label="VIP" tone="success" /> : null}
+            {customer.flagStatus.caution ? <Flag label="주의 고객" tone="danger" /> : null}
+            <Flag
+              label={customer.flagStatus.blockedScopeLabel ?? "차단 없음"}
+              tone={customer.flagStatus.blockedScope === "NONE" ? "info" : "warning"}
+            />
+          </div>
+          <div className="mt-3 grid gap-2">
+            <Checkbox
+              id={`customer-${customer.id}-vip`}
+              label="VIP 표시"
+              checked={customer.flagStatus.vip}
+              disabled={isFlagPending}
+              onChange={(event) => onChangeFlags({ vip: event.target.checked })}
+            />
+            <Checkbox
+              id={`customer-${customer.id}-caution`}
+              label="주의 고객 표시"
+              checked={customer.flagStatus.caution}
+              disabled={isFlagPending}
+              onChange={(event) => onChangeFlags({ caution: event.target.checked })}
+            />
+          </div>
+        </div>
+
         <Alert title="개인정보 표시 기준">{customer.privacyNotice}</Alert>
       </section>
 
@@ -285,6 +513,84 @@ function CustomerDetailPanel({
             )}
             emptyMessage="등록된 기념일 정보가 없습니다."
           />
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
+        <h3 className="text-sm font-semibold">고객 메모</h3>
+        <div className="mt-3 space-y-3">
+          <Alert title="민감정보 입력 주의">
+            건강정보, 결제정보, 주민등록번호 등 운영에 불필요한 개인정보는 고객 메모에 입력하지
+            마세요.
+          </Alert>
+          <Alert title="감사 로그 대상">
+            고객 메모 변경, VIP/주의 표시 변경, 개인정보 처리 요청은 감사 로그 대상입니다.
+          </Alert>
+
+          <Field
+            id={`customer-${customer.id}-note`}
+            label={editingNoteId ? "메모 수정" : "메모 추가"}
+          >
+            <textarea
+              id={`customer-${customer.id}-note`}
+              className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60"
+              placeholder="방문 선호, 응대 참고사항 등 운영에 필요한 정보만 입력"
+              value={noteContent}
+              onChange={(event) => onNoteContentChange(event.target.value)}
+            />
+          </Field>
+          <div className="flex flex-wrap justify-end gap-2">
+            {editingNoteId ? (
+              <Button type="button" variant="outline" onClick={onCancelNoteEdit}>
+                수정 취소
+              </Button>
+            ) : null}
+            <Button type="button" isLoading={isNotePending} onClick={onSaveNote}>
+              {editingNoteId ? "메모 수정" : "메모 추가"}
+            </Button>
+          </div>
+
+          <div className="divide-y divide-border">
+            {customer.notes.length > 0 ? (
+              customer.notes.map((note) => (
+                <CustomerNoteItem
+                  key={note.id}
+                  note={note}
+                  isEditing={editingNoteId === note.id}
+                  onEdit={() => onEditNote(note)}
+                  onDelete={() => onDeleteNote(note.id)}
+                />
+              ))
+            ) : (
+              <p className="py-3 text-sm text-muted-foreground">등록된 고객 메모가 없습니다.</p>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
+        <h3 className="text-sm font-semibold">개인정보 처리 요청</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          삭제/익명화 요청은 즉시 반영하지 않고, 운영 검토와 감사 로그 기록 후 처리합니다.
+        </p>
+        <Field id={`customer-${customer.id}-anonymize-reason`} label="요청 사유" className="mt-3">
+          <textarea
+            id={`customer-${customer.id}-anonymize-reason`}
+            className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60"
+            placeholder="고객 요청, 보존 기간 경과 등"
+            value={anonymizeReason}
+            onChange={(event) => onAnonymizeReasonChange(event.target.value)}
+          />
+        </Field>
+        <div className="mt-3 flex justify-end">
+          <Button
+            type="button"
+            variant="danger"
+            isLoading={isAnonymizePending}
+            onClick={onRequestAnonymize}
+          >
+            삭제/익명화 요청
+          </Button>
         </div>
       </section>
 
@@ -357,6 +663,45 @@ function InfoBlock({
   );
 }
 
+function CustomerNoteItem({
+  note,
+  isEditing,
+  onEdit,
+  onDelete,
+}: {
+  note: BusinessCustomerNoteResponse;
+  isEditing: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <article className="py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="whitespace-pre-wrap text-sm">{note.content}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {note.authorName} · {formatDateTime(note.updatedAt ?? note.createdAt)} ·{" "}
+            {note.auditActionLabel}
+          </p>
+        </div>
+        <div className="flex shrink-0 gap-1">
+          <Button
+            type="button"
+            variant={isEditing ? "secondary" : "ghost"}
+            size="sm"
+            onClick={onEdit}
+          >
+            수정
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={onDelete}>
+            삭제
+          </Button>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 function Metric({
   label,
   value,
@@ -386,11 +731,18 @@ function DetailItem({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Flag({ label, tone = "info" }: { label: string; tone?: "info" | "danger" | "warning" }) {
+function Flag({
+  label,
+  tone = "info",
+}: {
+  label: string;
+  tone?: "info" | "danger" | "warning" | "success";
+}) {
   const toneClassName = {
     info: "bg-muted text-muted-foreground",
     danger: "bg-destructive/10 text-destructive",
     warning: "bg-accent text-accent-foreground",
+    success: "bg-primary/10 text-primary",
   }[tone];
 
   return (
@@ -448,4 +800,8 @@ function sourceLabel(value: string) {
   };
 
   return labels[value] ?? value;
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "요청을 처리하지 못했습니다.";
 }
