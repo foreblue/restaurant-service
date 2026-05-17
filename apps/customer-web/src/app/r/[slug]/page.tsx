@@ -8,6 +8,7 @@ import {
   createUnavailableRestaurantMetadata,
 } from "@/features/restaurants/publicRestaurantMetadata";
 import { getPublicRestaurantBySlug } from "@/features/restaurants/publicRestaurantApi";
+import { getPublicReservationProducts } from "@/features/reservations/reservationOptionsApi";
 
 interface PublicRestaurantBySlugPageProps {
   params: Promise<{
@@ -20,8 +21,9 @@ export default async function PublicRestaurantBySlugPage({
 }: PublicRestaurantBySlugPageProps) {
   const { slug } = await params;
   const restaurant = await loadRestaurantOrNotFound(() => getPublicRestaurantBySlug(slug));
+  const productList = await getPublicReservationProducts(restaurant.id);
 
-  return <PublicRestaurantPageContent restaurant={restaurant} />;
+  return <PublicRestaurantPageContent products={productList.products} restaurant={restaurant} />;
 }
 
 export async function generateMetadata({
