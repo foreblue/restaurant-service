@@ -1,15 +1,21 @@
 import Image from "next/image";
 
 import { ReservationPageShell } from "@/components/layout/ReservationPageShell";
-import { Alert, Button, StateBlock } from "@/components/ui";
+import { StateBlock } from "@/components/ui";
+import { ReservationSelectionPanel } from "@/features/reservations/ReservationSelectionPanel";
+import { type PublicReservationProduct } from "@/features/reservations/reservationOptionsTypes";
 
 import { type PublicRestaurantResponse } from "./publicRestaurantTypes";
 
 interface PublicRestaurantPageContentProps {
+  products?: PublicReservationProduct[];
   restaurant: PublicRestaurantResponse;
 }
 
-export function PublicRestaurantPageContent({ restaurant }: PublicRestaurantPageContentProps) {
+export function PublicRestaurantPageContent({
+  products = [],
+  restaurant,
+}: PublicRestaurantPageContentProps) {
   const address = formatAddress(restaurant);
 
   if (!isReservationPageAvailable(restaurant)) {
@@ -52,23 +58,7 @@ export function PublicRestaurantPageContent({ restaurant }: PublicRestaurantPage
           ) : null}
         </section>
 
-        <section className="rounded-lg border bg-white p-4 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold text-slate-950">예약 상품</h2>
-              <p className="mt-1 text-sm leading-6 text-slate-600">
-                방문 날짜와 인원을 선택할 수 있는 상품을 준비 중입니다.
-              </p>
-            </div>
-            <Button disabled size="sm" type="button">
-              선택
-            </Button>
-          </div>
-        </section>
-
-        {restaurant.reservationPage.reservationAvailable ? null : (
-          <Alert variant="warning">현재 이 매장은 온라인 예약을 받을 수 없습니다.</Alert>
-        )}
+        <ReservationSelectionPanel products={products} restaurantId={restaurant.id} />
       </div>
     </ReservationPageShell>
   );

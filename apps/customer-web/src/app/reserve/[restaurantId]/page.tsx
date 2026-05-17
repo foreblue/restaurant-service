@@ -7,6 +7,7 @@ import {
   createUnavailableRestaurantMetadata,
 } from "@/features/restaurants/publicRestaurantMetadata";
 import { getPublicRestaurantById } from "@/features/restaurants/publicRestaurantApi";
+import { getPublicReservationProducts } from "@/features/reservations/reservationOptionsApi";
 import { PublicApiError } from "@/shared/api/apiError";
 
 interface PublicRestaurantByIdPageProps {
@@ -18,8 +19,9 @@ interface PublicRestaurantByIdPageProps {
 export default async function PublicRestaurantByIdPage({ params }: PublicRestaurantByIdPageProps) {
   const { restaurantId } = await params;
   const restaurant = await loadRestaurantOrNotFound(() => getPublicRestaurantById(restaurantId));
+  const productList = await getPublicReservationProducts(restaurant.id);
 
-  return <PublicRestaurantPageContent restaurant={restaurant} />;
+  return <PublicRestaurantPageContent products={productList.products} restaurant={restaurant} />;
 }
 
 export async function generateMetadata({
