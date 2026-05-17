@@ -10,7 +10,7 @@ interface RequestHeaderOptions {
 }
 
 export interface PublicApiRequestOptions extends Omit<RequestInit, "body" | "headers" | "method"> {
-  body?: BodyInit | Record<string, unknown> | null;
+  body?: BodyInit | object | null;
   headers?: HeadersInit;
   idempotencyKey?: string | null;
   lookupToken?: string | null;
@@ -120,7 +120,7 @@ function serializeRequestBody(body: PublicApiRequestOptions["body"]) {
   return body;
 }
 
-function isJsonRequestBody(body: PublicApiRequestOptions["body"]): body is Record<string, unknown> {
+function isJsonRequestBody(body: PublicApiRequestOptions["body"]): body is object {
   return typeof body === "object" && !(body instanceof Blob) && !(body instanceof FormData);
 }
 
