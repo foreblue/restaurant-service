@@ -3044,9 +3044,14 @@ class RestaurantApiApplicationTests {
             param("partySize", "2")
         }.andExpect {
             status { isOk() }
-            jsonPath("$.times.length()") { value(2) }
+            jsonPath("$.times.length()") { value(3) }
             jsonPath("$.times[0].startTime") { value("11:00:00") }
-            jsonPath("$.times[1].startTime") { value("13:00:00") }
+            jsonPath("$.times[0].available") { value(true) }
+            jsonPath("$.times[1].startTime") { value("12:00:00") }
+            jsonPath("$.times[1].available") { value(false) }
+            jsonPath("$.times[1].unavailableReason") { value("BLOCKED") }
+            jsonPath("$.times[2].startTime") { value("13:00:00") }
+            jsonPath("$.times[2].available") { value(true) }
         }
 
         mockMvc.post("/api/business/time-slots/reopen") {
@@ -3196,8 +3201,15 @@ class RestaurantApiApplicationTests {
             param("partySize", "2")
         }.andExpect {
             status { isOk() }
-            jsonPath("$.times.length()") { value(1) }
-            jsonPath("$.times[0].startTime") { value("13:00:00") }
+            jsonPath("$.times.length()") { value(3) }
+            jsonPath("$.times[0].startTime") { value("11:00:00") }
+            jsonPath("$.times[0].available") { value(false) }
+            jsonPath("$.times[0].unavailableReason") { value("FULL") }
+            jsonPath("$.times[1].startTime") { value("12:00:00") }
+            jsonPath("$.times[1].available") { value(false) }
+            jsonPath("$.times[1].unavailableReason") { value("FULL") }
+            jsonPath("$.times[2].startTime") { value("13:00:00") }
+            jsonPath("$.times[2].available") { value(true) }
         }
 
         mockMvc.post("/api/public/reservations") {
