@@ -1,6 +1,11 @@
+import { type Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { PublicRestaurantPageContent } from "@/features/restaurants/PublicRestaurantPageContent";
+import {
+  createPublicRestaurantMetadata,
+  createUnavailableRestaurantMetadata,
+} from "@/features/restaurants/publicRestaurantMetadata";
 import { getPublicRestaurantById } from "@/features/restaurants/publicRestaurantApi";
 import { PublicApiError } from "@/shared/api/apiError";
 
@@ -15,6 +20,24 @@ export default async function PublicRestaurantByIdPage({ params }: PublicRestaur
   const restaurant = await loadRestaurantOrNotFound(() => getPublicRestaurantById(restaurantId));
 
   return <PublicRestaurantPageContent restaurant={restaurant} />;
+}
+
+export async function generateMetadata({
+  params,
+}: PublicRestaurantByIdPageProps): Promise<Metadata> {
+  const { restaurantId } = await params;
+
+  try {
+    const restaurant = await getPublicRestaurantById(restaurantId);
+
+    return createPublicRestaurantMetadata(restaurant);
+  } catch (error) {
+    if (error instanceof PublicApiError && error.status === 404) {
+      return createUnavailableRestaurantMetadata();
+    }
+
+    throw error;
+  }
 }
 
 async function loadRestaurantOrNotFound<T>(loader: () => Promise<T>) {

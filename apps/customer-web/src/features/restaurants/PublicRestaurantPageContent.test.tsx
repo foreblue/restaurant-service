@@ -45,4 +45,40 @@ describe("PublicRestaurantPageContent", () => {
 
     expect(screen.getByText("대표 이미지")).toBeInTheDocument();
   });
+
+  it("shows an unavailable state for non-public reservation pages", () => {
+    render(
+      <PublicRestaurantPageContent
+        restaurant={{
+          ...restaurant,
+          reservationPage: {
+            ...restaurant.reservationPage,
+            reservationAvailable: false,
+            status: "PRIVATE",
+          },
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "예약 페이지를 이용할 수 없습니다." }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("아직 공개되지 않은 예약 페이지입니다.")).toBeInTheDocument();
+    expect(screen.queryByText("예약 상품")).not.toBeInTheDocument();
+  });
+
+  it("keeps long restaurant names and addresses inside the mobile layout", () => {
+    render(
+      <PublicRestaurantPageContent
+        restaurant={{
+          ...restaurant,
+          addressLine1: "서울시 강남구 매우긴주소로".repeat(8),
+          name: "아주 긴 매장명을 가진 예약제 레스토랑".repeat(6),
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { level: 1 })).toHaveClass("break-words");
+    expect(screen.getByText(/서울시 강남구 매우긴주소로/)).toHaveClass("break-words");
+  });
 });
