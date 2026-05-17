@@ -5,12 +5,17 @@ const envSchema = z.object({
   NEXT_PUBLIC_APP_BASE_URL: z.url().default("http://localhost:3000"),
 });
 
+type CustomerWebEnvSource = Partial<{
+  NEXT_PUBLIC_API_BASE_URL: string | undefined;
+  NEXT_PUBLIC_APP_BASE_URL: string | undefined;
+}>;
+
 export interface CustomerWebEnv {
   apiBaseUrl: string;
   appBaseUrl: string;
 }
 
-export function getCustomerWebEnv(source: NodeJS.ProcessEnv): CustomerWebEnv {
+export function getCustomerWebEnv(source: CustomerWebEnvSource): CustomerWebEnv {
   const parsed = envSchema.safeParse(source);
 
   if (!parsed.success) {
@@ -23,4 +28,7 @@ export function getCustomerWebEnv(source: NodeJS.ProcessEnv): CustomerWebEnv {
   };
 }
 
-export const customerWebEnv = getCustomerWebEnv(process.env);
+export const customerWebEnv = getCustomerWebEnv({
+  NEXT_PUBLIC_API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL,
+  NEXT_PUBLIC_APP_BASE_URL: process.env.NEXT_PUBLIC_APP_BASE_URL,
+});

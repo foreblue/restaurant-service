@@ -14,6 +14,7 @@
     "test:business": "pnpm --filter @restaurant/business-web test",
     "test:customer": "pnpm --filter @restaurant/customer-web test",
     "test:e2e:business": "pnpm --filter @restaurant/business-web test:e2e",
+    "test:e2e:customer": "pnpm --filter @restaurant/customer-web test:e2e",
     "qa:regression:api": "cd apps/api && ./gradlew test",
     "qa:regression": "./qa-regression.sh",
     "lint": "pnpm --filter @restaurant/business-web lint",
