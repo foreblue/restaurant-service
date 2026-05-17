@@ -17,6 +17,10 @@ export interface PublicReservationCreateRequest {
   customerPhone: string;
   customerRequest?: string | null;
   customerEmail?: string | null;
+  allergyNote?: string | null;
+  anniversaryType?: string | null;
+  anniversaryDate?: string | null;
+  requestTemplateValues?: string[];
   marketingOptIn?: boolean;
   idempotencyKey?: string;
 }
