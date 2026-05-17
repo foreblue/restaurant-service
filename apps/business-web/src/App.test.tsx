@@ -520,6 +520,34 @@ describe("App routing", () => {
         },
         items: [],
       }),
+      listBusinessCustomers: async () => ({
+        summary: {
+          totalCount: 0,
+          visitedCount: 0,
+          noShowCount: 0,
+          preferenceCount: 0,
+        },
+        items: [],
+      }),
+      getBusinessCustomer: async () => ({
+        id: 1,
+        name: "김예약",
+        phoneNumber: "010-1234-5678",
+        phoneMasked: "010-****-5678",
+        totalReservations: 1,
+        visitCount: 1,
+        noShowCount: 0,
+        cancelledCount: 0,
+        firstReservationAt: "2026-05-15T02:30:00.000Z",
+        lastReservationAt: "2026-05-15T02:30:00.000Z",
+        lastVisitedAt: null,
+        nextReservationAt: "2026-05-15T02:30:00.000Z",
+        recentRequests: [],
+        allergies: [],
+        anniversaries: [],
+        privacyNotice: "전화번호는 고객 상세에서만 표시합니다.",
+      }),
+      listBusinessCustomerReservations: async () => ({ items: [] }),
       listBusinessAuditLogs: async () => ({ items: [] }),
     };
     window.history.pushState({}, "", "/onboarding");
@@ -1177,5 +1205,46 @@ describe("App routing", () => {
     fireEvent.click(screen.getByRole("button", { name: "홀 A2 비활성화" }));
 
     expect(await screen.findByText("테이블이 비활성화되었습니다.")).toBeInTheDocument();
+  });
+
+  it("shows customer list, filters, and reservation history", async () => {
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText("이메일"), {
+      target: { value: "owner@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("비밀번호"), {
+      target: { value: "password123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "로그인" }));
+
+    await screen.findByRole("heading", { name: "운영 현황" });
+    fireEvent.click(screen.getByRole("link", { name: "고객 관리" }));
+
+    expect(await screen.findByRole("heading", { name: "고객 관리" })).toBeInTheDocument();
+    expect(await screen.findByText("김예약")).toBeInTheDocument();
+    expect(screen.getAllByText("010-****-5678").length).toBeGreaterThan(0);
+    expect(screen.getByText("목록 연락처 마스킹")).toBeInTheDocument();
+    expect(screen.getAllByText(/갑각류/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/결혼기념일/).length).toBeGreaterThan(0);
+    expect(
+      await screen.findByText(
+        "전화번호는 고객 상세에서만 표시하며, 고객 응대와 예약 확인 목적 외 사용하지 않습니다.",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("필터"), {
+      target: { value: "HAS_NO_SHOW" },
+    });
+
+    expect((await screen.findAllByText("오민준")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("노쇼 이력").length).toBeGreaterThan(0);
+
+    fireEvent.change(screen.getByLabelText("고객 검색"), {
+      target: { value: "유제품" },
+    });
+
+    expect((await screen.findAllByText("오민준")).length).toBeGreaterThan(0);
+    expect(screen.queryByText("김예약")).not.toBeInTheDocument();
   });
 });

@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate } from "react-router-dom";
 
 import { LoginPage } from "@/features/auth/LoginPage";
 import { PasswordResetRequestPage } from "@/features/auth/PasswordResetRequestPage";
+import { CustomersPage } from "@/features/customers/CustomersPage";
 import { DashboardPage } from "@/features/dashboard/DashboardPage";
 import { SeatTablesPage } from "@/features/inventory/SeatTablesPage";
 import { RestaurantApplicationPage } from "@/features/onboarding/RestaurantApplicationPage";
@@ -11,7 +12,6 @@ import { ReservationOperationsPage } from "@/features/reservations/ReservationOp
 import { StoreSettingsPage } from "@/features/store/StoreSettingsPage";
 import { AppShell } from "@/layout/AppShell";
 import { NotFoundPage } from "@/pages/NotFoundPage";
-import { PlaceholderPage } from "@/pages/PlaceholderPage";
 import { ProtectedRoute } from "@/routes/ProtectedRoute";
 
 export function createBusinessRouter() {
@@ -64,7 +64,7 @@ export function createBusinessRouter() {
             },
             {
               path: "customers",
-              element: <PlaceholderPage title="고객 관리" status="방문 이력과 메모" />,
+              element: <CustomersPage />,
             },
           ],
         },

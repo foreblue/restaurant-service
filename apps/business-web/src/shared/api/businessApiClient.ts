@@ -663,6 +663,89 @@ export interface BusinessRefundListResponse {
   items: BusinessRefundListItemResponse[];
 }
 
+export type BusinessCustomerSegment =
+  | "ALL"
+  | "HAS_VISIT_HISTORY"
+  | "HAS_NO_SHOW"
+  | "HAS_PREFERENCES";
+
+export interface BusinessCustomerListQuery {
+  query?: string | null;
+  segment?: BusinessCustomerSegment | null;
+}
+
+export interface BusinessCustomerListItemResponse {
+  id: number;
+  name: string;
+  phoneMasked: string;
+  totalReservations: number;
+  completedCount: number;
+  noShowCount: number;
+  cancelledCount: number;
+  lastVisitedAt: string | null;
+  nextReservationAt: string | null;
+  lastRequest: string | null;
+  allergySummary: string | null;
+  anniversarySummary: string | null;
+  privacyLevelLabel: string;
+}
+
+export interface BusinessCustomerListResponse {
+  summary: {
+    totalCount: number;
+    visitedCount: number;
+    noShowCount: number;
+    preferenceCount: number;
+  };
+  items: BusinessCustomerListItemResponse[];
+}
+
+export interface BusinessCustomerAnniversaryResponse {
+  label: string;
+  date: string;
+}
+
+export interface BusinessCustomerDetailResponse {
+  id: number;
+  name: string;
+  phoneNumber: string;
+  phoneMasked: string;
+  totalReservations: number;
+  visitCount: number;
+  noShowCount: number;
+  cancelledCount: number;
+  firstReservationAt: string | null;
+  lastReservationAt: string | null;
+  lastVisitedAt: string | null;
+  nextReservationAt: string | null;
+  recentRequests: string[];
+  allergies: string[];
+  anniversaries: BusinessCustomerAnniversaryResponse[];
+  privacyNotice: string;
+}
+
+export interface BusinessCustomerReservationHistoryItemResponse {
+  id: number;
+  reservationNumber: string;
+  status: BusinessReservationStatus;
+  statusLabel: string;
+  statusTone: string;
+  visitDate: string;
+  startTime: string;
+  partySize: number;
+  productName: string;
+  source: BusinessReservationSource;
+  customerRequest: string | null;
+  allergyNote: string | null;
+  anniversaryNote: string | null;
+  completedAt: string | null;
+  noShowAt: string | null;
+}
+
+export interface BusinessCustomerReservationHistoryResponse {
+  items: BusinessCustomerReservationHistoryItemResponse[];
+}
+
 export interface RestaurantSettingsResponse {
   id: number;
   status: "DRAFT" | "APPROVAL_REQUESTED" | "APPROVED" | "REJECTED" | "SUSPENDED";
@@ -804,6 +887,11 @@ export interface BusinessApiClient {
   listBusinessAuditLogs(query: BusinessAuditLogListQuery): Promise<BusinessAuditLogListResponse>;
   listBusinessPayments(query: BusinessPaymentListQuery): Promise<BusinessPaymentListResponse>;
   listBusinessRefunds(query: BusinessRefundListQuery): Promise<BusinessRefundListResponse>;
+  listBusinessCustomers(query: BusinessCustomerListQuery): Promise<BusinessCustomerListResponse>;
+  getBusinessCustomer(customerId: number): Promise<BusinessCustomerDetailResponse>;
+  listBusinessCustomerReservations(
+    customerId: number,
+  ): Promise<BusinessCustomerReservationHistoryResponse>;
 }
 
 export function createBusinessQueryClient() {
@@ -1140,6 +1228,22 @@ class HttpBusinessApiClient implements BusinessApiClient {
 
   listBusinessRefunds(query: BusinessRefundListQuery) {
     return this.request<BusinessRefundListResponse>(`/api/business/refunds${queryString(query)}`);
+  }
+
+  listBusinessCustomers(query: BusinessCustomerListQuery) {
+    return this.request<BusinessCustomerListResponse>(
+      `/api/business/customers${queryString(query)}`,
+    );
+  }
+
+  getBusinessCustomer(customerId: number) {
+    return this.request<BusinessCustomerDetailResponse>(`/api/business/customers/${customerId}`);
+  }
+
+  listBusinessCustomerReservations(customerId: number) {
+    return this.request<BusinessCustomerReservationHistoryResponse>(
+      `/api/business/customers/${customerId}/reservations`,
+    );
   }
 
   private async request<T>(path: string, init: { method?: string; body?: unknown } = {}) {
@@ -1987,6 +2091,47 @@ class MockBusinessApiClient implements BusinessApiClient {
       },
       items,
     } satisfies BusinessRefundListResponse;
+  }
+
+  async listBusinessCustomers(query: BusinessCustomerListQuery) {
+    const customers = filterMockBusinessCustomers(
+      toMockBusinessCustomers(this.readBusinessReservations()),
+      query,
+    );
+
+    return {
+      summary: {
+        totalCount: customers.length,
+        visitedCount: customers.filter((customer) => customer.completedCount > 0).length,
+        noShowCount: customers.filter((customer) => customer.noShowCount > 0).length,
+        preferenceCount: customers.filter(
+          (customer) => customer.allergySummary !== null || customer.anniversarySummary !== null,
+        ).length,
+      },
+      items: customers,
+    } satisfies BusinessCustomerListResponse;
+  }
+
+  async getBusinessCustomer(customerId: number) {
+    const customer = toMockBusinessCustomerDetail(this.readBusinessReservations(), customerId);
+
+    if (!customer) {
+      throw new ApiError("고객을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    return customer;
+  }
+
+  async listBusinessCustomerReservations(customerId: number) {
+    const customer = toMockBusinessCustomerDetail(this.readBusinessReservations(), customerId);
+
+    if (!customer) {
+      throw new ApiError("고객을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    return {
+      items: toMockBusinessCustomerReservationHistory(this.readBusinessReservations(), customerId),
+    } satisfies BusinessCustomerReservationHistoryResponse;
   }
 
   private readBusinessReservations() {
@@ -3299,6 +3444,60 @@ function defaultMockBusinessReservations(): BusinessReservationListItemResponse[
   ];
 }
 
+interface MockBusinessCustomerProfile {
+  phoneNumber: string;
+  allergies: string[];
+  anniversaries: BusinessCustomerAnniversaryResponse[];
+  recentRequests: string[];
+  historicalVisitCount: number;
+  historicalNoShowCount: number;
+}
+
+function defaultMockBusinessCustomerProfiles(): Record<number, MockBusinessCustomerProfile> {
+  return {
+    8001: {
+      phoneNumber: "010-1234-5678",
+      allergies: ["갑각류"],
+      anniversaries: [{ label: "결혼기념일", date: "06-18" }],
+      recentRequests: ["창가 좌석 요청", "갑각류 알레르기 확인 필요"],
+      historicalVisitCount: 4,
+      historicalNoShowCount: 0,
+    },
+    8002: {
+      phoneNumber: "010-8899-9988",
+      allergies: [],
+      anniversaries: [{ label: "생일", date: "11-02" }],
+      recentRequests: ["조용한 좌석 선호"],
+      historicalVisitCount: 2,
+      historicalNoShowCount: 0,
+    },
+    8003: {
+      phoneNumber: "010-9999-0000",
+      allergies: [],
+      anniversaries: [],
+      recentRequests: [],
+      historicalVisitCount: 1,
+      historicalNoShowCount: 0,
+    },
+    8004: {
+      phoneNumber: "010-2211-1122",
+      allergies: ["견과류"],
+      anniversaries: [],
+      recentRequests: ["견과류 제외 요청"],
+      historicalVisitCount: 3,
+      historicalNoShowCount: 0,
+    },
+    8005: {
+      phoneNumber: "010-3344-4455",
+      allergies: ["유제품"],
+      anniversaries: [{ label: "프로포즈", date: "09-20" }],
+      recentRequests: ["기념일 디저트 문구 요청", "유제품 대체 메뉴 문의"],
+      historicalVisitCount: 1,
+      historicalNoShowCount: 1,
+    },
+  };
+}
+
 function defaultMockReservationProducts() {
   return [
     {
@@ -3729,6 +3928,185 @@ function toMockBusinessReservationDetail(
   };
 }
 
+function toMockBusinessCustomers(
+  reservations: BusinessReservationListItemResponse[],
+): BusinessCustomerListItemResponse[] {
+  const byCustomer = new Map<number, BusinessReservationListItemResponse[]>();
+
+  reservations.forEach((reservation) => {
+    const current = byCustomer.get(reservation.customer.id) ?? [];
+    byCustomer.set(reservation.customer.id, [...current, reservation]);
+  });
+
+  return Array.from(byCustomer.entries())
+    .map(([customerId, customerReservations]) => {
+      const sortedReservations = sortMockBusinessReservations(customerReservations).reverse();
+      const latestReservation = sortedReservations[0];
+      const profile = mockBusinessCustomerProfile(customerId);
+      const completedCount = customerReservations.filter(
+        (reservation) => reservation.status === "COMPLETED",
+      ).length;
+      const noShowCount = customerReservations.filter(
+        (reservation) => reservation.status === "NO_SHOW",
+      ).length;
+      const cancelledCount = customerReservations.filter(isCancelledReservation).length;
+      const allergySummary = profile.allergies.length > 0 ? profile.allergies.join(", ") : null;
+      const anniversarySummary =
+        profile.anniversaries.length > 0
+          ? profile.anniversaries.map((anniversary) => anniversary.label).join(", ")
+          : null;
+
+      return {
+        id: customerId,
+        name: latestReservation?.customer.name ?? "이름 없음",
+        phoneMasked:
+          latestReservation?.customer.phoneMasked ?? maskPhoneNumber(profile.phoneNumber),
+        totalReservations: customerReservations.length,
+        completedCount: Math.max(profile.historicalVisitCount, completedCount),
+        noShowCount: Math.max(profile.historicalNoShowCount, noShowCount),
+        cancelledCount,
+        lastVisitedAt: latestReservationDateTime(
+          customerReservations.filter((reservation) => reservation.status === "COMPLETED"),
+        ),
+        nextReservationAt: nextActiveReservationDateTime(customerReservations),
+        lastRequest:
+          profile.recentRequests[0] ??
+          (customerReservations.some((reservation) => reservation.hasCustomerRequest)
+            ? "고객 요청사항 있음"
+            : null),
+        allergySummary,
+        anniversarySummary,
+        privacyLevelLabel: "목록 마스킹",
+      } satisfies BusinessCustomerListItemResponse;
+    })
+    .sort((a, b) => {
+      const nextDiff = (b.nextReservationAt ?? "").localeCompare(a.nextReservationAt ?? "");
+
+      if (nextDiff !== 0) {
+        return nextDiff;
+      }
+
+      return (b.lastVisitedAt ?? "").localeCompare(a.lastVisitedAt ?? "");
+    });
+}
+
+function toMockBusinessCustomerDetail(
+  reservations: BusinessReservationListItemResponse[],
+  customerId: number,
+): BusinessCustomerDetailResponse | null {
+  const customerReservations = reservations.filter(
+    (reservation) => reservation.customer.id === customerId,
+  );
+  const latestReservation = sortMockBusinessReservations(customerReservations).at(-1);
+
+  if (!latestReservation) {
+    return null;
+  }
+
+  const profile = mockBusinessCustomerProfile(customerId);
+  const completedCount = customerReservations.filter(
+    (reservation) => reservation.status === "COMPLETED",
+  ).length;
+  const noShowCount = customerReservations.filter(
+    (reservation) => reservation.status === "NO_SHOW",
+  ).length;
+  const cancelledCount = customerReservations.filter(isCancelledReservation).length;
+  const requestNotes = customerReservations
+    .filter((reservation) => reservation.hasCustomerRequest)
+    .map(() => "창가 좌석 요청, 알레르기 확인 필요");
+
+  return {
+    id: customerId,
+    name: latestReservation.customer.name,
+    phoneNumber: profile.phoneNumber,
+    phoneMasked: latestReservation.customer.phoneMasked,
+    totalReservations: customerReservations.length,
+    visitCount: Math.max(profile.historicalVisitCount, completedCount),
+    noShowCount: Math.max(profile.historicalNoShowCount, noShowCount),
+    cancelledCount,
+    firstReservationAt: earliestReservationDateTime(customerReservations),
+    lastReservationAt: latestReservationDateTime(customerReservations),
+    lastVisitedAt: latestReservationDateTime(
+      customerReservations.filter((reservation) => reservation.status === "COMPLETED"),
+    ),
+    nextReservationAt: nextActiveReservationDateTime(customerReservations),
+    recentRequests: uniqueNonEmpty([...profile.recentRequests, ...requestNotes]).slice(0, 5),
+    allergies: profile.allergies,
+    anniversaries: profile.anniversaries,
+    privacyNotice:
+      "전화번호는 고객 상세에서만 표시하며, 고객 응대와 예약 확인 목적 외 사용하지 않습니다.",
+  } satisfies BusinessCustomerDetailResponse;
+}
+
+function toMockBusinessCustomerReservationHistory(
+  reservations: BusinessReservationListItemResponse[],
+  customerId: number,
+): BusinessCustomerReservationHistoryItemResponse[] {
+  const profile = mockBusinessCustomerProfile(customerId);
+
+  return sortMockBusinessReservations(
+    reservations.filter((reservation) => reservation.customer.id === customerId),
+  )
+    .reverse()
+    .map((reservation) => ({
+      id: reservation.id,
+      reservationNumber: reservation.reservationNumber,
+      status: reservation.status,
+      statusLabel: reservation.statusLabel,
+      statusTone: reservation.statusTone,
+      visitDate: reservation.visitDate,
+      startTime: reservation.startTime,
+      partySize: reservation.partySize,
+      productName: reservation.productName,
+      source: reservation.source,
+      customerRequest: reservation.hasCustomerRequest
+        ? (profile.recentRequests[0] ?? "고객 요청사항 있음")
+        : null,
+      allergyNote: profile.allergies.length > 0 ? profile.allergies.join(", ") : null,
+      anniversaryNote:
+        profile.anniversaries.length > 0
+          ? profile.anniversaries.map((anniversary) => anniversary.label).join(", ")
+          : null,
+      completedAt:
+        reservation.status === "COMPLETED"
+          ? toDateTimeIsoString(reservation.visitDate, reservation.endTime)
+          : null,
+      noShowAt:
+        reservation.status === "NO_SHOW"
+          ? toDateTimeIsoString(reservation.visitDate, reservation.endTime)
+          : null,
+    }));
+}
+
+function filterMockBusinessCustomers(
+  customers: BusinessCustomerListItemResponse[],
+  query: BusinessCustomerListQuery,
+) {
+  const searchTerm = query.query?.trim().toLowerCase() ?? "";
+  const segment = query.segment ?? "ALL";
+
+  return customers.filter((customer) => {
+    if (segment === "HAS_VISIT_HISTORY" && customer.completedCount === 0) {
+      return false;
+    }
+    if (segment === "HAS_NO_SHOW" && customer.noShowCount === 0) {
+      return false;
+    }
+    if (
+      segment === "HAS_PREFERENCES" &&
+      customer.allergySummary === null &&
+      customer.anniversarySummary === null
+    ) {
+      return false;
+    }
+    if (!searchTerm) {
+      return true;
+    }
+
+    return mockBusinessCustomerSearchText(customer).includes(searchTerm);
+  });
+}
+
 function filterMockBusinessReservations(
   reservations: BusinessReservationListItemResponse[],
   query: BusinessReservationListQuery,
@@ -4011,6 +4389,52 @@ function mockCustomerPhoneNumber(reservationId: number) {
   return phoneNumbers[reservationId] ?? "010-0000-0000";
 }
 
+function mockBusinessCustomerProfile(customerId: number): MockBusinessCustomerProfile {
+  return (
+    defaultMockBusinessCustomerProfiles()[customerId] ?? {
+      phoneNumber: "010-0000-0000",
+      allergies: [],
+      anniversaries: [],
+      recentRequests: [],
+      historicalVisitCount: 0,
+      historicalNoShowCount: 0,
+    }
+  );
+}
+
+function earliestReservationDateTime(reservations: BusinessReservationListItemResponse[]) {
+  return reservationDateTimes(reservations).sort()[0] ?? null;
+}
+
+function latestReservationDateTime(reservations: BusinessReservationListItemResponse[]) {
+  return reservationDateTimes(reservations).sort().at(-1) ?? null;
+}
+
+function nextActiveReservationDateTime(reservations: BusinessReservationListItemResponse[]) {
+  const today = todayDateString();
+
+  return (
+    reservationDateTimes(
+      reservations.filter(
+        (reservation) =>
+          reservation.visitDate >= today &&
+          !isCancelledReservation(reservation) &&
+          reservation.status !== "NO_SHOW",
+      ),
+    ).sort()[0] ?? null
+  );
+}
+
+function reservationDateTimes(reservations: BusinessReservationListItemResponse[]) {
+  return reservations.map((reservation) =>
+    toDateTimeIsoString(reservation.visitDate, reservation.startTime),
+  );
+}
+
+function uniqueNonEmpty(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
 function toBusinessReservationSummary(items: BusinessReservationListItemResponse[]) {
   return {
     totalReservations: items.length,
@@ -4032,6 +4456,19 @@ function businessReservationSearchText(reservation: BusinessReservationListItemR
     reservation.statusLabel,
     reservation.paymentStatus,
   ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function mockBusinessCustomerSearchText(customer: BusinessCustomerListItemResponse) {
+  return [
+    customer.name,
+    customer.phoneMasked,
+    customer.lastRequest,
+    customer.allergySummary,
+    customer.anniversarySummary,
+  ]
+    .filter(Boolean)
     .join(" ")
     .toLowerCase();
 }
