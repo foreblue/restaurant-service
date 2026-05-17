@@ -442,6 +442,8 @@ class ReservationProductService(
                 ReservationProductPaymentPolicyType.CARD_GUARANTEE,
             ),
             depositAmount = paymentAmount ?: 0,
+            paymentPolicyType = paymentPolicyType,
+            paymentAmount = paymentAmount,
         )
 
     private fun ReservationProductEntity.snapshot(): Map<String, Any?> =

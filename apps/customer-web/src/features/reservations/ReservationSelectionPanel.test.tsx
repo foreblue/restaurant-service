@@ -20,6 +20,8 @@ const products: PublicReservationProduct[] = [
     availableEndTime: "21:00",
     requiresPayment: false,
     depositAmount: 0,
+    paymentPolicyType: "FREE",
+    paymentAmount: null,
   },
   {
     id: 20,
@@ -33,6 +35,8 @@ const products: PublicReservationProduct[] = [
     availableEndTime: "14:00",
     requiresPayment: true,
     depositAmount: 10000,
+    paymentPolicyType: "DEPOSIT",
+    paymentAmount: 10000,
   },
 ];
 
@@ -135,6 +139,25 @@ describe("ReservationSelectionPanel", () => {
     fireEvent.click(availableTime);
 
     expect(screen.getByText("디너 코스 · 2명 · 2026-05-18 · 18:00")).toBeInTheDocument();
+  });
+
+  it("shows payment policy summary and branches the submit copy", async () => {
+    const client = createMockClient();
+
+    render(
+      <AppProviders apiClient={client}>
+        <ReservationSelectionPanel products={products} restaurantId={1} />
+      </AppProviders>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /런치 코스/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /2026-05-18/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /18:00/ }));
+
+    expect(screen.getByText("예약금")).toBeInTheDocument();
+    expect(screen.getByText("₩10,000")).toBeInTheDocument();
+    expect(screen.getByText("예약 후 예약금 결제")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "예약 후 결제 진행" })).toBeInTheDocument();
   });
 
   it("resets lower selections when the selected product changes", async () => {

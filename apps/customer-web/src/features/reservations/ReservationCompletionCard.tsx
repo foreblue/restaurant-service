@@ -4,16 +4,23 @@ import { Alert } from "@/components/ui";
 
 import { type PublicReservationResponse } from "./reservationCreateTypes";
 import { formatReservationStatus } from "./reservationDisplay";
+import { type ReservationPaymentPolicyView } from "./reservationPaymentPolicy";
 
 interface ReservationCompletionCardProps {
+  paymentPolicy?: ReservationPaymentPolicyView | undefined;
   reservation: PublicReservationResponse;
 }
 
-export function ReservationCompletionCard({ reservation }: ReservationCompletionCardProps) {
+export function ReservationCompletionCard({
+  paymentPolicy,
+  reservation,
+}: ReservationCompletionCardProps) {
   return (
     <section className="rounded-lg border border-teal-200 bg-white p-4 shadow-sm">
       <Alert title="예약이 완료되었습니다." variant="success">
-        예약번호와 방문 정보를 확인해 주세요.
+        {paymentPolicy && paymentPolicy.nextStep !== "reserveOnly"
+          ? `${paymentPolicy.nextStepLabel} 단계가 이어집니다.`
+          : "예약번호와 방문 정보를 확인해 주세요."}
       </Alert>
 
       <dl className="mt-4 grid gap-3 text-sm">
@@ -36,6 +43,13 @@ export function ReservationCompletionCard({ reservation }: ReservationCompletion
           </dd>
         </div>
       </dl>
+
+      {paymentPolicy ? (
+        <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700">
+          <p className="font-semibold text-slate-950">다음 단계</p>
+          <p>{paymentPolicy.nextStepLabel}</p>
+        </div>
+      ) : null}
 
       <Link
         className="mt-4 inline-flex min-h-11 w-full items-center justify-center rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2"

@@ -142,6 +142,8 @@ data class PublicReservationProductResponse(
     val availableEndTime: LocalTime?,
     val requiresPayment: Boolean,
     val depositAmount: Long,
+    val paymentPolicyType: ReservationProductPaymentPolicyType,
+    val paymentAmount: Long?,
 )
 
 data class ReservationProductRequestMetadata(

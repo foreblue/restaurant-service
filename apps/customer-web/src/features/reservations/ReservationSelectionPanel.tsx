@@ -17,6 +17,11 @@ import {
   type PublicReservationProduct,
 } from "./reservationOptionsTypes";
 import { type ReservationCustomerFormValues } from "./reservationCustomerSchema";
+import {
+  getReservationPaymentPolicyView,
+  getReservationSubmitLabel,
+  type ReservationPaymentPolicyView,
+} from "./reservationPaymentPolicy";
 
 interface ReservationSelectionPanelProps {
   products: PublicReservationProduct[];
@@ -32,6 +37,9 @@ export function ReservationSelectionPanel({
     () => products[0]?.id ?? null,
   );
   const selectedProduct = products.find((product) => product.id === selectedProductId) ?? null;
+  const selectedPaymentPolicy = selectedProduct
+    ? getReservationPaymentPolicyView(selectedProduct)
+    : null;
   const [partySize, setPartySize] = useState(() => selectedProduct?.minPartySize ?? 1);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTimeSlot, setSelectedTimeSlot] = useState<AvailableTimeSlot | null>(null);
@@ -151,6 +159,9 @@ export function ReservationSelectionPanel({
               {formatCurrency(product.displayPrice)} · {product.minPartySize}-{product.maxPartySize}
               명
             </span>
+            <span className="mt-2 block rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
+              {getReservationPaymentPolicyView(product).summary}
+            </span>
           </button>
         ))}
       </div>
@@ -183,17 +194,26 @@ export function ReservationSelectionPanel({
         onSelect={setSelectedTimeSlot}
       />
 
-      {selectedProduct && selectedDate && selectedTimeSlot ? (
-        <div className="rounded-md border border-teal-200 bg-teal-50 p-3 text-sm font-semibold text-teal-950">
-          {selectedProduct.name} · {partySize}명 · {selectedDate} · {selectedTimeSlot.startTime}
-        </div>
+      {selectedProduct && selectedDate && selectedTimeSlot && selectedPaymentPolicy ? (
+        <ReservationCheckoutSummary
+          partySize={partySize}
+          paymentPolicy={selectedPaymentPolicy}
+          productName={selectedProduct.name}
+          selectedDate={selectedDate}
+          selectedTime={selectedTimeSlot.startTime}
+        />
       ) : null}
 
       {createReservationMutation.data ? (
-        <ReservationCompletionCard reservation={createReservationMutation.data} />
+        <ReservationCompletionCard
+          paymentPolicy={selectedPaymentPolicy ?? undefined}
+          reservation={createReservationMutation.data}
+        />
       ) : selectedProduct && selectedDate && selectedTimeSlot ? (
         <ReservationCustomerForm
-          submitLabel="예약 완료"
+          submitLabel={
+            selectedPaymentPolicy ? getReservationSubmitLabel(selectedPaymentPolicy) : "예약 완료"
+          }
           submitting={createReservationMutation.isPending}
           onSubmit={(values) => createReservationMutation.mutate(values)}
         />
@@ -214,6 +234,48 @@ export function ReservationSelectionPanel({
         />
       ) : null}
     </section>
+  );
+}
+
+function ReservationCheckoutSummary({
+  partySize,
+  paymentPolicy,
+  productName,
+  selectedDate,
+  selectedTime,
+}: {
+  partySize: number;
+  paymentPolicy: ReservationPaymentPolicyView;
+  productName: string;
+  selectedDate: string;
+  selectedTime: string;
+}) {
+  return (
+    <section className="grid gap-3 rounded-md border border-teal-200 bg-teal-50 p-3 text-sm text-teal-950">
+      <div>
+        <h3 className="font-semibold">예약 전 확인</h3>
+        <p className="mt-1 leading-6">
+          {productName} · {partySize}명 · {selectedDate} · {selectedTime}
+        </p>
+      </div>
+      <dl className="grid gap-2">
+        <SummaryRow label="결제 조건" value={paymentPolicy.label} />
+        {paymentPolicy.amountLabel ? (
+          <SummaryRow label="필요 금액" value={paymentPolicy.amountLabel} />
+        ) : null}
+        <SummaryRow label="다음 단계" value={paymentPolicy.nextStepLabel} />
+      </dl>
+      <p className="leading-6">{paymentPolicy.description}</p>
+    </section>
+  );
+}
+
+function SummaryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <dt className="text-teal-800">{label}</dt>
+      <dd className="text-right font-semibold">{value}</dd>
+    </div>
   );
 }
 
