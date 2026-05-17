@@ -1,12 +1,13 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { ConfirmDialog } from "@/components/feedback/ConfirmDialog";
 import { ReservationPageShell } from "@/components/layout/ReservationPageShell";
 import { Alert, Button, StateBlock, Textarea } from "@/components/ui";
-import { toCustomerApiErrorMessage } from "@/shared/api/apiError";
+import { PublicApiError, toCustomerApiErrorMessage } from "@/shared/api/apiError";
 import { usePublicApiClient } from "@/shared/api/usePublicApiClient";
 
 import {
@@ -40,6 +41,7 @@ export function ReservationDetailPageContent({
 function ReservationDetailPanel({ lookupToken, reservationId }: ReservationDetailPageContentProps) {
   const apiClient = usePublicApiClient();
   const queryClient = useQueryClient();
+  const router = useRouter();
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
 
@@ -65,7 +67,11 @@ function ReservationDetailPanel({ lookupToken, reservationId }: ReservationDetai
 
   if (!lookupToken) {
     return (
-      <StateBlock title="예약 조회 토큰이 필요합니다." variant="error">
+      <StateBlock
+        action={{ label: "예약 조회", onClick: () => router.push("/reservations") }}
+        title="예약 조회 토큰이 필요합니다."
+        variant="error"
+      >
         <p>예약 완료 화면이나 알림 메시지에 포함된 조회 링크로 다시 접근해 주세요.</p>
       </StateBlock>
     );
@@ -76,9 +82,17 @@ function ReservationDetailPanel({ lookupToken, reservationId }: ReservationDetai
   }
 
   if (detailQuery.isError) {
+    const needsAuthentication =
+      detailQuery.error instanceof PublicApiError &&
+      (detailQuery.error.status === 401 || detailQuery.error.status === 403);
+
     return (
       <StateBlock
-        action={{ label: "다시 조회", onClick: () => void detailQuery.refetch() }}
+        action={{
+          label: needsAuthentication ? "예약 조회" : "다시 조회",
+          onClick: () =>
+            needsAuthentication ? router.push("/reservations") : void detailQuery.refetch(),
+        }}
         title="예약 정보를 불러오지 못했습니다."
         variant="error"
       >

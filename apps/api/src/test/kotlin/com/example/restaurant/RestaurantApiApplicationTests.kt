@@ -1443,26 +1443,82 @@ class RestaurantApiApplicationTests {
 
     @Test
     fun publicReservationLookupTokenCanBeIssuedWithoutBusinessSession() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "lookup-token-owner@example.com",
+            restaurantName = "Lookup Token Table",
+            slug = "lookup-token",
+        )
+        val reservation = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "lookup-token-reservation-1",
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "조회고객",
+            customerPhone = "010-1234-5678",
+        )
+
         val result = mockMvc.post("/api/public/reservation-lookup-tokens") {
             contentType = MediaType.APPLICATION_JSON
-            content = """{"reservationNumber": " r-20260515-1 ", "phoneNumber": "010-1234-5678"}"""
+            content = """
+            {
+              "reservationNumber": " ${reservation.reservationNumber.lowercase()} ",
+              "phoneNumber": "010-1234-5678"
+            }
+            """.trimIndent()
         }.andExpect {
             status { isOk() }
+            jsonPath("$.reservationId") { value(reservation.id.toInt()) }
             jsonPath("$.lookupToken") { isNotEmpty() }
             jsonPath("$.expiresAt") { isNotEmpty() }
         }.andReturn()
 
         val lookupToken = JsonPath.read<String>(result.response.contentAsString, "$.lookupToken")
-        val savedToken = reservationLookupTokenRepository.findAll()
-            .single { it.reservationNumber == "R-20260515-1" }
+        val savedToken = reservationLookupTokenRepository
+            .findByTokenHashAndRevokedAtIsNull(TokenHash.sha256Hex(lookupToken))
+            ?: error("issued lookup token must be persisted")
 
         assertThat(savedToken.tokenHash).hasSize(64)
         assertThat(savedToken.tokenHash).isNotEqualTo(lookupToken)
         assertThat(savedToken.phoneNumberHash).hasSize(64)
         assertThat(savedToken.phoneNumberHash).isNotEqualTo("010-1234-5678")
-        assertThat(reservationLookupTokenService.hasLookupAccess("r-20260515-1", lookupToken)).isTrue()
-        assertThat(reservationLookupTokenService.hasLookupAccess("r-20260515-2", lookupToken)).isFalse()
-        assertThat(reservationLookupTokenService.hasLookupAccess("r-20260515-1", "wrong-token")).isFalse()
+        assertThat(
+            reservationLookupTokenService.hasLookupAccess(reservation.reservationNumber, lookupToken),
+        ).isTrue()
+        assertThat(reservationLookupTokenService.hasLookupAccess("other-reservation", lookupToken)).isFalse()
+        assertThat(reservationLookupTokenService.hasLookupAccess(reservation.reservationNumber, "wrong-token")).isFalse()
+    }
+
+    @Test
+    fun publicReservationLookupTokenRejectsPhoneNumberMismatch() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "lookup-token-mismatch-owner@example.com",
+            restaurantName = "Lookup Token Mismatch Table",
+            slug = "lookup-token-mismatch",
+        )
+        val reservation = createPublicReservationForFixture(
+            fixture = fixture,
+            idempotencyKey = "lookup-token-reservation-2",
+            startTime = "11:00:00",
+            partySize = 2,
+            customerName = "조회고객",
+            customerPhone = "010-1234-5678",
+        )
+
+        mockMvc.post("/api/public/reservation-lookup-tokens") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "reservationNumber": "${reservation.reservationNumber}",
+              "phoneNumber": "010-9999-0000"
+            }
+            """.trimIndent()
+            header(TraceContext.TRACE_ID_HEADER, "lookup-trace-mismatch")
+        }.andExpect {
+            status { isForbidden() }
+            jsonPath("$.code") { value("ACCESS_DENIED") }
+            jsonPath("$.message") { value("예약자 전화번호가 일치하지 않습니다.") }
+            jsonPath("$.traceId") { value("lookup-trace-mismatch") }
+        }
     }
 
     @Test

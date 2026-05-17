@@ -2,6 +2,7 @@ package com.example.restaurant.auth
 
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.example.restaurant.reservation.ReservationRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.security.SecureRandom
@@ -13,6 +14,7 @@ import java.util.Base64
 class ReservationLookupTokenService(
     private val properties: BusinessAuthProperties,
     private val repository: ReservationLookupTokenRepository,
+    private val reservationRepository: ReservationRepository,
     private val clock: Clock,
 ) {
     private val secureRandom = SecureRandom()
@@ -23,6 +25,11 @@ class ReservationLookupTokenService(
         val phoneNumber = normalizePhoneNumber(request.phoneNumber)
         if (phoneNumber.isBlank()) {
             throw ApiException(ErrorCode.BAD_REQUEST, "전화번호가 유효하지 않습니다.")
+        }
+        val reservation = reservationRepository.findByReservationNumber(reservationNumber)
+            ?: throw ApiException(ErrorCode.NOT_FOUND, "예약을 찾을 수 없습니다.")
+        if (normalizePhoneNumber(reservation.customer.phoneNumber) != phoneNumber) {
+            throw ApiException(ErrorCode.ACCESS_DENIED, "예약자 전화번호가 일치하지 않습니다.")
         }
 
         val token = generateToken()
@@ -38,6 +45,7 @@ class ReservationLookupTokenService(
         )
 
         return ReservationLookupTokenResponse(
+            reservationId = reservation.id,
             lookupToken = token,
             expiresAt = expiresAt,
         )

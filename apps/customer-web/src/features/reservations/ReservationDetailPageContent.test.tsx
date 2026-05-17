@@ -6,6 +6,19 @@ import { type PublicApiClient } from "@/shared/api/publicApiClient";
 import { ReservationDetailPageContent } from "./ReservationDetailPageContent";
 import { type PublicReservationDetailResponse } from "./reservationDetailTypes";
 
+const pushMock = vi.fn();
+
+vi.mock("next/navigation", async () => {
+  const actual = await vi.importActual<typeof import("next/navigation")>("next/navigation");
+
+  return {
+    ...actual,
+    useRouter: () => ({
+      push: pushMock,
+    }),
+  };
+});
+
 const reservationDetail: PublicReservationDetailResponse = {
   id: 300,
   reservationNumber: "RSV-20260518-0001",
@@ -55,6 +68,10 @@ function createMockClient(
 }
 
 describe("ReservationDetailPageContent", () => {
+  beforeEach(() => {
+    pushMock.mockReset();
+  });
+
   it("shows reservation detail fields", async () => {
     const client = createMockClient();
 

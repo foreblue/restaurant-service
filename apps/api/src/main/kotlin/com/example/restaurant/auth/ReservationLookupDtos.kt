@@ -15,6 +15,7 @@ data class ReservationLookupTokenRequest(
 )
 
 data class ReservationLookupTokenResponse(
+    val reservationId: Long,
     val lookupToken: String,
     val expiresAt: Instant,
 )
