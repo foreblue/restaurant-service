@@ -48,3 +48,55 @@ export interface PublicGuaranteeStartRequest {
   returnUrl: string;
   idempotencyKey: string;
 }
+
+export type PublicRefundStatus = "CANCELLED" | "FAILED" | "PENDING" | "REQUESTED" | "SUCCEEDED";
+
+export type PublicRefundReason =
+  | "ADMIN_ADJUSTMENT"
+  | "CUSTOMER_CANCEL"
+  | "NO_SHOW_ADJUSTMENT"
+  | "RESTAURANT_CANCEL";
+
+export interface PublicPaymentSummaryResponse {
+  reservationId: number;
+  paymentMode: ReservationPaymentMode;
+  paymentStatus: PublicPaymentStatus;
+  paymentRequired: boolean;
+  amount: number;
+  currency: string;
+  paymentDueAt: string | null;
+  cancellationPolicySummary: string | null;
+}
+
+export interface PublicRefundPreviewResponse {
+  reservationId: number;
+  paymentId: number | null;
+  paymentStatus: PublicPaymentStatus;
+  refundRequired: boolean;
+  refundableAmount: number;
+  nonRefundableAmount: number;
+  alreadyRefundedAmount: number;
+  paidAmount: number;
+  currency: string;
+  policyRuleId: string | null;
+  reason: PublicRefundReason;
+  message: string;
+}
+
+export interface PublicRefundOperationResponse {
+  refundId: number | null;
+  paymentId: number | null;
+  status: PublicRefundStatus | null;
+  paymentStatus: PublicPaymentStatus;
+  refundRequired: boolean;
+  refundAmount: number;
+  nonRefundableAmount: number;
+  alreadyRefundedAmount: number;
+  currency: string;
+  policyRuleId: string | null;
+  reason: PublicRefundReason;
+  message: string;
+  failureCode?: string | null;
+  failureMessage?: string | null;
+  manualResolved?: boolean;
+}

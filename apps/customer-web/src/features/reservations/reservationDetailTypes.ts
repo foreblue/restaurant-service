@@ -1,4 +1,5 @@
 import { type PublicReservationStatus } from "./reservationCreateTypes";
+import { type PublicRefundOperationResponse } from "./reservationPaymentTypes";
 
 export interface PublicReservationCancelRequest {
   reason?: string | null;
@@ -31,5 +32,5 @@ export interface PublicReservationDetailResponse {
   cancelDeadline: string;
   cancelledAt: string | null;
   cancelReason: string | null;
-  refund: unknown | null;
+  refund: PublicRefundOperationResponse | null;
 }
