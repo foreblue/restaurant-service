@@ -7,7 +7,11 @@ describe("HomePageContent", () => {
     render(<HomePageContent />);
 
     expect(screen.getByRole("heading", { name: "식당 예약" })).toBeInTheDocument();
-    expect(screen.getByText("공유받은 예약 링크로 이동해 주세요.")).toBeInTheDocument();
-    expect(screen.getByText("모바일 우선")).toBeInTheDocument();
+    expect(screen.getByText(/예약번호로 기존 예약을 확인/)).toBeInTheDocument();
+    expect(screen.getByText("고객 예약")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "예약 조회" })).toHaveAttribute(
+      "href",
+      "/reservations",
+    );
   });
 });
