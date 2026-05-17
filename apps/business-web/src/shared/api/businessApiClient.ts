@@ -666,6 +666,57 @@ export interface BusinessRefundListResponse {
   items: BusinessRefundListItemResponse[];
 }
 
+export interface BusinessAnalyticsPeriodQuery {
+  from?: string | null;
+  to?: string | null;
+}
+
+export interface BusinessAnalyticsPeriodResponse {
+  from: string;
+  to: string;
+}
+
+export interface BusinessAnalyticsReservationMetricsResponse {
+  total: number;
+  confirmed: number;
+  modified: number;
+  completed: number;
+  cancelledByCustomer: number;
+  cancelledByRestaurant: number;
+  cancelled: number;
+  noShow: number;
+}
+
+export interface BusinessAnalyticsPaymentMetricsResponse {
+  depositAmount: number;
+  prepaidAmount: number;
+  guaranteeChargeAmount: number;
+  paymentAmount: number;
+  refundAmount: number;
+  netAmount: number;
+  cardGuaranteeCount: number;
+  refundCount: number;
+}
+
+export interface BusinessAnalyticsRateMetricsResponse {
+  completionRate: number;
+  cancellationRate: number;
+  noShowRate: number;
+}
+
+export interface BusinessAnalyticsSummaryResponse {
+  restaurantId: number;
+  period: BusinessAnalyticsPeriodResponse;
+  reservationMetricBasis: string;
+  paymentMetricBasis: string;
+  refundMetricBasis: string;
+  generatedAt: string | null;
+  settlementNotice: string;
+  reservations: BusinessAnalyticsReservationMetricsResponse;
+  payments: BusinessAnalyticsPaymentMetricsResponse;
+  rates: BusinessAnalyticsRateMetricsResponse;
+}
+
 export type BusinessCustomerSegment =
   | "ALL"
   | "HAS_VISIT_HISTORY"
@@ -977,6 +1028,10 @@ export interface BusinessApiClient {
   listBusinessAuditLogs(query: BusinessAuditLogListQuery): Promise<BusinessAuditLogListResponse>;
   listBusinessPayments(query: BusinessPaymentListQuery): Promise<BusinessPaymentListResponse>;
   listBusinessRefunds(query: BusinessRefundListQuery): Promise<BusinessRefundListResponse>;
+  getBusinessAnalyticsSummary(
+    restaurantId: number,
+    query: BusinessAnalyticsPeriodQuery,
+  ): Promise<BusinessAnalyticsSummaryResponse>;
   listBusinessCustomers(query: BusinessCustomerListQuery): Promise<BusinessCustomerListResponse>;
   getBusinessCustomer(customerId: number): Promise<BusinessCustomerDetailResponse>;
   listBusinessCustomerReservations(
@@ -1339,6 +1394,12 @@ class HttpBusinessApiClient implements BusinessApiClient {
 
   listBusinessRefunds(query: BusinessRefundListQuery) {
     return this.request<BusinessRefundListResponse>(`/api/business/refunds${queryString(query)}`);
+  }
+
+  getBusinessAnalyticsSummary(restaurantId: number, query: BusinessAnalyticsPeriodQuery) {
+    return this.request<BusinessAnalyticsSummaryResponse>(
+      `/api/business/restaurants/${restaurantId}/analytics/summary${queryString(query)}`,
+    );
   }
 
   listBusinessCustomers(query: BusinessCustomerListQuery) {
@@ -2262,6 +2323,22 @@ class MockBusinessApiClient implements BusinessApiClient {
       },
       items,
     } satisfies BusinessRefundListResponse;
+  }
+
+  async getBusinessAnalyticsSummary(restaurantId: number, query: BusinessAnalyticsPeriodQuery) {
+    const restaurant = this.readRestaurant() ?? defaultMockRestaurant();
+
+    if (restaurant.id !== restaurantId) {
+      throw new ApiError("매장을 찾을 수 없습니다.", 404, "NOT_FOUND");
+    }
+
+    return toMockBusinessAnalyticsSummary(
+      restaurantId,
+      query,
+      this.readBusinessReservations(),
+      defaultMockBusinessPayments(),
+      defaultMockBusinessRefunds(),
+    );
   }
 
   async listBusinessCustomers(query: BusinessCustomerListQuery) {
@@ -4260,6 +4337,115 @@ function defaultMockBusinessRefunds(): BusinessRefundListItemResponse[] {
       actionRequired: true,
     },
   ];
+}
+
+function toMockBusinessAnalyticsSummary(
+  restaurantId: number,
+  query: BusinessAnalyticsPeriodQuery,
+  reservations: BusinessReservationListItemResponse[],
+  payments: BusinessPaymentListItemResponse[],
+  refunds: BusinessRefundListItemResponse[],
+): BusinessAnalyticsSummaryResponse {
+  const today = todayDateString();
+  const to = query.to?.trim() || today;
+  const from = query.from?.trim() || addDays(to, -29);
+
+  if (from > to) {
+    throw new ApiError("from은 to보다 늦을 수 없습니다.", 400, "VALIDATION_ERROR");
+  }
+
+  const periodReservations = reservations.filter(
+    (reservation) => reservation.visitDate >= from && reservation.visitDate <= to,
+  );
+  const revenuePayments = payments.filter((payment) => {
+    const paidDate = payment.paidAt?.slice(0, 10);
+
+    return (
+      paidDate !== undefined &&
+      paidDate >= from &&
+      paidDate <= to &&
+      ["PAID", "REFUND_PENDING"].includes(payment.status) &&
+      ["DEPOSIT", "PREPAID", "GUARANTEE_CHARGE"].includes(payment.paymentType)
+    );
+  });
+  const successfulRefunds = refunds.filter((refund) => {
+    const completedDate = (refund.completedAt ?? refund.requestedAt)?.slice(0, 10);
+
+    return (
+      refund.status === "SUCCEEDED" &&
+      completedDate !== undefined &&
+      completedDate >= from &&
+      completedDate <= to
+    );
+  });
+  const cancelledByCustomer = periodReservations.filter(
+    (reservation) => reservation.status === "CANCELLED_BY_CUSTOMER",
+  ).length;
+  const cancelledByRestaurant = periodReservations.filter(
+    (reservation) => reservation.status === "CANCELLED_BY_RESTAURANT",
+  ).length;
+  const reservationsMetrics = {
+    total: periodReservations.length,
+    confirmed: periodReservations.filter((reservation) => reservation.status === "CONFIRMED")
+      .length,
+    modified: periodReservations.filter((reservation) => reservation.status === "MODIFIED").length,
+    completed: periodReservations.filter((reservation) => reservation.status === "COMPLETED")
+      .length,
+    cancelledByCustomer,
+    cancelledByRestaurant,
+    cancelled: cancelledByCustomer + cancelledByRestaurant,
+    noShow: periodReservations.filter((reservation) => reservation.status === "NO_SHOW").length,
+  } satisfies BusinessAnalyticsReservationMetricsResponse;
+  const activeReservationCount =
+    reservationsMetrics.confirmed +
+    reservationsMetrics.modified +
+    reservationsMetrics.completed +
+    reservationsMetrics.noShow;
+  const depositAmount = revenuePayments
+    .filter((payment) => payment.paymentType === "DEPOSIT")
+    .reduce((total, payment) => total + payment.amount, 0);
+  const prepaidAmount = revenuePayments
+    .filter((payment) => payment.paymentType === "PREPAID")
+    .reduce((total, payment) => total + payment.amount, 0);
+  const guaranteeChargeAmount = revenuePayments
+    .filter((payment) => payment.paymentType === "GUARANTEE_CHARGE")
+    .reduce((total, payment) => total + payment.amount, 0);
+  const paymentAmount = depositAmount + prepaidAmount + guaranteeChargeAmount;
+  const refundAmount = successfulRefunds.reduce((total, refund) => total + refund.refundAmount, 0);
+
+  return {
+    restaurantId,
+    period: { from, to },
+    reservationMetricBasis: "VISIT_DATE",
+    paymentMetricBasis: "PAID_AT",
+    refundMetricBasis: "SUCCEEDED_AT",
+    generatedAt: new Date().toISOString(),
+    settlementNotice: "운영 참고용 통계이며 정산 자동화 또는 세금 처리 기준 금액이 아닙니다.",
+    reservations: reservationsMetrics,
+    payments: {
+      depositAmount,
+      prepaidAmount,
+      guaranteeChargeAmount,
+      paymentAmount,
+      refundAmount,
+      netAmount: paymentAmount - refundAmount,
+      cardGuaranteeCount: payments.filter((payment) => payment.cardGuaranteeHeld).length,
+      refundCount: successfulRefunds.length,
+    },
+    rates: {
+      completionRate: ratio(reservationsMetrics.completed, activeReservationCount),
+      cancellationRate: ratio(reservationsMetrics.cancelled, reservationsMetrics.total),
+      noShowRate: ratio(reservationsMetrics.noShow, activeReservationCount),
+    },
+  } satisfies BusinessAnalyticsSummaryResponse;
+}
+
+function ratio(numerator: number, denominator: number) {
+  if (denominator <= 0) {
+    return 0;
+  }
+
+  return Math.round((numerator / denominator) * 10000) / 10000;
 }
 
 function toMockBusinessReservationRefundPreview(

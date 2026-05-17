@@ -1,5 +1,6 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 
+import { AnalyticsDashboardPage } from "@/features/analytics/AnalyticsDashboardPage";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { PasswordResetRequestPage } from "@/features/auth/PasswordResetRequestPage";
 import { CustomersPage } from "@/features/customers/CustomersPage";
@@ -65,6 +66,10 @@ export function createBusinessRouter() {
             {
               path: "customers",
               element: <CustomersPage />,
+            },
+            {
+              path: "analytics",
+              element: <AnalyticsDashboardPage />,
             },
           ],
         },
