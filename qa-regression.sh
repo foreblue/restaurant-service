@@ -18,3 +18,8 @@ run_pnpm --filter @restaurant/business-web lint
 run_pnpm --filter @restaurant/business-web test
 run_pnpm --filter @restaurant/business-web build
 run_pnpm --filter @restaurant/business-web test:e2e
+
+run_pnpm --filter @restaurant/customer-web lint
+run_pnpm --filter @restaurant/customer-web test
+run_pnpm --filter @restaurant/customer-web build
+run_pnpm --filter @restaurant/customer-web test:e2e

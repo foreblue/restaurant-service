@@ -51,53 +51,103 @@
 | 접근성 자동 점검          | Playwright 기본 assertion만 있고 axe 등 자동 a11y 도구는 없다.            | a11y dependency 도입 여부 확인 후 별도 이슈로 분리                   |
 | 오류 응답 지연/실패 상태  | 대부분 jsdom mock과 component assertion으로 보호된다.                     | API route mock 또는 MSW 도입 후 full browser 오류 상태 E2E 추가      |
 
+## Customer FE 실행 기준
+
+| 항목                   | 기준                                                                                   |
+| ---------------------- | -------------------------------------------------------------------------------------- |
+| Primary command        | `pnpm test:e2e:customer`                                                               |
+| Regression gate        | `./qa-regression.sh` 또는 `pnpm qa:regression`                                         |
+| Playwright config      | `apps/customer-web/playwright.config.ts`                                               |
+| HTML report            | `apps/customer-web/playwright-report/index.html`                                       |
+| Raw results            | `apps/customer-web/test-results/results.json`                                          |
+| Trace/video/screenshot | `apps/customer-web/test-results/`                                                      |
+| Visual attachment      | Playwright attachment `customer-mobile-long-content`                                   |
+| Web servers            | mock public API `127.0.0.1:4181`, Next dev `127.0.0.1:4178` via Playwright `webServer` |
+
+`./qa-regression.sh`는 BE API, 사업자 FE에 이어 사용자 FE의 `lint`, `test`, `build`, `test:e2e`를 실행한다. 배포 전 regression gate에서는 이 명령이 실패하면 배포를 중단한다. 현재 로컬 환경에 Java Runtime이 없으면 API 단계에서 실패할 수 있으므로, CI gate에서는 Java와 Docker/Testcontainers prerequisite을 충족해야 한다.
+
+## Customer FE Coverage
+
+| Feature               | Critical TCs                                              | Automated Specs                                                                                        | Coverage | Gaps                                                           |
+| --------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | -------- | -------------------------------------------------------------- |
+| Public Page           | CUST-PAGE-001, CUST-PAGE-002                              | `apps/customer-web/e2e/customer-reservation.spec.ts`, `PublicRestaurantPageContent.test.tsx`           | partial  | 비공개/disabled full browser fixture는 component coverage 중심 |
+| Reservation Selection | CUST-SELECT-001, CUST-SELECT-002                          | `apps/customer-web/e2e/customer-reservation.spec.ts`, `apps/customer-web/e2e/customer-quality.spec.ts` | covered  | 실제 백엔드 seed 기반 availability E2E는 후속 API setup 필요   |
+| Reservation Create    | CUST-RES-001, CUST-RES-002, CUST-RES-003                  | `apps/customer-web/e2e/customer-reservation.spec.ts`, `ReservationSelectionPanel.test.tsx`             | covered  | 동시성 race는 BE/API integration suite와 연결                  |
+| Lookup And Cancel     | CUST-LOOKUP-001, CUST-CANCEL-001                          | `apps/customer-web/e2e/customer-reservation.spec.ts`                                                   | covered  | 휴대폰 인증 provider가 붙으면 provider contract 추가 필요      |
+| Payments And Refunds  | CUST-PAY-001, CUST-PAY-002, CUST-REFUND-001, CUST-PAY-003 | `apps/customer-web/e2e/customer-reservation.spec.ts`, payment component/unit tests                     | partial  | 실제 PG SDK redirect/action과 sandbox webhook은 미자동화       |
+| Mobile Visual Quality | CUST-QA-001                                               | `apps/customer-web/e2e/customer-quality.spec.ts`                                                       | partial  | screenshot baseline diff는 아직 없고 smoke artifact만 수집     |
+| Accessibility/Perf    | CUST-QA-002, CUST-QA-004                                  | `apps/customer-web/e2e/customer-quality.spec.ts`                                                       | covered  | production image/LCP budget은 실제 이미지 도입 후 재측정       |
+| Loading/Error State   | CUST-QA-003, CUST-ERR-001, CUST-EMPTY-001                 | `apps/customer-web/e2e/customer-quality.spec.ts`, `customerErrorReporting.test.ts`, component tests    | partial  | API 실패 full browser matrix는 대표 케이스 위주                |
+
+## Customer Automated Spec Map
+
+| Spec                                                                        | Linked TC IDs                                              | Purpose                                                                  | Artifacts                                            |
+| --------------------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------- |
+| `apps/customer-web/e2e/customer-reservation.spec.ts`                        | CUST-PAGE-001, CUST-SELECT-001, CUST-RES-001, CUST-RES-002 | 공개 예약 페이지 진입, 선택, 고객 정보 입력, 예약 완료 full browser flow | trace/video/screenshot on failure                    |
+| `apps/customer-web/e2e/customer-reservation.spec.ts`                        | CUST-LOOKUP-001, CUST-CANCEL-001, CUST-REFUND-001          | 예약번호/휴대폰 조회, 상세 확인, 고객 취소, 결제/환불 상태 확인          | trace/video/screenshot on failure                    |
+| `apps/customer-web/e2e/customer-reservation.spec.ts`                        | CUST-PAY-001, CUST-PAY-002                                 | 예약금 결제 성공, 결제 실패 후 재시도/예약 포기                          | trace/video/screenshot on failure                    |
+| `apps/customer-web/e2e/customer-quality.spec.ts`                            | CUST-QA-001                                                | 모바일 긴 콘텐츠 visual smoke와 가로 overflow 검증                       | `customer-mobile-long-content` screenshot attachment |
+| `apps/customer-web/e2e/customer-quality.spec.ts`                            | CUST-QA-002, CUST-QA-003, CUST-QA-004                      | axe 접근성, API 지연 로딩, LCP/CLS 수집                                  | trace/video/screenshot on failure                    |
+| `apps/customer-web/src/shared/observability/customerErrorReporting.test.ts` | CUST-ERR-001                                               | client error report payload와 traceId/status/code 수집 정책              | Vitest terminal report                               |
+| `apps/customer-web/src/features/reservations/*.test.tsx`                    | CUST-PAGE-002, CUST-RES-003, CUST-EMPTY-001 partial        | 공개 페이지 상태, 충돌 복구, 빈 상태/폼 검증 component regression        | Vitest terminal report                               |
+
+## Customer Coverage Gaps
+
+| Gap                      | Risk                                                                           | Follow-up                                                        |
+| ------------------------ | ------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| 실제 PG/보증 SDK sandbox | mock action 없는 성공/실패 중심이라 provider redirect drift를 감지하지 못한다. | PG sandbox credential과 callback URL 확정 후 CUST-PAY-003 자동화 |
+| 실제 백엔드 seed E2E     | mock public API 기반이라 BE 권한/DB 계약 drift는 별도 suite에 의존한다.        | BE API Testcontainers fixture와 Playwright setup project 연결    |
+| Screenshot baseline diff | visual smoke screenshot은 남지만 baseline pixel diff는 수행하지 않는다.        | 디자인 안정화 후 per-viewport screenshot baseline 도입           |
+| 알림/SMS provider        | 예약 생성/취소 알림 수신 여부는 FE E2E에서 검증하지 않는다.                    | 알림 provider fake inbox 또는 BE notification suite와 연결       |
+| 성능 production budget   | dev server 기준 LCP/CLS라 production CDN/image 조건을 대표하지 않는다.         | preview deployment에서 Lighthouse/Web Vitals budget gate 추가    |
+
 ## Backend API 실행 기준
 
 | 항목                    | 기준                                                                                   |
 | ----------------------- | -------------------------------------------------------------------------------------- |
 | Primary command         | `cd apps/api && ./gradlew test`                                                        |
 | Regression gate         | `./qa-regression.sh` 또는 `pnpm qa:regression`                                         |
-| Test framework          | JUnit 5, `@SpringBootTest`, `MockMvc`, Testcontainers MySQL                             |
+| Test framework          | JUnit 5, `@SpringBootTest`, `MockMvc`, Testcontainers MySQL                            |
 | Spring profile          | `test`                                                                                 |
 | Database                | Testcontainers `mysql:8.4`; Docker가 없으면 JUnit Testcontainers 조건에 따라 skip 가능 |
 | API contract artifact   | `/v3/api-docs` 응답을 테스트 중 조회                                                   |
-| Raw reports             | `apps/api/build/test-results/test/`, `apps/api/build/reports/tests/test/index.html`     |
-| Log/artifact collection | Gradle test XML, HTML report, failed test stacktrace, Testcontainers/Docker daemon log  |
+| Raw reports             | `apps/api/build/test-results/test/`, `apps/api/build/reports/tests/test/index.html`    |
+| Log/artifact collection | Gradle test XML, HTML report, failed test stacktrace, Testcontainers/Docker daemon log |
 
 `./qa-regression.sh`는 BE API의 `./gradlew test`를 먼저 실행한 뒤 사업자 FE의 `lint`, `test`, `build`, `test:e2e`를 실행한다. 배포 전 regression gate에서는 이 명령이 실패하면 배포를 중단한다.
 
 ## Backend API Coverage
 
-| Feature                 | Critical TCs                                                                                         | Automated Specs                                                                  | Coverage | Gaps                                                                                  |
-| ----------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------- |
-| Foundation/Error        | BE-FND-001, BE-FND-002, BE-FND-003, BE-FND-004                                                       | `apps/api/src/test/kotlin/com/example/restaurant/RestaurantApiApplicationTests.kt` | covered  | traceId log correlation은 로그 수집 환경 확정 후 관측성 gate에서 보강                 |
-| OpenAPI Contract        | BE-CON-001, BE-CON-002                                                                               | `RestaurantApiApplicationTests.openApiDocsAreExposed`, `openApiContractIncludesCoreApiPathsSchemasAndEnums` | covered  | FE generated client compile check는 `packages/api-client` 도입 후 별도 gate로 연결    |
-| Auth And Access Control | BE-AUTH-001, BE-AUTH-002, BE-AUTH-003, BE-AUTH-004, BE-AUTH-005, BE-AUTH-006, BE-AUTH-007            | `RestaurantApiApplicationTests.kt` auth/lookup token tests                         | covered  | session expiry/refresh 세부 UX는 FE 연계 TC에서 보강                                  |
-| Onboarding And Settings | BE-ONB-001, BE-ONB-002, BE-ONB-003, BE-ONB-004, BE-ONB-005, BE-SET-001, BE-SET-002                   | `RestaurantApiApplicationTests.kt` application/file/settings tests                 | covered  | 외부 object storage provider contract는 provider 확정 후 추가                         |
-| Products And Inventory  | BE-PROD-001, BE-PROD-002, BE-PROD-003, BE-INV-001, BE-INV-002, BE-INV-003, BE-INV-004                | `RestaurantApiApplicationTests.kt` product/availability/inventory tests            | covered  | 복잡한 테이블 조합 최적 배정 성능 테스트는 post-MVP load test 후보                   |
-| Reservation Operations  | BE-RES-001, BE-RES-002, BE-RES-003, BE-RES-004, BE-RES-005, BE-RES-006, BE-RES-007                   | `RestaurantApiApplicationTests.kt` public/business reservation tests               | covered  | 고객 FE full browser E2E는 #155, #48에서 별도 연결                                    |
-| Payments And Refunds    | BE-PAY-001, BE-PAY-002, BE-REF-001                                                                   | `RestaurantApiApplicationTests.kt` payment/refund/webhook tests                    | covered  | 실제 PG sandbox signature와 결제창 redirect는 계약 확정 후 추가                      |
-| Notification            | BE-NOT-001                                                                                           | `RestaurantApiApplicationTests.adminNotificationRetryUsesFakeSenderAndTracksFailureState` | covered  | 실제 SMS/email provider delivery report contract는 provider 확정 후 추가              |
-| CRM And Analytics       | BE-CUST-001, BE-CUST-002, BE-CUST-003, BE-ANL-001, BE-ANL-002                                        | `RestaurantApiApplicationTests.kt` customer/analytics tests                        | covered  | 개인정보 삭제 증적 export는 운영 정책 확정 후 추가                                   |
-| Multi-Tenant AuthZ      | BE-AUTHZ-001                                                                                         | onboarding, reservation, inventory, customer API tests                             | partial  | 모든 business endpoint의 cross-owner matrix는 반복 테스트 helper 도입 후 보강         |
+| Feature                 | Critical TCs                                                                              | Automated Specs                                                                                             | Coverage | Gaps                                                                               |
+| ----------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------- |
+| Foundation/Error        | BE-FND-001, BE-FND-002, BE-FND-003, BE-FND-004                                            | `apps/api/src/test/kotlin/com/example/restaurant/RestaurantApiApplicationTests.kt`                          | covered  | traceId log correlation은 로그 수집 환경 확정 후 관측성 gate에서 보강              |
+| OpenAPI Contract        | BE-CON-001, BE-CON-002                                                                    | `RestaurantApiApplicationTests.openApiDocsAreExposed`, `openApiContractIncludesCoreApiPathsSchemasAndEnums` | covered  | FE generated client compile check는 `packages/api-client` 도입 후 별도 gate로 연결 |
+| Auth And Access Control | BE-AUTH-001, BE-AUTH-002, BE-AUTH-003, BE-AUTH-004, BE-AUTH-005, BE-AUTH-006, BE-AUTH-007 | `RestaurantApiApplicationTests.kt` auth/lookup token tests                                                  | covered  | session expiry/refresh 세부 UX는 FE 연계 TC에서 보강                               |
+| Onboarding And Settings | BE-ONB-001, BE-ONB-002, BE-ONB-003, BE-ONB-004, BE-ONB-005, BE-SET-001, BE-SET-002        | `RestaurantApiApplicationTests.kt` application/file/settings tests                                          | covered  | 외부 object storage provider contract는 provider 확정 후 추가                      |
+| Products And Inventory  | BE-PROD-001, BE-PROD-002, BE-PROD-003, BE-INV-001, BE-INV-002, BE-INV-003, BE-INV-004     | `RestaurantApiApplicationTests.kt` product/availability/inventory tests                                     | covered  | 복잡한 테이블 조합 최적 배정 성능 테스트는 post-MVP load test 후보                 |
+| Reservation Operations  | BE-RES-001, BE-RES-002, BE-RES-003, BE-RES-004, BE-RES-005, BE-RES-006, BE-RES-007        | `RestaurantApiApplicationTests.kt` public/business reservation tests                                        | covered  | 고객 FE full browser E2E는 #155, #48에서 별도 연결                                 |
+| Payments And Refunds    | BE-PAY-001, BE-PAY-002, BE-REF-001                                                        | `RestaurantApiApplicationTests.kt` payment/refund/webhook tests                                             | covered  | 실제 PG sandbox signature와 결제창 redirect는 계약 확정 후 추가                    |
+| Notification            | BE-NOT-001                                                                                | `RestaurantApiApplicationTests.adminNotificationRetryUsesFakeSenderAndTracksFailureState`                   | covered  | 실제 SMS/email provider delivery report contract는 provider 확정 후 추가           |
+| CRM And Analytics       | BE-CUST-001, BE-CUST-002, BE-CUST-003, BE-ANL-001, BE-ANL-002                             | `RestaurantApiApplicationTests.kt` customer/analytics tests                                                 | covered  | 개인정보 삭제 증적 export는 운영 정책 확정 후 추가                                 |
+| Multi-Tenant AuthZ      | BE-AUTHZ-001                                                                              | onboarding, reservation, inventory, customer API tests                                                      | partial  | 모든 business endpoint의 cross-owner matrix는 반복 테스트 helper 도입 후 보강      |
 
 ## Backend Automated Spec Map
 
-| Spec                                                                 | Linked TC IDs                    | Purpose                                                        | Artifacts                                      |
-| -------------------------------------------------------------------- | -------------------------------- | -------------------------------------------------------------- | ---------------------------------------------- |
-| `apps/api/src/test/kotlin/com/example/restaurant/RestaurantApiApplicationTests.kt` | BE-FND-001~004, BE-CON-001~002   | context, Flyway/MySQL, error response, OpenAPI contract smoke  | Gradle test XML/HTML report                    |
-| `apps/api/src/test/kotlin/com/example/restaurant/RestaurantApiApplicationTests.kt` | BE-AUTH-001~007                  | business/admin/public 인증과 token 정책                       | Gradle test XML/HTML report                    |
-| `apps/api/src/test/kotlin/com/example/restaurant/RestaurantApiApplicationTests.kt` | BE-ONB-001~005, BE-SET-001~002   | 입점 신청, 파일 업로드, 매장 설정, 공개 페이지                 | Gradle test XML/HTML report                    |
-| `apps/api/src/test/kotlin/com/example/restaurant/RestaurantApiApplicationTests.kt` | BE-PROD-001~003, BE-INV-001~004  | 예약 상품, 결제/취소 정책, 좌석/타임슬롯/availability          | Gradle test XML/HTML report, Testcontainers DB |
-| `apps/api/src/test/kotlin/com/example/restaurant/RestaurantApiApplicationTests.kt` | BE-RES-001~007                   | 공개 예약, 사업자 예약 운영, 상태 전이, 동시성 재검증          | Gradle test XML/HTML report, Testcontainers DB |
-| `apps/api/src/test/kotlin/com/example/restaurant/RestaurantApiApplicationTests.kt` | BE-PAY-001~002, BE-REF-001, BE-NOT-001 | 결제 시작, PG webhook, 환불, 알림 dispatch/retry        | Gradle test XML/HTML report                    |
-| `apps/api/src/test/kotlin/com/example/restaurant/RestaurantApiApplicationTests.kt` | BE-CUST-001~003, BE-ANL-001~002, BE-AUTHZ-001 | CRM, 개인정보 익명화, 운영 통계/CSV, tenant isolation | Gradle test XML/HTML report                    |
+| Spec                                                                               | Linked TC IDs                                 | Purpose                                                       | Artifacts                                      |
+| ---------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------- | ---------------------------------------------- |
+| `apps/api/src/test/kotlin/com/example/restaurant/RestaurantApiApplicationTests.kt` | BE-FND-001~004, BE-CON-001~002                | context, Flyway/MySQL, error response, OpenAPI contract smoke | Gradle test XML/HTML report                    |
+| `apps/api/src/test/kotlin/com/example/restaurant/RestaurantApiApplicationTests.kt` | BE-AUTH-001~007                               | business/admin/public 인증과 token 정책                       | Gradle test XML/HTML report                    |
+| `apps/api/src/test/kotlin/com/example/restaurant/RestaurantApiApplicationTests.kt` | BE-ONB-001~005, BE-SET-001~002                | 입점 신청, 파일 업로드, 매장 설정, 공개 페이지                | Gradle test XML/HTML report                    |
+| `apps/api/src/test/kotlin/com/example/restaurant/RestaurantApiApplicationTests.kt` | BE-PROD-001~003, BE-INV-001~004               | 예약 상품, 결제/취소 정책, 좌석/타임슬롯/availability         | Gradle test XML/HTML report, Testcontainers DB |
+| `apps/api/src/test/kotlin/com/example/restaurant/RestaurantApiApplicationTests.kt` | BE-RES-001~007                                | 공개 예약, 사업자 예약 운영, 상태 전이, 동시성 재검증         | Gradle test XML/HTML report, Testcontainers DB |
+| `apps/api/src/test/kotlin/com/example/restaurant/RestaurantApiApplicationTests.kt` | BE-PAY-001~002, BE-REF-001, BE-NOT-001        | 결제 시작, PG webhook, 환불, 알림 dispatch/retry              | Gradle test XML/HTML report                    |
+| `apps/api/src/test/kotlin/com/example/restaurant/RestaurantApiApplicationTests.kt` | BE-CUST-001~003, BE-ANL-001~002, BE-AUTHZ-001 | CRM, 개인정보 익명화, 운영 통계/CSV, tenant isolation         | Gradle test XML/HTML report                    |
 
 ## Backend Coverage Gaps
 
-| Gap                         | Risk                                                                      | Follow-up                                                                     |
-| --------------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Gap                         | Risk                                                                              | Follow-up                                                                      |
+| --------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | FE generated client compile | OpenAPI JSON은 검증하지만 생성된 TypeScript client compile까지는 검증하지 않는다. | `packages/api-client`가 도입되면 `openapi -> client generate -> tsc` gate 추가 |
-| 실제 PG/provider sandbox    | Fake gateway/sender 기반이라 외부 provider 계약 drift를 직접 감지하지 않는다. | provider sandbox credential과 callback URL 확정 후 별도 contract suite 추가   |
-| 전체 cross-owner matrix     | 핵심 흐름은 tenant 분리를 검증하지만 모든 business endpoint matrix는 아니다. | 공통 owner/restaurant fixture helper로 endpoint별 negative matrix 추가         |
-| 부하/성능 회귀              | 동시성 correctness는 검증하지만 고부하 latency/throughput은 측정하지 않는다. | post-MVP load test와 DB lock metric 수집으로 분리                              |
+| 실제 PG/provider sandbox    | Fake gateway/sender 기반이라 외부 provider 계약 drift를 직접 감지하지 않는다.     | provider sandbox credential과 callback URL 확정 후 별도 contract suite 추가    |
+| 전체 cross-owner matrix     | 핵심 흐름은 tenant 분리를 검증하지만 모든 business endpoint matrix는 아니다.      | 공통 owner/restaurant fixture helper로 endpoint별 negative matrix 추가         |
+| 부하/성능 회귀              | 동시성 correctness는 검증하지만 고부하 latency/throughput은 측정하지 않는다.      | post-MVP load test와 DB lock metric 수집으로 분리                              |

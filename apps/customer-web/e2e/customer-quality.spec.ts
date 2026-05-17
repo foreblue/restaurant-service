@@ -28,6 +28,10 @@ test("CUST-QA-001 모바일 긴 콘텐츠 예약 플로우에서 가로 overflow
   await page.getByRole("button", { name: "2026-05-18" }).click();
   await page.getByRole("button", { name: /18:00/ }).click();
   await expect(page.getByText("예약 전 확인")).toBeVisible();
+  await test.info().attach("customer-mobile-long-content", {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: "image/png",
+  });
   await expectNoHorizontalOverflow(page);
 });
 
