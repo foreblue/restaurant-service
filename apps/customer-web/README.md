@@ -30,3 +30,12 @@ NEXT_PUBLIC_APP_BASE_URL=http://localhost:3000
 ```
 
 API client와 서버 상태 관리는 후속 사용자 FE Step 0 이슈에서 확장한다.
+
+## API 계층
+
+공개 API 호출은 `src/shared/api/publicApiClient.ts`의 wrapper를 통해 수행한다. OpenAPI generated client를 도입할 때도 동일한 request contract를 맞추면 화면 코드를 바꾸지 않고 연결할 수 있다.
+
+- API base URL: `NEXT_PUBLIC_API_BASE_URL`
+- App base URL: `NEXT_PUBLIC_APP_BASE_URL`
+- 서버 상태 provider: `src/app/providers.tsx`
+- 공통 오류 메시지: `src/shared/api/apiError.ts`
