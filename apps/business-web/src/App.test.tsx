@@ -389,6 +389,9 @@ describe("App routing", () => {
           phoneNumber: "010-1234-5678",
           visitCount: 1,
           noShowCount: 0,
+          vip: false,
+          caution: false,
+          blockedScopeLabel: null,
         },
         customerRequest: null,
         ownerNote: null,
@@ -423,6 +426,9 @@ describe("App routing", () => {
           phoneNumber: "01012345678",
           visitCount: 1,
           noShowCount: 0,
+          vip: false,
+          caution: false,
+          blockedScopeLabel: null,
         },
         customerRequest: null,
         ownerNote: null,
@@ -545,9 +551,51 @@ describe("App routing", () => {
         recentRequests: [],
         allergies: [],
         anniversaries: [],
+        flagStatus: {
+          customerId: 1,
+          vip: false,
+          caution: false,
+          blockedScope: "NONE",
+          blockedScopeLabel: null,
+          updatedAt: null,
+        },
+        notes: [],
         privacyNotice: "전화번호는 고객 상세에서만 표시합니다.",
       }),
       listBusinessCustomerReservations: async () => ({ items: [] }),
+      createBusinessCustomerNote: async () => ({
+        id: 1,
+        customerId: 1,
+        content: "테스트 메모",
+        authorName: "청담 본점 오너",
+        createdAt: "2026-05-15T00:00:00.000Z",
+        updatedAt: null,
+        auditActionLabel: "메모 생성",
+      }),
+      updateBusinessCustomerNote: async () => ({
+        id: 1,
+        customerId: 1,
+        content: "테스트 메모 수정",
+        authorName: "청담 본점 오너",
+        createdAt: "2026-05-15T00:00:00.000Z",
+        updatedAt: "2026-05-15T00:00:00.000Z",
+        auditActionLabel: "메모 수정",
+      }),
+      deleteBusinessCustomerNote: async () => undefined,
+      updateBusinessCustomerFlags: async () => ({
+        customerId: 1,
+        vip: true,
+        caution: false,
+        blockedScope: "NONE",
+        blockedScopeLabel: null,
+        updatedAt: "2026-05-15T00:00:00.000Z",
+      }),
+      requestBusinessCustomerAnonymize: async () => ({
+        accepted: true,
+        customerId: 1,
+        requestedAt: "2026-05-15T00:00:00.000Z",
+        notice: "개인정보 삭제/익명화 요청이 접수되었습니다.",
+      }),
       listBusinessAuditLogs: async () => ({ items: [] }),
     };
     window.history.pushState({}, "", "/onboarding");
@@ -953,7 +1001,7 @@ describe("App routing", () => {
     expect(screen.getByText("RSV-7001")).toBeInTheDocument();
     expect(await screen.findByText("010-1234-5678")).toBeInTheDocument();
     expect(await screen.findByText("창가 좌석 요청, 알레르기 확인 필요")).toBeInTheDocument();
-    expect(screen.getByText("VIP/주의 고객 표시는 CRM 단계에서 연결됩니다.")).toBeInTheDocument();
+    expect(screen.getAllByText("VIP").length).toBeGreaterThan(0);
     expect(screen.getAllByText("변경, 취소, 방문 완료, 노쇼 처리 가능").length).toBeGreaterThan(0);
     expect(
       screen.getByText(
@@ -1227,11 +1275,55 @@ describe("App routing", () => {
     expect(screen.getByText("목록 연락처 마스킹")).toBeInTheDocument();
     expect(screen.getAllByText(/갑각류/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/결혼기념일/).length).toBeGreaterThan(0);
+    fireEvent.click(await screen.findByRole("button", { name: "김예약 고객 상세 보기" }));
     expect(
       await screen.findByText(
         "전화번호는 고객 상세에서만 표시하며, 고객 응대와 예약 확인 목적 외 사용하지 않습니다.",
       ),
     ).toBeInTheDocument();
+    expect(screen.getByText("VIP")).toBeInTheDocument();
+    expect(screen.getByText("차단 없음")).toBeInTheDocument();
+    expect(screen.getByText("민감정보 입력 주의")).toBeInTheDocument();
+    expect(screen.getByText("감사 로그 대상")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("메모 추가"), {
+      target: { value: "와인 페어링 선호" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "메모 추가" }));
+
+    expect(await screen.findByText("고객 메모가 추가되었습니다.")).toBeInTheDocument();
+    expect(await screen.findByText("와인 페어링 선호")).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "수정" })[0]!);
+    fireEvent.change(screen.getByLabelText("메모 수정"), {
+      target: { value: "와인 페어링 선호, 창가 좌석" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "메모 수정" }));
+
+    expect(await screen.findByText("고객 메모가 수정되었습니다.")).toBeInTheDocument();
+    expect(await screen.findByText("와인 페어링 선호, 창가 좌석")).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "삭제" })[0]!);
+    expect(await screen.findByText("고객 메모가 삭제되었습니다.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("주의 고객 표시"));
+    expect(await screen.findByText("고객 표시가 저장되었습니다.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("요청 사유"), {
+      target: { value: "고객 요청에 따른 삭제" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "삭제/익명화 요청" }));
+    fireEvent.click(await screen.findByRole("button", { name: "요청 접수" }));
+
+    expect(await screen.findByText("개인정보 처리 요청이 접수되었습니다.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("메모 추가"), {
+      target: { value: "다른 고객에게 넘어가면 초기화" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "오민준 고객 상세 보기" }));
+
+    expect(await screen.findByText("매장 검토 후 예약 확정")).toBeInTheDocument();
+    expect(screen.getByLabelText("메모 추가")).toHaveValue("");
 
     fireEvent.change(screen.getByLabelText("필터"), {
       target: { value: "HAS_NO_SHOW" },

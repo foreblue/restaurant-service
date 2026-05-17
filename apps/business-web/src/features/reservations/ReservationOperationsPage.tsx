@@ -1372,7 +1372,17 @@ function ReservationDetailPanel({
               value={`방문 ${detail.customer.visitCount}회 · 노쇼 ${detail.customer.noShowCount}회`}
             />
           </dl>
-          <Alert>VIP/주의 고객 표시는 CRM 단계에서 연결됩니다.</Alert>
+          {detail.customer.vip || detail.customer.caution || detail.customer.blockedScopeLabel ? (
+            <div className="flex flex-wrap gap-1.5">
+              {detail.customer.vip ? <Flag label="VIP" /> : null}
+              {detail.customer.caution ? <Flag label="주의 고객" tone="danger" /> : null}
+              {detail.customer.blockedScopeLabel ? (
+                <Flag label={detail.customer.blockedScopeLabel} tone="danger" />
+              ) : null}
+            </div>
+          ) : (
+            <Alert>CRM에 등록된 VIP/주의 고객 표시가 없습니다.</Alert>
+          )}
         </section>
 
         <section className="grid gap-2 border-t border-border pt-4">
