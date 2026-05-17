@@ -157,6 +157,26 @@ describe("ReservationDetailPageContent", () => {
     expect(screen.getByText(/온라인 예약 변경은 지원하지 않습니다/)).toBeInTheDocument();
   });
 
+  it("shows optional crm fields on reservation detail", async () => {
+    const client = createMockClient({
+      ...reservationDetail,
+      allergyNote: "견과류",
+      anniversaryType: "BIRTHDAY",
+      anniversaryDate: "05-17",
+      requestTemplateValues: ["조용한 좌석 선호", "기념일 방문"],
+    });
+
+    render(
+      <AppProviders apiClient={client}>
+        <ReservationDetailPageContent lookupToken="lookup-token" reservationId={300} />
+      </AppProviders>,
+    );
+
+    expect(await screen.findByText("견과류")).toBeInTheDocument();
+    expect(screen.getByText("생일 · 05-17")).toBeInTheDocument();
+    expect(screen.getByText("조용한 좌석 선호, 기념일 방문")).toBeInTheDocument();
+  });
+
   it.each([
     [
       "PENDING",

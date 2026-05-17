@@ -368,6 +368,7 @@ function RefundPreviewBlock({
 
 function ReservationDetailCard({ reservation }: { reservation: PublicReservationDetailResponse }) {
   const statusView = getReservationStatusView(reservation.status);
+  const anniversary = formatAnniversary(reservation);
 
   return (
     <section className="grid gap-4 rounded-lg border bg-white p-4 shadow-sm">
@@ -387,6 +388,13 @@ function ReservationDetailCard({ reservation }: { reservation: PublicReservation
         <DetailRow label="예약자" value={reservation.customerName} />
         <DetailRow label="연락처" value={`끝자리 ${reservation.customerPhoneLast4}`} />
         <DetailRow label="요청사항" value={reservation.customerRequest ?? "등록된 요청사항 없음"} />
+        {reservation.requestTemplateValues.length > 0 ? (
+          <DetailRow label="요청 옵션" value={reservation.requestTemplateValues.join(", ")} />
+        ) : null}
+        {reservation.allergyNote ? (
+          <DetailRow label="알레르기" value={reservation.allergyNote} />
+        ) : null}
+        {anniversary ? <DetailRow label="기념일" value={anniversary} /> : null}
         <DetailRow label="취소 가능 기한" value={formatDateTime(reservation.cancelDeadline)} />
         {reservation.cancelledAt ? (
           <DetailRow label="취소 완료 시각" value={formatDateTime(reservation.cancelledAt)} />
@@ -734,6 +742,26 @@ function formatMoney(amount: number, currency: string) {
   } catch {
     return `${amount.toLocaleString("ko-KR")} ${currency}`;
   }
+}
+
+function formatAnniversary(reservation: PublicReservationDetailResponse) {
+  if (!reservation.anniversaryType && !reservation.anniversaryDate) {
+    return null;
+  }
+
+  return [anniversaryTypeLabel(reservation.anniversaryType), reservation.anniversaryDate]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function anniversaryTypeLabel(type: string | null) {
+  const labels: Record<string, string> = {
+    BIRTHDAY: "생일",
+    OTHER: "기타 기념일",
+    WEDDING_ANNIVERSARY: "결혼기념일",
+  };
+
+  return type ? (labels[type] ?? type) : null;
 }
 
 function formatDateTime(value: string) {

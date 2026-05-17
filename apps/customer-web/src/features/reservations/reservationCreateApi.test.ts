@@ -19,12 +19,16 @@ const product: PublicReservationProduct = {
 };
 
 const customerInfo: ReservationCustomerFormValues = {
+  allergyNote: "견과류",
+  anniversaryDate: "05-17",
+  anniversaryType: "BIRTHDAY",
   customerName: "홍길동",
   email: null,
   marketingConsent: false,
   phoneNumber: "01012345678",
   privacyConsent: true,
   requestNotes: "창가 좌석 요청",
+  requestTemplateValues: ["조용한 좌석 선호"],
 };
 
 describe("reservationCreateApi", () => {
@@ -46,6 +50,9 @@ describe("reservationCreateApi", () => {
         },
       }),
     ).toEqual({
+      allergyNote: "견과류",
+      anniversaryDate: "05-17",
+      anniversaryType: "BIRTHDAY",
       customerEmail: null,
       customerName: "홍길동",
       customerPhone: "01012345678",
@@ -54,6 +61,7 @@ describe("reservationCreateApi", () => {
       marketingOptIn: false,
       partySize: 2,
       productId: 10,
+      requestTemplateValues: ["조용한 좌석 선호"],
       restaurantId: 1,
       startTime: "18:00",
       visitDate: "2026-05-18",

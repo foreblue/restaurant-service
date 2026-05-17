@@ -48,6 +48,10 @@ export function buildReservationCreateRequest({
     customerPhone: customerInfo.phoneNumber,
     customerRequest: customerInfo.requestNotes,
     customerEmail: customerInfo.email,
+    allergyNote: customerInfo.allergyNote,
+    anniversaryType: customerInfo.anniversaryType,
+    anniversaryDate: customerInfo.anniversaryDate,
+    requestTemplateValues: customerInfo.requestTemplateValues,
     marketingOptIn: customerInfo.marketingConsent,
     idempotencyKey,
   };
