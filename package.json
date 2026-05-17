@@ -4,9 +4,17 @@
   "packageManager": "pnpm@11.1.2",
   "scripts": {
     "dev": "pnpm --filter @restaurant/business-web dev",
+    "dev:business": "pnpm --filter @restaurant/business-web dev",
+    "dev:customer": "pnpm --filter @restaurant/customer-web dev",
     "build": "pnpm --filter @restaurant/business-web build",
+    "build:business": "pnpm --filter @restaurant/business-web build",
+    "build:customer": "pnpm --filter @restaurant/customer-web build",
     "test": "pnpm --filter @restaurant/business-web test",
+    "test:business": "pnpm --filter @restaurant/business-web test",
+    "test:customer": "pnpm --filter @restaurant/customer-web test",
     "lint": "pnpm --filter @restaurant/business-web lint",
+    "lint:business": "pnpm --filter @restaurant/business-web lint",
+    "lint:customer": "pnpm --filter @restaurant/customer-web lint",
     "format": "pnpm --filter @restaurant/business-web format"
   }
 }
