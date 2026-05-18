@@ -33,11 +33,20 @@ class InventoryService(
     private val objectMapper = jacksonObjectMapper()
 
     @Transactional(readOnly = true)
-    fun listTables(principal: BusinessPrincipal): List<RestaurantTableResponse> {
+    fun listTables(principal: BusinessPrincipal): RestaurantTableListResponse {
         val restaurant = ownedRestaurant(principal)
-        return restaurantTableRepository
+        val tables = restaurantTableRepository
             .findByRestaurantIdOrderBySortOrderAscIdAsc(restaurant.id)
             .map { it.toResponse() }
+        return RestaurantTableListResponse(
+            summary = RestaurantTableSummaryResponse(
+                totalCount = tables.size,
+                activeCount = tables.count { it.isActive },
+                totalCapacity = tables.filter { it.isActive }.sumOf { it.maxPartySize },
+                roomCount = tables.count { it.isActive && it.seatType == SeatType.ROOM },
+            ),
+            items = tables,
+        )
     }
 
     @Transactional
@@ -258,6 +267,7 @@ class InventoryService(
         val normalizedMaxPartySize = maxPartySize ?: existing?.maxPartySize ?: normalizedMinPartySize
         validatePartyRange(normalizedMinPartySize, normalizedMaxPartySize)
         val normalizedInternalNote = internalNote?.trim()?.takeIf { it.isNotBlank() } ?: existing?.internalNote
+        val normalizedActive = active ?: isActive ?: existing?.active ?: true
         if ((normalizedInternalNote?.length ?: 0) > 1000) {
             throw ApiException(ErrorCode.VALIDATION_ERROR, "내부 메모는 1000자 이하여야 합니다.")
         }
@@ -267,7 +277,7 @@ class InventoryService(
             seatTypeLabel = normalizedSeatTypeLabel,
             minPartySize = normalizedMinPartySize,
             maxPartySize = normalizedMaxPartySize,
-            active = active ?: existing?.active ?: true,
+            active = normalizedActive,
             sortOrder = sortOrder ?: existing?.sortOrder ?: 0,
             internalNote = normalizedInternalNote,
         )
@@ -399,6 +409,10 @@ class InventoryService(
             minPartySize = minPartySize,
             maxPartySize = maxPartySize,
             active = active,
+            isActive = active,
+            hasReservations = false,
+            combinationPolicy = "NONE",
+            combinationPolicyLabel = "단독 사용",
             sortOrder = sortOrder,
             internalNote = internalNote,
             createdAt = createdAt,
@@ -420,18 +434,62 @@ class InventoryService(
 
     private fun ReservationProductSeatRuleEntity.toResponse(
         product: ReservationProductEntity = reservationProduct,
-    ): ReservationProductSeatRuleResponse =
-        ReservationProductSeatRuleResponse(
+    ): ReservationProductSeatRuleResponse {
+        val seatTypes = allowedSeatTypes()
+        val tableIds = allowedTableIds()
+        val allowedTables = if (tableIds.isEmpty()) {
+            emptyList()
+        } else {
+            restaurantTableRepository.findByRestaurantIdAndIdIn(restaurant.id, tableIds)
+                .sortedBy { tableIds.indexOf(it.id) }
+        }
+        val duration = defaultDurationMinutes ?: DEFAULT_DURATION_MINUTES
+        val interval = slotIntervalMinutes ?: DEFAULT_SLOT_INTERVAL_MINUTES
+        return ReservationProductSeatRuleResponse(
             productId = product.id,
             restaurantId = restaurant.id,
-            allowedSeatTypes = allowedSeatTypes(),
-            allowedTableIds = allowedTableIds(),
-            defaultDurationMinutes = defaultDurationMinutes,
-            slotIntervalMinutes = slotIntervalMinutes,
+            allowedSeatTypes = seatTypes,
+            allowedSeatTypeLabels = seatTypes.map { it.defaultLabel() },
+            allowedTableIds = tableIds,
+            allowedTables = allowedTables.map {
+                ReservationProductSeatRuleTableResponse(
+                    id = it.id,
+                    name = it.name,
+                    seatTypeLabel = it.seatTypeLabel,
+                    maxPartySize = it.maxPartySize,
+                    combinationPolicyLabel = "단독 사용",
+                )
+            },
+            defaultDurationMinutes = duration,
+            slotIntervalMinutes = interval,
             inventoryPolicy = inventoryPolicy,
+            tableCombinationSummary = tableCombinationSummary(allowedTables),
+            summary = seatRuleSummary(seatTypes, allowedTables, duration, interval),
             createdAt = createdAt,
             updatedAt = updatedAt,
         )
+    }
+
+    private fun tableCombinationSummary(tables: List<RestaurantTableEntity>): String {
+        if (tables.isEmpty()) {
+            return "연결된 테이블이 없습니다."
+        }
+        val maxSingleTableSize = tables.maxOf { it.maxPartySize }
+        val totalCapacity = tables.sumOf { it.maxPartySize }
+        return "단일 테이블 최대 ${maxSingleTableSize}명 · 연결 수용 합계 ${totalCapacity}명"
+    }
+
+    private fun seatRuleSummary(
+        seatTypes: List<SeatType>,
+        tables: List<RestaurantTableEntity>,
+        duration: Int,
+        interval: Int,
+    ): String {
+        val seatTypeLabel = seatTypes.takeIf { it.isNotEmpty() }
+            ?.joinToString(", ") { it.defaultLabel() }
+            ?: "전체 좌석"
+        return "${seatTypeLabel} · 테이블 ${tables.size}개 · ${duration}분 이용 · ${interval}분 간격"
+    }
 
     private fun defaultSeatRule(product: ReservationProductEntity): ReservationProductSeatRuleEntity =
         ReservationProductSeatRuleEntity(

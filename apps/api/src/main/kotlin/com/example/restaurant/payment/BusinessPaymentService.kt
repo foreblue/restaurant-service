@@ -42,6 +42,7 @@ class BusinessPaymentService(
             .filter { criteria.searchText == null || it.matches(criteria.searchText) }
             .toList()
         return BusinessPaymentListResponse(
+            summary = filtered.toPaymentSummary(),
             totalCount = filtered.size,
             items = filtered.take(criteria.limit).map { it.toListItem() },
         )
@@ -65,6 +66,7 @@ class BusinessPaymentService(
             .filter { criteria.searchText == null || it.matches(criteria.searchText) }
             .toList()
         return BusinessRefundListResponse(
+            summary = filtered.toRefundSummary(),
             totalCount = filtered.size,
             items = filtered.take(criteria.limit).map { it.toListItem() },
         )
@@ -177,7 +179,9 @@ class BusinessPaymentService(
 
     private fun PaymentEntity.toListItem(): BusinessPaymentListItemResponse =
         BusinessPaymentListItemResponse(
+            id = id,
             paymentId = id,
+            paymentNumber = pgPaymentId ?: "PAY-${id}",
             reservationId = reservation.id,
             reservationNumber = reservation.reservationNumber,
             visitDate = reservation.visitDate,
@@ -189,6 +193,8 @@ class BusinessPaymentService(
             customerPhoneMasked = customer.phoneNumber.maskedPhone(),
             paymentType = paymentType,
             status = status,
+            statusLabel = status.label(),
+            statusTone = status.tone(),
             amount = amount,
             refundedAmount = refundedAmount,
             currency = currency,
@@ -198,13 +204,18 @@ class BusinessPaymentService(
             failureMessage = failureMessage,
             paidAt = paidAt,
             expiresAt = expiresAt,
+            dueAt = expiresAt,
+            cardGuaranteeHeld = isCardGuaranteeHeld(),
+            actionRequired = status.requiresBusinessAction(),
             createdAt = createdAt,
             updatedAt = updatedAt,
         )
 
     private fun RefundEntity.toListItem(): BusinessRefundListItemResponse =
         BusinessRefundListItemResponse(
+            id = id,
             refundId = id,
+            refundNumber = pgRefundId ?: "REF-${id}",
             paymentId = payment.id,
             reservationId = reservation.id,
             reservationNumber = reservation.reservationNumber,
@@ -216,6 +227,8 @@ class BusinessPaymentService(
             customerName = reservation.customer.name,
             customerPhoneMasked = reservation.customer.phoneNumber.maskedPhone(),
             status = status,
+            statusLabel = status.label(),
+            statusTone = status.tone(),
             refundAmount = refundAmount,
             nonRefundableAmount = nonRefundableAmount,
             currency = payment.currency,
@@ -226,9 +239,105 @@ class BusinessPaymentService(
             failureMessage = failureMessage,
             requestedAt = requestedAt,
             succeededAt = succeededAt,
+            completedAt = succeededAt,
+            actionRequired = status == RefundStatus.FAILED,
             createdAt = createdAt,
             updatedAt = updatedAt,
         )
+
+    private fun List<PaymentEntity>.toPaymentSummary(): BusinessPaymentListSummaryResponse =
+        BusinessPaymentListSummaryResponse(
+            totalCount = size,
+            paidAmount = filter { it.status in paidStatuses() }.sumOf { it.amount },
+            cardGuaranteeCount = count { it.isCardGuaranteeHeld() },
+            actionRequiredCount = count { it.status.requiresBusinessAction() },
+        )
+
+    private fun List<RefundEntity>.toRefundSummary(): BusinessRefundListSummaryResponse =
+        BusinessRefundListSummaryResponse(
+            totalCount = size,
+            refundAmount = filter { it.status == RefundStatus.SUCCEEDED }.sumOf { it.refundAmount },
+            failedCount = count { it.status == RefundStatus.FAILED },
+            actionRequiredCount = count { it.status == RefundStatus.FAILED },
+        )
+
+    private fun PaymentEntity.isCardGuaranteeHeld(): Boolean =
+        paymentType == PaymentType.CARD_GUARANTEE ||
+            status in listOf(
+                PaymentStatus.GUARANTEE_REGISTERED,
+                PaymentStatus.GUARANTEE_CHARGE_PENDING,
+                PaymentStatus.GUARANTEE_CHARGED,
+                PaymentStatus.GUARANTEE_CHARGE_FAILED,
+            )
+
+    private fun paidStatuses(): Set<PaymentStatus> =
+        setOf(
+            PaymentStatus.PAID,
+            PaymentStatus.PARTIALLY_REFUNDED,
+            PaymentStatus.REFUNDED,
+            PaymentStatus.GUARANTEE_CHARGED,
+        )
+
+    private fun PaymentStatus.label(): String =
+        when (this) {
+            PaymentStatus.NOT_REQUIRED -> "결제 불필요"
+            PaymentStatus.PAY_ON_SITE -> "현장 결제"
+            PaymentStatus.REQUIRES_PAYMENT -> "결제 필요"
+            PaymentStatus.PENDING -> "결제 대기"
+            PaymentStatus.PAID -> "결제 완료"
+            PaymentStatus.FAILED -> "결제 실패"
+            PaymentStatus.CANCELLED -> "결제 취소"
+            PaymentStatus.EXPIRED -> "만료"
+            PaymentStatus.PARTIALLY_REFUNDED -> "부분 환불"
+            PaymentStatus.REFUNDED -> "환불 완료"
+            PaymentStatus.REFUND_FAILED -> "환불 실패"
+            PaymentStatus.GUARANTEE_REGISTERED -> "카드 보증 등록"
+            PaymentStatus.GUARANTEE_CHARGE_PENDING -> "보증 청구 대기"
+            PaymentStatus.GUARANTEE_CHARGED -> "보증 청구 완료"
+            PaymentStatus.GUARANTEE_CHARGE_FAILED -> "보증 청구 실패"
+        }
+
+    private fun PaymentStatus.tone(): String =
+        when (this) {
+            PaymentStatus.PAID,
+            PaymentStatus.PAY_ON_SITE,
+            PaymentStatus.NOT_REQUIRED,
+            PaymentStatus.GUARANTEE_REGISTERED,
+            PaymentStatus.GUARANTEE_CHARGED,
+            -> "success"
+            PaymentStatus.REQUIRES_PAYMENT,
+            PaymentStatus.PENDING,
+            PaymentStatus.GUARANTEE_CHARGE_PENDING,
+            -> "warning"
+            PaymentStatus.FAILED,
+            PaymentStatus.REFUND_FAILED,
+            PaymentStatus.GUARANTEE_CHARGE_FAILED,
+            -> "danger"
+            PaymentStatus.CANCELLED,
+            PaymentStatus.EXPIRED,
+            PaymentStatus.PARTIALLY_REFUNDED,
+            PaymentStatus.REFUNDED,
+            -> "muted"
+        }
+
+    private fun RefundStatus.label(): String =
+        when (this) {
+            RefundStatus.REQUESTED -> "환불 요청"
+            RefundStatus.PENDING -> "환불 처리중"
+            RefundStatus.SUCCEEDED -> "환불 완료"
+            RefundStatus.FAILED -> "환불 실패"
+            RefundStatus.CANCELLED -> "환불 취소"
+        }
+
+    private fun RefundStatus.tone(): String =
+        when (this) {
+            RefundStatus.SUCCEEDED -> "success"
+            RefundStatus.REQUESTED,
+            RefundStatus.PENDING,
+            -> "warning"
+            RefundStatus.FAILED -> "danger"
+            RefundStatus.CANCELLED -> "muted"
+        }
 
     private fun String.maskedPhone(): String =
         when {

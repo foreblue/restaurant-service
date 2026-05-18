@@ -9,18 +9,34 @@ export function HomePageContent() {
       eyebrow="고객 예약"
       title="식당 예약"
     >
-      <section className="grid gap-3 rounded-lg border bg-[var(--surface)] p-5 shadow-sm">
-        <h2 className="text-base font-semibold text-slate-950">예약 확인</h2>
-        <p className="text-sm leading-6 text-slate-600">
-          예약 완료 후 받은 예약번호와 휴대폰 번호로 상세 정보를 다시 조회합니다.
-        </p>
-        <Link
-          className="inline-flex min-h-11 items-center justify-center rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2"
-          href="/reservations"
-        >
-          예약 조회
-        </Link>
-      </section>
+      <div className="grid gap-3">
+        <section className="grid gap-3 rounded-lg border bg-[var(--surface)] p-5 shadow-sm">
+          <h2 className="text-base font-semibold text-slate-950">예약 신청</h2>
+          <p className="text-sm leading-6 text-slate-600">
+            매장이 공유한 예약 경로로 이동해 상품, 인원, 날짜와 시간을 선택합니다.
+          </p>
+          <Link
+            className="inline-flex min-h-11 items-center justify-center rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2"
+            href="/reserve"
+            prefetch={false}
+          >
+            예약 신청
+          </Link>
+        </section>
+
+        <section className="grid gap-3 rounded-lg border bg-[var(--surface)] p-5 shadow-sm">
+          <h2 className="text-base font-semibold text-slate-950">예약 확인</h2>
+          <p className="text-sm leading-6 text-slate-600">
+            예약 완료 후 받은 예약번호와 휴대폰 번호로 상세 정보를 다시 조회합니다.
+          </p>
+          <Link
+            className="inline-flex min-h-11 items-center justify-center rounded-md border border-teal-700 bg-white px-4 py-2 text-sm font-semibold text-teal-800 transition hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2"
+            href="/reservations"
+          >
+            예약 조회
+          </Link>
+        </section>
+      </div>
     </ReservationPageShell>
   );
 }

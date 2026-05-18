@@ -26,15 +26,27 @@ data class BusinessTimeSlotStatusChangeRequest(
 
     val startTime: String? = null,
 
+    val seatType: String? = null,
+
     @field:Size(max = 255)
     val reason: String? = null,
 )
 
 data class BusinessTimeSlotListResponse(
     val restaurantId: Long,
-    val productId: Long,
+    val productId: Long?,
     val date: LocalDate,
+    val summary: BusinessTimeSlotSummaryResponse,
+    val items: List<BusinessTimeSlotResponse>,
     val slots: List<BusinessTimeSlotResponse>,
+)
+
+data class BusinessTimeSlotSummaryResponse(
+    val totalCount: Int,
+    val availableCount: Int,
+    val closedCount: Int,
+    val tempClosedCount: Int,
+    val duplicateGuardedCount: Int,
 )
 
 data class BusinessTimeSlotGenerationResponse(
@@ -49,15 +61,27 @@ data class BusinessTimeSlotGenerationResponse(
 )
 
 data class BusinessTimeSlotResponse(
-    val id: Long,
+    val id: String,
+    val timeSlotId: Long,
     val restaurantId: Long,
     val productId: Long,
+    val productName: String,
     val date: LocalDate,
     val startTime: LocalTime,
     val endTime: LocalTime,
+    val seatType: String,
+    val seatTypeLabel: String,
     val capacity: Int,
-    val status: TimeSlotStatus,
+    val reservedCount: Int,
+    val availableCount: Int,
+    val status: String,
+    val rawStatus: TimeSlotStatus,
+    val statusLabel: String,
+    val statusTone: String,
     val available: Boolean,
+    val duplicateGuarded: Boolean,
+    val customerAvailabilityAffected: Boolean,
+    val lastUpdatedAt: Instant?,
     val createdAt: Instant?,
     val updatedAt: Instant?,
 )

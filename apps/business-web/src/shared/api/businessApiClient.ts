@@ -1427,51 +1427,116 @@ class HttpBusinessApiClient implements BusinessApiClient {
     );
   }
 
-  listBusinessTables() {
-    return this.request<BusinessTableListResponse>("/api/business/tables");
+  async listBusinessTables() {
+    const response = await this.request<unknown>("/api/business/tables");
+
+    return normalizeBusinessTableListResponse(response);
   }
 
-  createBusinessTable(request: BusinessTableSaveRequest) {
-    return this.request<BusinessTableResponse>("/api/business/tables", {
+  async createBusinessTable(request: BusinessTableSaveRequest) {
+    const response = await this.request<unknown>("/api/business/tables", {
       method: "POST",
-      body: request,
+      body: toBusinessTableHttpRequest(request),
     });
+
+    return normalizeBusinessTableResponse(response);
   }
 
-  updateBusinessTable(tableId: number, request: BusinessTableSaveRequest) {
-    return this.request<BusinessTableResponse>(`/api/business/tables/${tableId}`, {
+  async updateBusinessTable(tableId: number, request: BusinessTableSaveRequest) {
+    const response = await this.request<unknown>(`/api/business/tables/${tableId}`, {
       method: "PUT",
-      body: request,
+      body: toBusinessTableHttpRequest(request),
     });
+
+    return normalizeBusinessTableResponse(response);
   }
 
-  saveReservationProductSeatRules(productId: number, request: ReservationProductSeatRulesRequest) {
-    return this.request<ReservationProductSeatRulesResponse>(
+  async saveReservationProductSeatRules(
+    productId: number,
+    request: ReservationProductSeatRulesRequest,
+  ) {
+    const response = await this.request<unknown>(
       `/api/business/reservation-products/${productId}/seat-rules`,
       {
         method: "POST",
         body: request,
       },
     );
+
+    return normalizeReservationProductSeatRulesApiResponse(productId, request, response);
   }
 
-  listBusinessTimeSlots(query: BusinessTimeSlotListQuery) {
-    return this.request<BusinessTimeSlotListResponse>(
-      `/api/business/time-slots${queryString(query)}`,
+  async listBusinessTimeSlots(query: BusinessTimeSlotListQuery) {
+    const date = normalizeBusinessTimeSlotDate(query.date);
+
+    if (!query.productId) {
+      const products = await this.request<ReservationProductResponse[]>(
+        "/api/business/reservation-products",
+      );
+      const activeProducts = products.filter((product) => product.status === "ACTIVE");
+      const responses = await Promise.all(
+        activeProducts.map(async (product) => {
+          const response = await this.request<unknown>(
+            `/api/business/time-slots${queryString({
+              date,
+              productId: product.id,
+              seatType: query.seatType,
+            })}`,
+          );
+
+          return normalizeBusinessTimeSlotListResponse(response, {
+            date,
+            productId: product.id,
+            productName: product.name,
+            seatType: query.seatType ?? null,
+          });
+        }),
+      );
+      const items = responses.flatMap((response) => response.items);
+
+      return toBusinessTimeSlotListResponse(date, sortBusinessTimeSlots(items));
+    }
+
+    const response = await this.request<unknown>(
+      `/api/business/time-slots${queryString({
+        ...query,
+        date,
+      })}`,
     );
-  }
 
-  closeBusinessTimeSlot(request: BusinessTimeSlotActionRequest) {
-    return this.request<BusinessTimeSlotResponse>("/api/business/time-slots/close", {
-      method: "POST",
-      body: request,
+    return normalizeBusinessTimeSlotListResponse(response, {
+      date,
+      productId: query.productId,
+      productName: null,
+      seatType: query.seatType ?? null,
     });
   }
 
-  reopenBusinessTimeSlot(request: BusinessTimeSlotActionRequest) {
-    return this.request<BusinessTimeSlotResponse>("/api/business/time-slots/reopen", {
+  async closeBusinessTimeSlot(request: BusinessTimeSlotActionRequest) {
+    const response = await this.request<unknown>("/api/business/time-slots/close", {
       method: "POST",
       body: request,
+    });
+
+    return normalizeBusinessTimeSlotResponse(response, {
+      date: normalizeBusinessTimeSlotDate(request.date),
+      productId: request.productId ?? 0,
+      productName: null,
+      seatType: request.seatType ?? null,
+    });
+  }
+
+  async reopenBusinessTimeSlot(request: BusinessTimeSlotActionRequest) {
+    const response = await this.request<unknown>("/api/business/time-slots/reopen", {
+      method: "POST",
+      body: request,
+    });
+
+    return normalizeBusinessTimeSlotResponse(response, {
+      date: normalizeBusinessTimeSlotDate(request.date),
+      productId: request.productId ?? 0,
+      productName: null,
+      seatType: request.seatType ?? null,
     });
   }
 
@@ -1481,12 +1546,16 @@ class HttpBusinessApiClient implements BusinessApiClient {
     );
   }
 
-  listBusinessPayments(query: BusinessPaymentListQuery) {
-    return this.request<BusinessPaymentListResponse>(`/api/business/payments${queryString(query)}`);
+  async listBusinessPayments(query: BusinessPaymentListQuery) {
+    const response = await this.request<unknown>(`/api/business/payments${queryString(query)}`);
+
+    return normalizeBusinessPaymentListResponse(response);
   }
 
-  listBusinessRefunds(query: BusinessRefundListQuery) {
-    return this.request<BusinessRefundListResponse>(`/api/business/refunds${queryString(query)}`);
+  async listBusinessRefunds(query: BusinessRefundListQuery) {
+    const response = await this.request<unknown>(`/api/business/refunds${queryString(query)}`);
+
+    return normalizeBusinessRefundListResponse(response);
   }
 
   getBusinessAnalyticsSummary(restaurantId: number, query: BusinessAnalyticsPeriodQuery) {
@@ -1517,37 +1586,42 @@ class HttpBusinessApiClient implements BusinessApiClient {
     );
   }
 
-  listBusinessCustomers(query: BusinessCustomerListQuery) {
-    return this.request<BusinessCustomerListResponse>(
-      `/api/business/customers${queryString(query)}`,
-    );
+  async listBusinessCustomers(query: BusinessCustomerListQuery) {
+    const response = await this.request<unknown>("/api/business/customers");
+
+    return normalizeBusinessCustomerListResponse(response, query);
   }
 
-  getBusinessCustomer(customerId: number) {
-    return this.request<BusinessCustomerDetailResponse>(`/api/business/customers/${customerId}`);
+  async getBusinessCustomer(customerId: number) {
+    const response = await this.request<unknown>(`/api/business/customers/${customerId}`);
+
+    return normalizeBusinessCustomerDetailResponse(response);
   }
 
-  listBusinessCustomerReservations(customerId: number) {
-    return this.request<BusinessCustomerReservationHistoryResponse>(
+  async listBusinessCustomerReservations(customerId: number) {
+    const response = await this.request<unknown>(
       `/api/business/customers/${customerId}/reservations`,
     );
+
+    return normalizeBusinessCustomerReservationHistoryResponse(response);
   }
 
-  createBusinessCustomerNote(customerId: number, request: BusinessCustomerNoteSaveRequest) {
-    return this.request<BusinessCustomerNoteResponse>(
-      `/api/business/customers/${customerId}/notes`,
-      {
-        method: "POST",
-        body: request,
-      },
-    );
+  async createBusinessCustomerNote(customerId: number, request: BusinessCustomerNoteSaveRequest) {
+    const response = await this.request<unknown>(`/api/business/customers/${customerId}/notes`, {
+      method: "POST",
+      body: request,
+    });
+
+    return normalizeBusinessCustomerNoteResponse(response);
   }
 
-  updateBusinessCustomerNote(noteId: number, request: BusinessCustomerNoteSaveRequest) {
-    return this.request<BusinessCustomerNoteResponse>(`/api/business/customer-notes/${noteId}`, {
+  async updateBusinessCustomerNote(noteId: number, request: BusinessCustomerNoteSaveRequest) {
+    const response = await this.request<unknown>(`/api/business/customer-notes/${noteId}`, {
       method: "PUT",
       body: request,
     });
+
+    return normalizeBusinessCustomerNoteResponse(response);
   }
 
   async deleteBusinessCustomerNote(noteId: number) {
@@ -1556,30 +1630,39 @@ class HttpBusinessApiClient implements BusinessApiClient {
     });
   }
 
-  updateBusinessCustomerFlags(customerId: number, request: BusinessCustomerFlagsSaveRequest) {
-    return this.request<BusinessCustomerFlagStatusResponse>(
-      `/api/business/customers/${customerId}/flags`,
-      {
-        method: "POST",
-        body: request,
-      },
-    );
+  async updateBusinessCustomerFlags(customerId: number, request: BusinessCustomerFlagsSaveRequest) {
+    const response = await this.request<unknown>(`/api/business/customers/${customerId}/flags`, {
+      method: "POST",
+      body: request,
+    });
+
+    return normalizeBusinessCustomerFlagStatusResponse(response, customerId);
   }
 
-  requestBusinessCustomerAnonymize(customerId: number, request: BusinessCustomerAnonymizeRequest) {
-    return this.request<BusinessCustomerAnonymizeResponse>(
+  async requestBusinessCustomerAnonymize(
+    customerId: number,
+    request: BusinessCustomerAnonymizeRequest,
+  ) {
+    const response = await this.request<unknown>(
       `/api/business/customers/${customerId}/anonymize`,
       {
         method: "POST",
-        body: request,
+        body: {
+          reason: request.reason,
+          confirmIrreversible: request.confirm,
+        },
       },
     );
+
+    return normalizeBusinessCustomerAnonymizeResponse(response, customerId);
   }
 
-  listBusinessCustomerDuplicateCandidates() {
-    return this.request<BusinessCustomerDuplicateCandidatesResponse>(
+  async listBusinessCustomerDuplicateCandidates() {
+    const response = await this.request<unknown>(
       "/api/business/customers/duplicate-candidates",
     );
+
+    return normalizeBusinessCustomerDuplicateCandidatesResponse(response);
   }
 
   mergeBusinessCustomers(request: BusinessCustomerMergeRequest) {
@@ -3308,6 +3391,958 @@ function queryString(query: object) {
   return serialized ? `?${serialized}` : "";
 }
 
+function normalizeBusinessTableListResponse(response: unknown): BusinessTableListResponse {
+  const record = asRecord(response);
+  const rawItems = Array.isArray(response) ? response : recordArray(record.items);
+  const items = rawItems.map(normalizeBusinessTableResponse);
+  const summaryRecord = asRecord(record.summary);
+  const fallbackSummary = businessTableListSummary(items);
+
+  return {
+    summary: {
+      totalCount: numberValue(summaryRecord.totalCount, fallbackSummary.totalCount),
+      activeCount: numberValue(summaryRecord.activeCount, fallbackSummary.activeCount),
+      totalCapacity: numberValue(summaryRecord.totalCapacity, fallbackSummary.totalCapacity),
+      roomCount: numberValue(summaryRecord.roomCount, fallbackSummary.roomCount),
+    },
+    items,
+  };
+}
+
+function normalizeBusinessTableResponse(response: unknown): BusinessTableResponse {
+  const record = asRecord(response);
+  const id = numberValue(record.id, 0);
+  const seatType = businessSeatTypeValue(record.seatType, "HALL");
+  const combinationPolicy = businessTableCombinationPolicyValue(record.combinationPolicy, "NONE");
+  const isActive = booleanValue(record.isActive, booleanValue(record.active, true));
+
+  return {
+    id,
+    name: stringValue(record.name, id ? `테이블 ${id}` : "테이블"),
+    seatType,
+    seatTypeLabel: stringValue(record.seatTypeLabel, businessSeatTypeLabel(seatType)),
+    minPartySize: numberValue(record.minPartySize, 1),
+    maxPartySize: numberValue(record.maxPartySize, 2),
+    isActive,
+    combinationPolicy,
+    combinationPolicyLabel: stringValue(
+      record.combinationPolicyLabel,
+      businessTableCombinationPolicyLabel(combinationPolicy),
+    ),
+    hasReservations: booleanValue(record.hasReservations, false),
+    updatedAt:
+      nullableStringValue(record.updatedAt) ??
+      nullableStringValue(record.createdAt) ??
+      new Date().toISOString(),
+  };
+}
+
+function businessTableListSummary(
+  items: BusinessTableResponse[],
+): BusinessTableListResponse["summary"] {
+  const activeItems = items.filter((item) => item.isActive);
+
+  return {
+    totalCount: items.length,
+    activeCount: activeItems.length,
+    totalCapacity: activeItems.reduce((total, item) => total + item.maxPartySize, 0),
+    roomCount: items.filter((item) => item.seatType === "ROOM").length,
+  };
+}
+
+function toBusinessTableHttpRequest(request: BusinessTableSaveRequest) {
+  return {
+    ...request,
+    active: request.isActive,
+  };
+}
+
+function normalizeReservationProductSeatRulesApiResponse(
+  productId: number,
+  request: ReservationProductSeatRulesRequest,
+  response: unknown,
+): ReservationProductSeatRulesResponse {
+  const record = asRecord(response);
+  const allowedSeatTypes = businessSeatTypeArrayValue(
+    record.allowedSeatTypes,
+    request.allowedSeatTypes ?? [],
+  );
+  const allowedSeatTypeLabels = stringArrayValue(record.allowedSeatTypeLabels, []).length
+    ? stringArrayValue(record.allowedSeatTypeLabels, [])
+    : allowedSeatTypes.map(businessSeatTypeLabel);
+  const allowedTableIds = numberArrayValue(record.allowedTableIds, request.allowedTableIds ?? []);
+  const allowedTables = recordArray(record.allowedTables).length
+    ? recordArray(record.allowedTables).map((item) => {
+        const table = asRecord(item);
+        const id = numberValue(table.id, 0);
+
+        return {
+          id,
+          name: stringValue(table.name, id ? `테이블 ${id}` : "테이블"),
+          seatTypeLabel: stringValue(table.seatTypeLabel, "-"),
+          maxPartySize: numberValue(table.maxPartySize, 0),
+          combinationPolicyLabel: stringValue(table.combinationPolicyLabel, "-"),
+        };
+      })
+    : allowedTableIds.map((id) => ({
+        id,
+        name: `테이블 ${id}`,
+        seatTypeLabel: "-",
+        maxPartySize: 0,
+        combinationPolicyLabel: "-",
+      }));
+  const defaultDurationMinutes = numberValue(
+    record.defaultDurationMinutes,
+    request.defaultDurationMinutes ?? 90,
+  );
+  const slotIntervalMinutes = numberValue(
+    record.slotIntervalMinutes,
+    request.slotIntervalMinutes ?? 30,
+  );
+  const tableCombinationSummary = stringValue(
+    record.tableCombinationSummary,
+    allowedTableIds.length
+      ? `연결 테이블 ${allowedTableIds.length}개`
+      : "연결된 테이블이 없습니다.",
+  );
+
+  return {
+    productId: numberValue(record.productId, productId),
+    allowedSeatTypes,
+    allowedSeatTypeLabels,
+    allowedTableIds,
+    allowedTables,
+    defaultDurationMinutes,
+    slotIntervalMinutes,
+    tableCombinationSummary,
+    summary: stringValue(
+      record.summary,
+      `상품 ${productId}: ${allowedSeatTypeLabels.join(", ")} 좌석, 기본 ${defaultDurationMinutes}분, ${slotIntervalMinutes}분 간격`,
+    ),
+    updatedAt:
+      nullableStringValue(record.updatedAt) ??
+      nullableStringValue(record.createdAt) ??
+      new Date().toISOString(),
+  };
+}
+
+interface BusinessTimeSlotNormalizeContext {
+  date: string;
+  productId: number | null;
+  productName: string | null;
+  seatType: BusinessSeatType | null;
+}
+
+function normalizeBusinessTimeSlotListResponse(
+  response: unknown,
+  context: BusinessTimeSlotNormalizeContext,
+): BusinessTimeSlotListResponse {
+  const record = asRecord(response);
+  const date = stringValue(record.date, context.date);
+  const productId = numberValue(record.productId, context.productId ?? 0);
+  const rawItems = recordArray(record.items).length
+    ? recordArray(record.items)
+    : recordArray(record.slots);
+  const items = rawItems.map((item) =>
+    normalizeBusinessTimeSlotResponse(item, {
+      date,
+      productId,
+      productName: context.productName,
+      seatType: context.seatType,
+    }),
+  );
+
+  return toBusinessTimeSlotListResponse(date, sortBusinessTimeSlots(items));
+}
+
+function normalizeBusinessTimeSlotResponse(
+  response: unknown,
+  context: BusinessTimeSlotNormalizeContext,
+): BusinessTimeSlotResponse {
+  const record = asRecord(response);
+  const date = stringValue(record.date, context.date);
+  const productId = numberValue(record.productId, context.productId ?? 0);
+  const productName = stringValue(
+    record.productName,
+    context.productName ?? (productId ? `상품 ${productId}` : "예약 상품"),
+  );
+  const seatType = businessSeatTypeValue(record.seatType, context.seatType ?? "HALL");
+  const startTime = normalizeTime(stringValue(record.startTime, "00:00:00")) ?? "00:00:00";
+  const endTime =
+    normalizeTime(stringValue(record.endTime, addMinutes(startTime, 90))) ??
+    addMinutes(startTime, 90);
+  const status = businessTimeSlotStatusValue(record.status, booleanValue(record.available, true));
+  const capacity = numberValue(record.capacity, 0);
+  const availableCount = numberValue(record.availableCount, status === "AVAILABLE" ? capacity : 0);
+  const reservedCount = numberValue(record.reservedCount, Math.max(capacity - availableCount, 0));
+
+  return {
+    id:
+      typeof record.id === "string" && record.id.trim()
+        ? record.id
+        : `${date}:${productId}:${seatType}:${startTime}`,
+    date,
+    startTime,
+    endTime,
+    productId,
+    productName,
+    seatType,
+    seatTypeLabel: stringValue(record.seatTypeLabel, businessSeatTypeLabel(seatType)),
+    capacity,
+    reservedCount,
+    availableCount,
+    status,
+    statusLabel: stringValue(record.statusLabel, businessTimeSlotStatusLabel(status)),
+    statusTone: stringValue(record.statusTone, businessTimeSlotStatusTone(status)),
+    duplicateGuarded: booleanValue(record.duplicateGuarded, true),
+    customerAvailabilityAffected: booleanValue(
+      record.customerAvailabilityAffected,
+      status !== "AVAILABLE",
+    ),
+    lastUpdatedAt:
+      nullableStringValue(record.lastUpdatedAt) ??
+      nullableStringValue(record.updatedAt) ??
+      nullableStringValue(record.createdAt) ??
+      new Date().toISOString(),
+  };
+}
+
+function sortBusinessTimeSlots(items: BusinessTimeSlotResponse[]) {
+  return [...items].sort(
+    (left, right) =>
+      left.startTime.localeCompare(right.startTime) ||
+      left.productId - right.productId ||
+      left.seatType.localeCompare(right.seatType),
+  );
+}
+
+function normalizeBusinessPaymentListResponse(response: unknown): BusinessPaymentListResponse {
+  const record = asRecord(response);
+  const items = recordArray(record.items).map(normalizeBusinessPaymentListItemResponse);
+  const summaryRecord = asRecord(record.summary);
+
+  return {
+    summary: {
+      totalCount: numberValue(
+        summaryRecord.totalCount,
+        numberValue(record.totalCount, items.length),
+      ),
+      paidAmount: numberValue(summaryRecord.paidAmount, businessPaidAmount(items)),
+      cardGuaranteeCount: numberValue(
+        summaryRecord.cardGuaranteeCount,
+        items.filter((item) => item.cardGuaranteeHeld).length,
+      ),
+      actionRequiredCount: numberValue(
+        summaryRecord.actionRequiredCount,
+        items.filter((item) => item.actionRequired).length,
+      ),
+    },
+    items,
+  };
+}
+
+function normalizeBusinessPaymentListItemResponse(
+  response: unknown,
+): BusinessPaymentListItemResponse {
+  const record = asRecord(response);
+  const id = numberValue(record.id, numberValue(record.paymentId, 0));
+  const reservationId = numberValue(record.reservationId, 0);
+  const status = stringValue(record.status, "UNKNOWN");
+  const paymentType = stringValue(record.paymentType, "FREE");
+  const cardGuaranteeHeld = booleanValue(
+    record.cardGuaranteeHeld,
+    status === "CARD_GUARANTEE" || status === "GUARANTEE_HELD" || paymentType === "CARD_GUARANTEE",
+  );
+
+  return {
+    id,
+    paymentNumber: stringValue(
+      record.paymentNumber,
+      stringValue(record.pgPaymentId, id ? `PAY-${id}` : "PAY"),
+    ),
+    reservationId,
+    reservationNumber: stringValue(
+      record.reservationNumber,
+      reservationId ? `RSV-${reservationId}` : "-",
+    ),
+    customerName: stringValue(record.customerName, "-"),
+    productName: stringValue(record.productName, "예약 상품"),
+    paymentType,
+    status,
+    statusLabel: stringValue(record.statusLabel, businessPaymentStatusLabel(status)),
+    statusTone: stringValue(record.statusTone, businessPaymentStatusTone(status)),
+    amount: numberValue(record.amount, 0),
+    currency: stringValue(record.currency, "KRW"),
+    paidAt: nullableStringValue(record.paidAt),
+    dueAt:
+      nullableStringValue(record.dueAt) ??
+      nullableStringValue(record.expiresAt) ??
+      nullableStringValue(record.createdAt),
+    cardGuaranteeHeld,
+    actionRequired: booleanValue(record.actionRequired, businessPaymentActionRequired(status)),
+  };
+}
+
+function businessPaidAmount(items: BusinessPaymentListItemResponse[]) {
+  return items
+    .filter((item) =>
+      ["PAID", "PARTIALLY_REFUNDED", "REFUNDED", "GUARANTEE_CHARGED"].includes(item.status),
+    )
+    .reduce((total, item) => total + item.amount, 0);
+}
+
+function businessPaymentStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    PAID: "결제 완료",
+    AUTHORIZED: "승인 완료",
+    FAILED: "결제 실패",
+    OFFLINE: "현장 결제",
+    CARD_GUARANTEE: "카드 보증",
+    GUARANTEE_HELD: "카드 보증",
+    GUARANTEE_RELEASED: "보증 해제",
+    GUARANTEE_CHARGED: "보증금 청구",
+    REFUND_PENDING: "환불 대기",
+    PARTIALLY_REFUNDED: "부분 환불",
+    REFUNDED: "환불 완료",
+    FREE: "무료",
+  };
+
+  return labels[status] ?? status;
+}
+
+function businessPaymentStatusTone(status: string) {
+  if (["PAID", "AUTHORIZED", "FREE"].includes(status)) {
+    return "success";
+  }
+  if (["CARD_GUARANTEE", "GUARANTEE_HELD", "PARTIALLY_REFUNDED"].includes(status)) {
+    return "warning";
+  }
+  if (["FAILED", "GUARANTEE_CHARGED", "REFUND_PENDING"].includes(status)) {
+    return "danger";
+  }
+
+  return "muted";
+}
+
+function businessPaymentActionRequired(status: string) {
+  return ["FAILED", "GUARANTEE_CHARGED", "REFUND_PENDING"].includes(status);
+}
+
+function normalizeBusinessRefundListResponse(response: unknown): BusinessRefundListResponse {
+  const record = asRecord(response);
+  const items = recordArray(record.items).map(normalizeBusinessRefundListItemResponse);
+  const summaryRecord = asRecord(record.summary);
+
+  return {
+    summary: {
+      totalCount: numberValue(
+        summaryRecord.totalCount,
+        numberValue(record.totalCount, items.length),
+      ),
+      refundAmount: numberValue(
+        summaryRecord.refundAmount,
+        items
+          .filter((item) => item.status === "SUCCEEDED")
+          .reduce((total, item) => total + item.refundAmount, 0),
+      ),
+      failedCount: numberValue(
+        summaryRecord.failedCount,
+        items.filter((item) => item.status === "FAILED").length,
+      ),
+      actionRequiredCount: numberValue(
+        summaryRecord.actionRequiredCount,
+        items.filter((item) => item.actionRequired).length,
+      ),
+    },
+    items,
+  };
+}
+
+function normalizeBusinessRefundListItemResponse(
+  response: unknown,
+): BusinessRefundListItemResponse {
+  const record = asRecord(response);
+  const id = numberValue(record.id, numberValue(record.refundId, 0));
+  const paymentId = numberValue(record.paymentId, 0);
+  const reservationId = numberValue(record.reservationId, 0);
+  const status = stringValue(record.status, "UNKNOWN");
+
+  return {
+    id,
+    refundNumber: stringValue(
+      record.refundNumber,
+      stringValue(record.pgRefundId, id ? `REF-${id}` : "REF"),
+    ),
+    paymentId,
+    reservationId,
+    reservationNumber: stringValue(
+      record.reservationNumber,
+      reservationId ? `RSV-${reservationId}` : "-",
+    ),
+    customerName: stringValue(record.customerName, "-"),
+    productName: stringValue(record.productName, "예약 상품"),
+    status,
+    statusLabel: stringValue(record.statusLabel, businessRefundStatusLabel(status)),
+    statusTone: stringValue(record.statusTone, businessRefundStatusTone(status)),
+    refundAmount: numberValue(record.refundAmount, 0),
+    currency: stringValue(record.currency, "KRW"),
+    requestedAt:
+      nullableStringValue(record.requestedAt) ??
+      nullableStringValue(record.createdAt) ??
+      nullableStringValue(record.updatedAt),
+    completedAt:
+      nullableStringValue(record.completedAt) ?? nullableStringValue(record.succeededAt) ?? null,
+    failureMessage: nullableStringValue(record.failureMessage),
+    actionRequired: booleanValue(record.actionRequired, businessRefundActionRequired(status)),
+  };
+}
+
+function businessRefundStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    REQUESTED: "환불 요청",
+    PENDING: "환불 처리중",
+    PROCESSING: "환불 처리중",
+    SUCCEEDED: "환불 완료",
+    FAILED: "환불 실패",
+    CANCELLED: "환불 취소",
+  };
+
+  return labels[status] ?? status;
+}
+
+function businessRefundStatusTone(status: string) {
+  if (status === "SUCCEEDED") {
+    return "success";
+  }
+  if (["REQUESTED", "PENDING", "PROCESSING"].includes(status)) {
+    return "warning";
+  }
+  if (status === "FAILED") {
+    return "danger";
+  }
+
+  return "muted";
+}
+
+function businessRefundActionRequired(status: string) {
+  return status === "FAILED" || status === "PENDING" || status === "REQUESTED";
+}
+
+function normalizeBusinessCustomerListResponse(
+  response: unknown,
+  query: BusinessCustomerListQuery,
+): BusinessCustomerListResponse {
+  const record = asRecord(response);
+  const queryText = query.query?.trim().toLowerCase() ?? "";
+  const normalizedItems = recordArray(record.items).map(normalizeBusinessCustomerListItemResponse);
+  const items = normalizedItems.filter((customer) => {
+    if (query.segment === "HAS_VISIT_HISTORY" && customer.completedCount < 1) {
+      return false;
+    }
+    if (query.segment === "HAS_NO_SHOW" && customer.noShowCount < 1) {
+      return false;
+    }
+    if (
+      query.segment === "HAS_PREFERENCES" &&
+      customer.allergySummary === null &&
+      customer.anniversarySummary === null
+    ) {
+      return false;
+    }
+
+    return !queryText || businessCustomerSearchText(customer).includes(queryText);
+  });
+  const summaryRecord = asRecord(record.summary);
+
+  return {
+    summary: {
+      totalCount: numberValue(summaryRecord.totalCount, numberValue(record.totalCount, items.length)),
+      visitedCount: numberValue(
+        summaryRecord.visitedCount,
+        items.filter((customer) => customer.completedCount > 0).length,
+      ),
+      noShowCount: numberValue(
+        summaryRecord.noShowCount,
+        items.filter((customer) => customer.noShowCount > 0).length,
+      ),
+      preferenceCount: numberValue(
+        summaryRecord.preferenceCount,
+        items.filter(
+          (customer) => customer.allergySummary !== null || customer.anniversarySummary !== null,
+        ).length,
+      ),
+    },
+    items,
+  };
+}
+
+function normalizeBusinessCustomerListItemResponse(
+  response: unknown,
+): BusinessCustomerListItemResponse {
+  const record = asRecord(response);
+  const reservationCount = numberValue(
+    record.totalReservations,
+    numberValue(record.reservationCount, 0),
+  );
+  const allergySummary =
+    nullableStringValue(record.allergySummary) ?? nullableStringValue(record.allergyNote);
+  const anniversarySummary =
+    nullableStringValue(record.anniversarySummary) ??
+    businessCustomerAnniversarySummary(record.anniversaryType, record.anniversaryDate);
+
+  return {
+    id: numberValue(record.id, 0),
+    name: stringValue(record.name, "고객"),
+    phoneMasked: stringValue(record.phoneMasked, "****"),
+    totalReservations: reservationCount,
+    completedCount: numberValue(record.completedCount, numberValue(record.visitCount, 0)),
+    noShowCount: numberValue(record.noShowCount, 0),
+    cancelledCount: numberValue(record.cancelledCount, 0),
+    lastVisitedAt: nullableStringValue(record.lastVisitedAt),
+    nextReservationAt: nullableStringValue(record.nextReservationAt),
+    lastRequest:
+      nullableStringValue(record.lastRequest) ?? nullableStringValue(record.preferenceNote),
+    allergySummary,
+    anniversarySummary,
+    privacyLevelLabel: stringValue(record.privacyLevelLabel, "연락처 마스킹"),
+  };
+}
+
+function normalizeBusinessCustomerDetailResponse(response: unknown): BusinessCustomerDetailResponse {
+  const record = asRecord(response);
+  const statsRecord = asRecord(record.stats);
+  const recentReservations = recordArray(record.recentReservations).map(
+    normalizeBusinessCustomerReservationHistoryItemResponse,
+  );
+  const allReservationDateTimes = recentReservations
+    .map((reservation) =>
+      businessCustomerReservationDateTime(reservation.visitDate, reservation.startTime),
+    )
+    .filter((dateTime): dateTime is string => dateTime !== null);
+  const completedReservationDateTimes = recentReservations
+    .filter((reservation) => reservation.status === "COMPLETED")
+    .map((reservation) =>
+      businessCustomerReservationDateTime(reservation.visitDate, reservation.startTime),
+    )
+    .filter((dateTime): dateTime is string => dateTime !== null);
+  const upcomingReservationDateTimes = recentReservations
+    .filter((reservation) => isUpcomingBusinessCustomerReservation(reservation.status))
+    .map((reservation) =>
+      businessCustomerReservationDateTime(reservation.visitDate, reservation.startTime),
+    )
+    .filter((dateTime): dateTime is string => dateTime !== null)
+    .sort();
+  const allergyNote = nullableStringValue(record.allergyNote);
+  const anniversary = businessCustomerAnniversary(record.anniversaryType, record.anniversaryDate);
+  const recentRequests = uniqueNonEmpty([
+    ...recentReservations.map((reservation) => reservation.customerRequest ?? ""),
+    nullableStringValue(record.preferenceNote) ?? "",
+  ]);
+
+  return {
+    id: numberValue(record.id, 0),
+    name: stringValue(record.name, "고객"),
+    phoneNumber: stringValue(record.phoneNumber, stringValue(record.phoneMasked, "****")),
+    phoneMasked: stringValue(record.phoneMasked, "****"),
+    totalReservations: numberValue(
+      record.totalReservations,
+      numberValue(statsRecord.reservationCount, recentReservations.length),
+    ),
+    visitCount: numberValue(record.visitCount, numberValue(statsRecord.completedCount, 0)),
+    noShowCount: numberValue(record.noShowCount, numberValue(statsRecord.noShowCount, 0)),
+    cancelledCount: numberValue(
+      record.cancelledCount,
+      numberValue(statsRecord.cancelledCount, 0),
+    ),
+    firstReservationAt:
+      nullableStringValue(record.firstReservationAt) ?? firstSortedDateTime(allReservationDateTimes),
+    lastReservationAt:
+      nullableStringValue(record.lastReservationAt) ?? lastSortedDateTime(allReservationDateTimes),
+    lastVisitedAt:
+      nullableStringValue(record.lastVisitedAt) ??
+      lastSortedDateTime(completedReservationDateTimes),
+    nextReservationAt:
+      nullableStringValue(record.nextReservationAt) ?? upcomingReservationDateTimes[0] ?? null,
+    recentRequests,
+    allergies: allergyNote ? [allergyNote] : stringArrayValue(record.allergies, []),
+    anniversaries: anniversary ? [anniversary] : [],
+    flagStatus: normalizeBusinessCustomerFlagStatusResponse(record, numberValue(record.id, 0)),
+    notes: recordArray(record.notes).map(normalizeBusinessCustomerNoteResponse),
+    privacyNotice: stringValue(record.privacyNotice, "전화번호는 고객 상세에서만 표시합니다."),
+  };
+}
+
+function normalizeBusinessCustomerReservationHistoryResponse(
+  response: unknown,
+): BusinessCustomerReservationHistoryResponse {
+  const record = asRecord(response);
+
+  return {
+    items: recordArray(record.items).map(normalizeBusinessCustomerReservationHistoryItemResponse),
+  };
+}
+
+function normalizeBusinessCustomerReservationHistoryItemResponse(
+  response: unknown,
+): BusinessCustomerReservationHistoryItemResponse {
+  const record = asRecord(response);
+  const status = businessReservationStatusValue(record.status);
+  const source = businessReservationSourceValue(record.source);
+  const anniversaryNote =
+    nullableStringValue(record.anniversaryNote) ??
+    businessCustomerAnniversarySummary(record.anniversaryType, record.anniversaryDate);
+
+  return {
+    id: numberValue(record.id, 0),
+    reservationNumber: stringValue(record.reservationNumber, "-"),
+    status,
+    statusLabel: stringValue(record.statusLabel, businessReservationStatusLabel(status)),
+    statusTone: stringValue(record.statusTone, businessReservationStatusTone(status)),
+    visitDate: stringValue(record.visitDate, todayDateString()),
+    startTime: normalizeTime(stringValue(record.startTime, "00:00:00")) ?? "00:00:00",
+    partySize: numberValue(record.partySize, 1),
+    productName: stringValue(record.productName, "예약 상품"),
+    source,
+    customerRequest: nullableStringValue(record.customerRequest),
+    allergyNote: nullableStringValue(record.allergyNote),
+    anniversaryNote,
+    completedAt: nullableStringValue(record.completedAt),
+    noShowAt: nullableStringValue(record.noShowAt),
+  };
+}
+
+function normalizeBusinessCustomerNoteResponse(response: unknown): BusinessCustomerNoteResponse {
+  const record = asRecord(response);
+  const noteType = stringValue(record.noteType, "GENERAL");
+  const authorUserId = numberValue(record.authorUserId, 0);
+
+  return {
+    id: numberValue(record.id, 0),
+    customerId: numberValue(record.customerId, 0),
+    content: stringValue(record.content, ""),
+    authorName: stringValue(
+      record.authorName,
+      authorUserId ? `사용자 ${authorUserId}` : "매장 관리자",
+    ),
+    createdAt: nullableStringValue(record.createdAt),
+    updatedAt: nullableStringValue(record.updatedAt),
+    auditActionLabel: stringValue(record.auditActionLabel, businessCustomerNoteTypeLabel(noteType)),
+  };
+}
+
+function normalizeBusinessCustomerFlagStatusResponse(
+  response: unknown,
+  fallbackCustomerId: number,
+): BusinessCustomerFlagStatusResponse {
+  const record = asRecord(response);
+  const blocked = booleanValue(record.blocked, false);
+  const blockedScope = businessCustomerBlockedScopeValue(record.blockedScope, blocked);
+
+  return {
+    customerId: numberValue(record.customerId, fallbackCustomerId),
+    vip: booleanValue(record.vip, false),
+    caution: booleanValue(record.caution, false),
+    blockedScope,
+    blockedScopeLabel:
+      nullableStringValue(record.blockedScopeLabel) ??
+      (blockedScope === "NONE"
+        ? null
+        : (nullableStringValue(record.blockedReason) ?? "매장 확인 필요")),
+    updatedAt: nullableStringValue(record.updatedAt),
+  };
+}
+
+function normalizeBusinessCustomerAnonymizeResponse(
+  response: unknown,
+  fallbackCustomerId: number,
+): BusinessCustomerAnonymizeResponse {
+  const record = asRecord(response);
+  const customerId = numberValue(record.customerId, fallbackCustomerId);
+  const notice =
+    nullableStringValue(record.notice) ??
+    nullableStringValue(record.warning) ??
+    "개인정보 익명화 요청이 처리되었습니다.";
+
+  return {
+    accepted: booleanValue(record.accepted, booleanValue(record.anonymized, true)),
+    customerId,
+    requestedAt: nullableStringValue(record.requestedAt) ?? nullableStringValue(record.updatedAt),
+    notice,
+  };
+}
+
+function normalizeBusinessCustomerDuplicateCandidatesResponse(
+  response: unknown,
+): BusinessCustomerDuplicateCandidatesResponse {
+  const record = asRecord(response);
+  const groups = recordArray(record.groups).map((groupResponse) => {
+    const group = asRecord(groupResponse);
+    const matchType = businessCustomerDuplicateMatchTypeValue(group.matchType);
+
+    return {
+      matchType,
+      matchKeyMasked: stringValue(group.matchKeyMasked, "-"),
+      customers: recordArray(group.customers).map(normalizeBusinessCustomerDuplicateCandidateItem),
+    } satisfies BusinessCustomerDuplicateCandidateGroupResponse;
+  });
+
+  return {
+    totalGroups: numberValue(record.totalGroups, groups.length),
+    groups,
+  };
+}
+
+function normalizeBusinessCustomerDuplicateCandidateItem(
+  response: unknown,
+): BusinessCustomerDuplicateCandidateItemResponse {
+  const record = asRecord(response);
+
+  return {
+    id: numberValue(record.id, 0),
+    name: stringValue(record.name, "고객"),
+    phoneMasked: stringValue(record.phoneMasked, "****"),
+    email: nullableStringValue(record.email),
+    reservationCount: numberValue(record.reservationCount, numberValue(record.totalReservations, 0)),
+    noteCount: numberValue(record.noteCount, 0),
+    vip: booleanValue(record.vip, false),
+    caution: booleanValue(record.caution, false),
+    blocked: booleanValue(record.blocked, false),
+    createdAt: nullableStringValue(record.createdAt),
+    updatedAt: nullableStringValue(record.updatedAt),
+  };
+}
+
+function businessCustomerSearchText(customer: BusinessCustomerListItemResponse) {
+  return [
+    customer.name,
+    customer.phoneMasked,
+    customer.lastRequest,
+    customer.allergySummary,
+    customer.anniversarySummary,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function businessReservationStatusValue(value: unknown): BusinessReservationStatus {
+  if (
+    value === "PENDING" ||
+    value === "CONFIRMED" ||
+    value === "MODIFIED" ||
+    value === "CANCELLED_BY_CUSTOMER" ||
+    value === "CANCELLED_BY_RESTAURANT" ||
+    value === "COMPLETED" ||
+    value === "NO_SHOW"
+  ) {
+    return value;
+  }
+
+  return "CONFIRMED";
+}
+
+function businessReservationSourceValue(value: unknown): BusinessReservationSource {
+  if (
+    value === "ONLINE" ||
+    value === "MANUAL_PHONE" ||
+    value === "MANUAL_WALK_IN" ||
+    value === "OWNER_ADJUSTED"
+  ) {
+    return value;
+  }
+
+  return "ONLINE";
+}
+
+function businessCustomerBlockedScopeValue(
+  value: unknown,
+  blockedFallback: boolean,
+): BusinessCustomerBlockedScope {
+  if (value === "NONE" || value === "STORE_REVIEW_REQUIRED") {
+    return value;
+  }
+
+  return blockedFallback ? "STORE_REVIEW_REQUIRED" : "NONE";
+}
+
+function businessCustomerDuplicateMatchTypeValue(
+  value: unknown,
+): BusinessCustomerDuplicateMatchType {
+  return value === "EMAIL" ? "EMAIL" : "PHONE";
+}
+
+function businessCustomerNoteTypeLabel(noteType: string) {
+  const labels: Record<string, string> = {
+    GENERAL: "메모",
+    PRIVACY_REQUEST: "개인정보 요청",
+  };
+
+  return labels[noteType] ?? "메모";
+}
+
+function businessCustomerAnniversary(
+  typeValue: unknown,
+  dateValue: unknown,
+): BusinessCustomerAnniversaryResponse | null {
+  const date = nullableStringValue(dateValue);
+
+  if (!date) {
+    return null;
+  }
+
+  return {
+    label: businessCustomerAnniversaryLabel(nullableStringValue(typeValue)),
+    date,
+  };
+}
+
+function businessCustomerAnniversarySummary(typeValue: unknown, dateValue: unknown) {
+  const anniversary = businessCustomerAnniversary(typeValue, dateValue);
+
+  return anniversary ? `${anniversary.label} ${anniversary.date}` : null;
+}
+
+function businessCustomerAnniversaryLabel(type: string | null) {
+  const labels: Record<string, string> = {
+    birthday: "생일",
+    BIRTHDAY: "생일",
+    wedding: "결혼기념일",
+    WEDDING: "결혼기념일",
+    anniversary: "기념일",
+    ANNIVERSARY: "기념일",
+  };
+
+  return type ? (labels[type] ?? "기념일") : "기념일";
+}
+
+function businessCustomerReservationDateTime(visitDate: string, startTime: string) {
+  const normalizedTime = normalizeTime(startTime);
+
+  if (!visitDate || !normalizedTime) {
+    return null;
+  }
+
+  return `${visitDate}T${normalizedTime}+09:00`;
+}
+
+function isUpcomingBusinessCustomerReservation(status: BusinessReservationStatus) {
+  return status === "PENDING" || status === "CONFIRMED" || status === "MODIFIED";
+}
+
+function firstSortedDateTime(values: string[]) {
+  return values.length ? ([...values].sort()[0] ?? null) : null;
+}
+
+function lastSortedDateTime(values: string[]) {
+  return values.length ? [...values].sort().at(-1)! : null;
+}
+
+function businessSeatTypeValue(value: unknown, fallback: BusinessSeatType): BusinessSeatType {
+  return typeof value === "string" && isBusinessSeatType(value) ? value : fallback;
+}
+
+function businessTableCombinationPolicyValue(
+  value: unknown,
+  fallback: BusinessTableCombinationPolicy,
+): BusinessTableCombinationPolicy {
+  return typeof value === "string" && isBusinessTableCombinationPolicy(value) ? value : fallback;
+}
+
+function businessTimeSlotStatusValue(
+  value: unknown,
+  availableFallback: boolean,
+): BusinessTimeSlotStatus {
+  if (typeof value !== "string") {
+    return availableFallback ? "AVAILABLE" : "CLOSED";
+  }
+  if (value === "OPEN") {
+    return "AVAILABLE";
+  }
+  if (value === "BLOCKED") {
+    return "TEMP_CLOSED";
+  }
+  if (value === "AVAILABLE" || value === "CLOSED" || value === "TEMP_CLOSED") {
+    return value;
+  }
+
+  return availableFallback ? "AVAILABLE" : "CLOSED";
+}
+
+function businessSeatTypeArrayValue(
+  value: unknown,
+  fallback: BusinessSeatType[],
+): BusinessSeatType[] {
+  const candidates = Array.isArray(value) ? value : fallback;
+
+  return candidates.filter(
+    (candidate): candidate is BusinessSeatType =>
+      typeof candidate === "string" && isBusinessSeatType(candidate),
+  );
+}
+
+function recordArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function stringArrayValue(value: unknown, fallback: string[]) {
+  const candidates = Array.isArray(value) ? value : fallback;
+
+  return candidates.filter((candidate): candidate is string => typeof candidate === "string");
+}
+
+function numberArrayValue(value: unknown, fallback: number[]) {
+  const candidates = Array.isArray(value) ? value : fallback;
+
+  return candidates
+    .map((candidate) => numberValue(candidate, Number.NaN))
+    .filter((candidate) => Number.isFinite(candidate));
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  return {};
+}
+
+function stringValue(value: unknown, fallback: string) {
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+
+  return fallback;
+}
+
+function nullableStringValue(value: unknown) {
+  return typeof value === "string" ? value : null;
+}
+
+function numberValue(value: unknown, fallback: number) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) {
+    return Number(value);
+  }
+
+  return fallback;
+}
+
+function booleanValue(value: unknown, fallback: boolean) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+
+  return fallback;
+}
+
 async function parseErrorResponse(response: Response): Promise<ApiErrorResponse> {
   try {
     return (await response.json()) as ApiErrorResponse;
@@ -3322,10 +4357,70 @@ export function createBusinessApiClient(): BusinessApiClient {
   const mode = import.meta.env.VITE_BUSINESS_API_MODE ?? "mock";
 
   if (mode === "http") {
-    return new HttpBusinessApiClient(import.meta.env.VITE_BUSINESS_API_BASE_URL);
+    return new HttpBusinessApiClient(
+      resolveBusinessApiBaseUrl(import.meta.env.VITE_BUSINESS_API_BASE_URL),
+    );
   }
 
   return new MockBusinessApiClient();
+}
+
+interface BrowserLocationLike {
+  hostname: string;
+  protocol: string;
+}
+
+export function resolveBusinessApiBaseUrl(
+  configuredBaseUrl: string | undefined,
+  browserLocation: BrowserLocationLike | null = typeof window === "undefined"
+    ? null
+    : window.location,
+) {
+  const configured = configuredBaseUrl?.trim() ?? "";
+
+  if (!configured || configured.toLowerCase() === "auto") {
+    return buildApiBaseUrlFromLocation(browserLocation);
+  }
+
+  try {
+    const url = new URL(configured);
+
+    if (shouldRewriteLoopbackApiHost(url.hostname, browserLocation?.hostname)) {
+      url.hostname = browserLocation!.hostname;
+      return trimTrailingSlash(url.toString());
+    }
+
+    return trimTrailingSlash(url.toString());
+  } catch {
+    return trimTrailingSlash(configured);
+  }
+}
+
+function buildApiBaseUrlFromLocation(browserLocation: BrowserLocationLike | null) {
+  const protocol = browserLocation?.protocol || "http:";
+  const hostname = browserLocation?.hostname || "localhost";
+
+  return `${protocol}//${formatUrlHostname(hostname)}:8080`;
+}
+
+function shouldRewriteLoopbackApiHost(apiHostname: string, browserHostname: string | undefined) {
+  if (!browserHostname || isLoopbackHostname(browserHostname)) {
+    return false;
+  }
+
+  return isLoopbackHostname(apiHostname);
+}
+
+function isLoopbackHostname(hostname: string) {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
+function formatUrlHostname(hostname: string) {
+  return hostname.includes(":") && !hostname.startsWith("[") ? `[${hostname}]` : hostname;
+}
+
+function trimTrailingSlash(value: string) {
+  return value.replace(/\/+$/, "");
 }
 
 function getBrowserStorage() {

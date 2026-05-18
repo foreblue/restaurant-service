@@ -48,6 +48,8 @@ logging:
       console: logstash
 
 app:
+  cors:
+    allowed-origin-patterns: ${APP_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*,http://10.*:*,http://172.*:*,http://192.168.*:*}
   auth:
     session:
       cookie-name: ${BUSINESS_SESSION_COOKIE_NAME:BUSINESS_SESSION}

@@ -132,6 +132,7 @@ data class PublicRestaurantResponse(
     val postalCode: String?,
     val cuisineTypes: List<String>,
     val coverImageFileId: Long?,
+    val coverImageUrl: String?,
     val timezone: String,
     val businessHours: List<BusinessHourResponse>,
     val holidayRules: List<HolidayRuleResponse>,

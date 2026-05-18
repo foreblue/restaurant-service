@@ -501,6 +501,7 @@ class RestaurantSettingsService(
             postalCode = postalCode,
             cuisineTypes = parseCuisineTypes(cuisineTypesJson),
             coverImageFileId = coverImageFile?.id,
+            coverImageUrl = coverImageFile?.id?.let { "/api/public/files/$it" },
             timezone = timezone,
             businessHours = businessHourRepository.findByRestaurantIdOrderByDayOfWeekAscSequenceAsc(id)
                 .sortedBusinessHours()

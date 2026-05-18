@@ -19,7 +19,7 @@ class BusinessInventoryController(
     private val inventoryService: InventoryService,
 ) {
     @GetMapping("/tables")
-    fun listTables(servletRequest: HttpServletRequest): List<RestaurantTableResponse> =
+    fun listTables(servletRequest: HttpServletRequest): RestaurantTableListResponse =
         inventoryService.listTables(BusinessAuthContext.principal(servletRequest))
 
     @PostMapping("/tables")

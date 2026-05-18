@@ -1,7 +1,7 @@
 import { type Metadata } from "next";
-import { notFound } from "next/navigation";
 
 import { PublicRestaurantPageContent } from "@/features/restaurants/PublicRestaurantPageContent";
+import { UnavailableReservationLinkPage } from "@/features/restaurants/UnavailableReservationLinkPage";
 import {
   createPublicRestaurantMetadata,
   createUnavailableRestaurantMetadata,
@@ -18,7 +18,12 @@ interface PublicRestaurantByIdPageProps {
 
 export default async function PublicRestaurantByIdPage({ params }: PublicRestaurantByIdPageProps) {
   const { restaurantId } = await params;
-  const restaurant = await loadRestaurantOrNotFound(() => getPublicRestaurantById(restaurantId));
+  const restaurant = await loadRestaurantOrUnavailable(() => getPublicRestaurantById(restaurantId));
+
+  if (!restaurant) {
+    return <UnavailableReservationLinkPage />;
+  }
+
   const productList = await getPublicReservationProducts(restaurant.id);
 
   return <PublicRestaurantPageContent products={productList.products} restaurant={restaurant} />;
@@ -42,12 +47,12 @@ export async function generateMetadata({
   }
 }
 
-async function loadRestaurantOrNotFound<T>(loader: () => Promise<T>) {
+async function loadRestaurantOrUnavailable<T>(loader: () => Promise<T>) {
   try {
     return await loader();
   } catch (error) {
     if (error instanceof PublicApiError && error.status === 404) {
-      notFound();
+      return null;
     }
 
     throw error;

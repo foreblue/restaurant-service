@@ -96,6 +96,8 @@ import org.springframework.http.MediaType
 import org.springframework.mock.web.MockMultipartFile
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers.header
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import org.springframework.web.bind.annotation.GetMapping
@@ -1158,6 +1160,39 @@ class RestaurantApiApplicationTests {
         mockMvc.get("/actuator/health").andExpect {
             status { isOk() }
             jsonPath("$.status") { value("UP") }
+        }
+    }
+
+    @Test
+    fun corsAllowsLocalFrontendOrigins() {
+        mockMvc.perform(
+            options("/actuator/health")
+                .header(HttpHeaders.ORIGIN, "http://localhost:5173")
+                .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "GET"),
+        )
+            .andExpect(status().isOk)
+            .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "http://localhost:5173"))
+            .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"))
+
+        mockMvc.perform(
+            options("/actuator/health")
+                .header(HttpHeaders.ORIGIN, "http://192.168.45.93:5173")
+                .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "GET"),
+        )
+            .andExpect(status().isOk)
+            .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "http://192.168.45.93:5173"))
+            .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"))
+    }
+
+    @Test
+    fun corsHeadersAreIncludedOnBusinessAuthenticationErrors() {
+        mockMvc.get("/api/business/me") {
+            header(HttpHeaders.ORIGIN, "http://localhost:5173")
+        }.andExpect {
+            status { isUnauthorized() }
+            header { string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "http://localhost:5173") }
+            header { string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true") }
+            jsonPath("$.code") { value("AUTHENTICATION_REQUIRED") }
         }
     }
 
@@ -2812,8 +2847,9 @@ class RestaurantApiApplicationTests {
             cookie(sessionCookie)
         }.andExpect {
             status { isOk() }
-            jsonPath("$[0].id") { value(hallTableId.toInt()) }
-            jsonPath("$[1].id") { value(roomTableId.toInt()) }
+            jsonPath("$.summary.totalCount") { value(2) }
+            jsonPath("$.items[0].id") { value(hallTableId.toInt()) }
+            jsonPath("$.items[1].id") { value(roomTableId.toInt()) }
         }
 
         val combinationResult = mockMvc.post("/api/business/table-combinations") {
@@ -3005,8 +3041,9 @@ class RestaurantApiApplicationTests {
             param("date", targetDate.toString())
         }.andExpect {
             status { isOk() }
+            jsonPath("$.summary.totalCount") { value(3) }
             jsonPath("$.slots.length()") { value(3) }
-            jsonPath("$.slots[1].status") { value("OPEN") }
+            jsonPath("$.slots[1].status") { value("AVAILABLE") }
         }
 
         mockMvc.get("/api/public/restaurants/${restaurant.id}/availability/times") {
@@ -3033,10 +3070,11 @@ class RestaurantApiApplicationTests {
             """.trimIndent()
         }.andExpect {
             status { isOk() }
-            jsonPath("$.status") { value("BLOCKED") }
+            jsonPath("$.status") { value("TEMP_CLOSED") }
+            jsonPath("$.rawStatus") { value("BLOCKED") }
             jsonPath("$.available") { value(false) }
         }.andReturn()
-        val closedSlotId = JsonPath.read<Int>(closeResult.response.contentAsString, "$.id").toLong()
+        val closedSlotId = JsonPath.read<Int>(closeResult.response.contentAsString, "$.timeSlotId").toLong()
 
         mockMvc.get("/api/public/restaurants/${restaurant.id}/availability/times") {
             param("productId", productId.toString())
@@ -3061,7 +3099,8 @@ class RestaurantApiApplicationTests {
             content = """{"timeSlotId":$closedSlotId,"reason":"운영 재개"}"""
         }.andExpect {
             status { isOk() }
-            jsonPath("$.status") { value("OPEN") }
+            jsonPath("$.status") { value("AVAILABLE") }
+            jsonPath("$.rawStatus") { value("OPEN") }
             jsonPath("$.available") { value(true) }
         }
 

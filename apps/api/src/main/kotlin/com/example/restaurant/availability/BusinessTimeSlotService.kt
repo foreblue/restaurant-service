@@ -56,24 +56,52 @@ class BusinessTimeSlotService(
     @Transactional(readOnly = true)
     fun list(
         principal: BusinessPrincipal,
-        productId: Long,
+        productId: Long?,
         dateValue: String,
+        seatTypeValue: String?,
     ): BusinessTimeSlotListResponse {
         val restaurant = ownedRestaurant(principal)
-        val product = ownedProduct(restaurant.id, productId)
+        val seatType = seatTypeValue?.trim()?.takeIf { it.isNotBlank() }?.let {
+            try {
+                SeatType.valueOf(it)
+            } catch (exception: IllegalArgumentException) {
+                throw ApiException(ErrorCode.VALIDATION_ERROR, "seatType 값이 올바르지 않습니다.", exception)
+            }
+        }
         val date = dateValue.parseDate("date")
-        val slots = timeSlotRepository
-            .findByRestaurantIdAndReservationProductIdAndSlotDateOrderByStartTimeAscIdAsc(
+        val products = if (productId == null) {
+            reservationProductRepository.findByRestaurantIdAndStatusOrderByCreatedAtDescIdDesc(
                 restaurant.id,
-                product.id,
-                date,
+                ReservationProductStatus.ACTIVE,
             )
+        } else {
+            listOf(ownedProduct(restaurant.id, productId))
+        }
+        val slots = products
+            .flatMap { product ->
+                timeSlotRepository
+                    .findByRestaurantIdAndReservationProductIdAndSlotDateOrderByStartTimeAscIdAsc(
+                        restaurant.id,
+                        product.id,
+                        date,
+                    )
+            }
             .map { it.toResponse() }
+            .filter { seatType == null || it.seatType == seatType.name }
+            .sortedWith(compareBy<BusinessTimeSlotResponse> { it.startTime }.thenBy { it.productId }.thenBy { it.id })
 
         return BusinessTimeSlotListResponse(
             restaurantId = restaurant.id,
-            productId = product.id,
+            productId = productId,
             date = date,
+            summary = BusinessTimeSlotSummaryResponse(
+                totalCount = slots.size,
+                availableCount = slots.count { it.status == "AVAILABLE" },
+                closedCount = slots.count { it.status == "CLOSED" },
+                tempClosedCount = slots.count { it.status == "TEMP_CLOSED" },
+                duplicateGuardedCount = slots.count { it.duplicateGuarded },
+            ),
+            items = slots,
             slots = slots,
         )
     }
@@ -421,20 +449,73 @@ class BusinessTimeSlotService(
     private fun ReservationProductSeatRuleEntity.allowedTableIds(): List<Long> =
         allowedTableIdsJson?.let { objectMapper.readValue<List<Long>>(it) }.orEmpty()
 
-    private fun TimeSlotEntity.toResponse(): BusinessTimeSlotResponse =
-        BusinessTimeSlotResponse(
-            id = id,
+    private fun TimeSlotEntity.toResponse(): BusinessTimeSlotResponse {
+        val seatType = representativeSeatType(reservationProduct)
+        val displayStatus = status.displayStatus()
+        return BusinessTimeSlotResponse(
+            id = id.toString(),
+            timeSlotId = id,
             restaurantId = restaurant.id,
             productId = reservationProduct.id,
+            productName = reservationProduct.name,
             date = slotDate,
             startTime = startTime,
             endTime = endTime,
+            seatType = seatType.name,
+            seatTypeLabel = seatType.defaultLabel(),
             capacity = capacity,
-            status = status,
+            reservedCount = 0,
+            availableCount = if (status == TimeSlotStatus.OPEN) capacity else 0,
+            status = displayStatus,
+            rawStatus = status,
+            statusLabel = displayStatus.label(),
+            statusTone = displayStatus.tone(),
             available = status == TimeSlotStatus.OPEN,
+            duplicateGuarded = true,
+            customerAvailabilityAffected = true,
+            lastUpdatedAt = updatedAt ?: createdAt,
             createdAt = createdAt,
             updatedAt = updatedAt,
         )
+    }
+
+    private fun representativeSeatType(product: ReservationProductEntity): SeatType {
+        val rule = seatRuleRepository.findByReservationProductId(product.id)
+        val seatType = rule?.allowedSeatTypes()?.firstOrNull()
+        if (seatType != null) {
+            return seatType
+        }
+        return SeatType.HALL
+    }
+
+    private fun SeatType.defaultLabel(): String =
+        when (this) {
+            SeatType.HALL -> "홀"
+            SeatType.ROOM -> "룸"
+            SeatType.COUNTER -> "카운터"
+            SeatType.BAR -> "바"
+            SeatType.TERRACE -> "테라스"
+        }
+
+    private fun TimeSlotStatus.displayStatus(): String =
+        when (this) {
+            TimeSlotStatus.OPEN -> "AVAILABLE"
+            TimeSlotStatus.BLOCKED -> "TEMP_CLOSED"
+        }
+
+    private fun String.label(): String =
+        when (this) {
+            "AVAILABLE" -> "예약 가능"
+            "TEMP_CLOSED" -> "임시 마감"
+            else -> "마감"
+        }
+
+    private fun String.tone(): String =
+        when (this) {
+            "AVAILABLE" -> "success"
+            "TEMP_CLOSED" -> "warning"
+            else -> "muted"
+        }
 
     private fun TimeSlotEntity.snapshot(): Map<String, Any?> =
         mapOf(

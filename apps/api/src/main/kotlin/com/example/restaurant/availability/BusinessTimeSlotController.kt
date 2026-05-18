@@ -18,13 +18,15 @@ class BusinessTimeSlotController(
     @GetMapping
     fun list(
         servletRequest: HttpServletRequest,
-        @RequestParam productId: Long,
+        @RequestParam(required = false) productId: Long?,
         @RequestParam date: String,
+        @RequestParam(required = false) seatType: String?,
     ): BusinessTimeSlotListResponse =
         businessTimeSlotService.list(
             principal = BusinessAuthContext.principal(servletRequest),
             productId = productId,
             dateValue = date,
+            seatTypeValue = seatType,
         )
 
     @PostMapping

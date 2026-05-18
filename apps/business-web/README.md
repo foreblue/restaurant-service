@@ -22,6 +22,7 @@
 
 - 기본값은 `VITE_BUSINESS_API_MODE=mock`이며 브라우저 `localStorage`로 세션을 흉내 낸다.
 - 실제 BE 연동은 `VITE_BUSINESS_API_MODE=http`와 `VITE_BUSINESS_API_BASE_URL`을 설정해 `/api/business` API를 호출한다.
+- `VITE_BUSINESS_API_BASE_URL=auto`이면 브라우저 접속 host 기준 `:8080` API를 사용한다. 예를 들어 `http://192.168.45.93:5173`으로 열면 API는 `http://192.168.45.93:8080`으로 호출한다.
 - OpenAPI 생성 client가 추가되면 `src/shared/api/businessApiClient.ts`의 HTTP adapter 뒤에 연결한다.
 
 ## 공통 UI와 상태 기준

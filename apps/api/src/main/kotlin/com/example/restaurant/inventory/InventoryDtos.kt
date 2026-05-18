@@ -23,6 +23,10 @@ data class RestaurantTableSaveRequest(
 
     val active: Boolean? = null,
 
+    val isActive: Boolean? = null,
+
+    val combinationPolicy: String? = null,
+
     val sortOrder: Int? = null,
 
     @field:Size(max = 1000)
@@ -38,10 +42,26 @@ data class RestaurantTableResponse(
     val minPartySize: Int,
     val maxPartySize: Int,
     val active: Boolean,
+    val isActive: Boolean,
+    val hasReservations: Boolean,
+    val combinationPolicy: String,
+    val combinationPolicyLabel: String,
     val sortOrder: Int,
     val internalNote: String?,
     val createdAt: Instant?,
     val updatedAt: Instant?,
+)
+
+data class RestaurantTableListResponse(
+    val summary: RestaurantTableSummaryResponse,
+    val items: List<RestaurantTableResponse>,
+)
+
+data class RestaurantTableSummaryResponse(
+    val totalCount: Int,
+    val activeCount: Int,
+    val totalCapacity: Int,
+    val roomCount: Int,
 )
 
 data class TableCombinationSaveRequest(
@@ -89,10 +109,22 @@ data class ReservationProductSeatRuleResponse(
     val productId: Long,
     val restaurantId: Long,
     val allowedSeatTypes: List<SeatType>,
+    val allowedSeatTypeLabels: List<String>,
     val allowedTableIds: List<Long>,
+    val allowedTables: List<ReservationProductSeatRuleTableResponse>,
     val defaultDurationMinutes: Int?,
     val slotIntervalMinutes: Int?,
     val inventoryPolicy: InventoryPolicy,
+    val tableCombinationSummary: String,
+    val summary: String,
     val createdAt: Instant?,
     val updatedAt: Instant?,
+)
+
+data class ReservationProductSeatRuleTableResponse(
+    val id: Long,
+    val name: String,
+    val seatTypeLabel: String,
+    val maxPartySize: Int,
+    val combinationPolicyLabel: String,
 )

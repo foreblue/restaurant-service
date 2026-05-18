@@ -23,7 +23,11 @@ export function AppProviders({ apiClient, children }: AppProvidersProps) {
     }),
   );
   const [publicApiClient] = useState(
-    () => apiClient ?? createPublicApiClient({ baseUrl: customerWebEnv.apiBaseUrl }),
+    () =>
+      apiClient ??
+      createPublicApiClient({
+        baseUrl: resolveBrowserPublicApiBaseUrl(customerWebEnv.apiBaseUrl),
+      }),
   );
 
   return (
@@ -32,4 +36,30 @@ export function AppProviders({ apiClient, children }: AppProvidersProps) {
       <PublicApiClientProvider client={publicApiClient}>{children}</PublicApiClientProvider>
     </QueryClientProvider>
   );
+}
+
+export function resolveBrowserPublicApiBaseUrl(
+  configuredBaseUrl: string,
+  location: Pick<Location, "hostname" | "protocol"> | null = typeof window === "undefined"
+    ? null
+    : window.location,
+) {
+  if (!location) {
+    return configuredBaseUrl;
+  }
+
+  const parsed = new URL(configuredBaseUrl);
+
+  if (parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") {
+    return configuredBaseUrl;
+  }
+
+  if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
+    return configuredBaseUrl;
+  }
+
+  parsed.hostname = location.hostname;
+  parsed.protocol = location.protocol;
+
+  return parsed.toString().replace(/\/+$/, "");
 }
