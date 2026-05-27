@@ -1,7 +1,7 @@
 import { type Metadata } from "next";
 import { redirect } from "next/navigation";
 
-import { ReservationLookupPageContent } from "@/features/reservations/ReservationLookupPageContent";
+import { MemberReservationsPageContent } from "@/features/reservations/MemberReservationsPageContent";
 
 interface ReservationLookupPageProps {
   searchParams: Promise<{
@@ -13,8 +13,8 @@ interface ReservationLookupPageProps {
 }
 
 export const metadata: Metadata = {
-  title: "예약 조회",
-  description: "예약번호와 휴대폰 번호로 예약을 조회합니다.",
+  title: "내 예약",
+  description: "로그인한 회원의 예약 내역을 조회합니다.",
 };
 
 export default async function ReservationLookupPage({ searchParams }: ReservationLookupPageProps) {
@@ -26,7 +26,7 @@ export default async function ReservationLookupPage({ searchParams }: Reservatio
     redirect(`/reservations/${reservationId}?token=${encodeURIComponent(lookupToken)}`);
   }
 
-  return <ReservationLookupPageContent />;
+  return <MemberReservationsPageContent />;
 }
 
 function firstQueryValue(value: string | string[] | undefined) {

@@ -158,6 +158,26 @@ describe("ReservationDetailPageContent", () => {
     expect(screen.getByText(/온라인 예약 변경은 지원하지 않습니다/)).toBeInTheDocument();
   });
 
+  it("fetches reservation detail with a logged-in member id", async () => {
+    const client = createMockClient();
+
+    render(
+      <AppProviders apiClient={client}>
+        <ReservationDetailPageContent lookupToken={null} memberId={1} reservationId={300} />
+      </AppProviders>,
+    );
+
+    expect(await screen.findByText(/RSV-20260518-0001/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(client.get).toHaveBeenCalledWith(
+        "/api/public/reservations/300",
+        expect.objectContaining({
+          searchParams: { memberId: 1 },
+        }),
+      );
+    });
+  });
+
   it("shows optional crm fields on reservation detail", async () => {
     const client = createMockClient({
       ...reservationDetail,
@@ -313,7 +333,7 @@ describe("ReservationDetailPageContent", () => {
     expect(screen.getByText("₩8,000")).toBeInTheDocument();
   });
 
-  it("requires a lookup token before fetching reservation detail", () => {
+  it("requires login or a lookup token before fetching reservation detail", () => {
     const client = createMockClient();
 
     render(
@@ -322,7 +342,7 @@ describe("ReservationDetailPageContent", () => {
       </AppProviders>,
     );
 
-    expect(screen.getByText("예약 조회 토큰이 필요합니다.")).toBeInTheDocument();
+    expect(screen.getByText("예약 조회 로그인이 필요합니다.")).toBeInTheDocument();
     expect(client.get).not.toHaveBeenCalled();
   });
 });

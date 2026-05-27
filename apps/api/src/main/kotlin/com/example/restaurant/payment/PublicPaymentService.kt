@@ -3,6 +3,7 @@ package com.example.restaurant.payment
 import com.example.restaurant.auth.ReservationLookupTokenService
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.example.restaurant.member.CustomerMemberStatus
 import com.example.restaurant.reservation.ReservationEntity
 import com.example.restaurant.reservation.ReservationPaymentMode
 import com.example.restaurant.reservation.ReservationRepository
@@ -27,8 +28,9 @@ class PublicPaymentService(
     fun summary(
         reservationId: Long,
         lookupToken: String?,
+        memberId: Long? = null,
     ): PublicPaymentSummaryResponse {
-        val reservation = accessibleReservation(reservationId, lookupToken)
+        val reservation = accessibleReservation(reservationId, lookupToken, memberId)
         val policy = paymentPolicyResolver.resolve(reservation.reservationProduct, reservation.partySize)
         return PublicPaymentSummaryResponse(
             reservationId = reservation.id,
@@ -48,10 +50,11 @@ class PublicPaymentService(
     fun startPayment(
         reservationId: Long,
         lookupToken: String?,
+        memberId: Long? = null,
         headerIdempotencyKey: String?,
         request: PublicPaymentStartRequest,
     ): PublicPaymentStartResponse {
-        val reservation = accessibleReservation(reservationId, lookupToken)
+        val reservation = accessibleReservation(reservationId, lookupToken, memberId)
         reservation.requirePaymentStartable()
         val policy = paymentPolicyResolver.resolve(reservation.reservationProduct, reservation.partySize)
         if (policy.mode == ReservationPaymentMode.CARD_GUARANTEE) {
@@ -117,10 +120,11 @@ class PublicPaymentService(
     fun startGuarantee(
         reservationId: Long,
         lookupToken: String?,
+        memberId: Long? = null,
         headerIdempotencyKey: String?,
         request: PublicGuaranteeStartRequest,
     ): PublicGuaranteeStartResponse {
-        val reservation = accessibleReservation(reservationId, lookupToken)
+        val reservation = accessibleReservation(reservationId, lookupToken, memberId)
         reservation.requirePaymentStartable()
         val policy = paymentPolicyResolver.resolve(reservation.reservationProduct, reservation.partySize)
         if (policy.mode != ReservationPaymentMode.CARD_GUARANTEE) {
@@ -160,9 +164,22 @@ class PublicPaymentService(
     private fun accessibleReservation(
         reservationId: Long,
         lookupToken: String?,
+        memberId: Long?,
     ): ReservationEntity {
         val reservation = reservationRepository.findBusinessReservationById(reservationId)
             ?: throw ApiException(ErrorCode.NOT_FOUND, "예약을 찾을 수 없습니다.")
+        memberId?.let {
+            if (it < 1) {
+                throw ApiException(ErrorCode.VALIDATION_ERROR, "memberId가 올바르지 않습니다.")
+            }
+            if (
+                reservation.member?.id == it &&
+                reservation.member?.status == CustomerMemberStatus.ACTIVE
+            ) {
+                return reservation
+            }
+            throw ApiException(ErrorCode.ACCESS_DENIED, "예약 조회 권한이 없습니다.")
+        }
         val token = lookupToken?.trim().orEmpty()
         if (token.isBlank()) {
             throw ApiException(ErrorCode.AUTHENTICATION_REQUIRED, "예약 조회 토큰이 필요합니다.")

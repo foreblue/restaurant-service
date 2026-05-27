@@ -18,7 +18,7 @@ describe("reservationPaymentApi", () => {
     );
     const client = createPublicApiClient({ baseUrl: "http://api.test", fetcher });
 
-    await getReservationPaymentSummary(300, "lookup-token", client);
+    await getReservationPaymentSummary(300, { lookupToken: "lookup-token" }, client);
 
     expect(fetcher).toHaveBeenCalledWith(
       "http://api.test/api/public/reservations/300/payment-summary",
@@ -40,7 +40,7 @@ describe("reservationPaymentApi", () => {
     );
     const client = createPublicApiClient({ baseUrl: "http://api.test", fetcher });
 
-    await getReservationRefundPreview(300, "lookup-token", client);
+    await getReservationRefundPreview(300, { lookupToken: "lookup-token" }, client);
 
     expect(fetcher).toHaveBeenCalledWith(
       "http://api.test/api/public/reservations/300/refund-preview",
@@ -48,6 +48,25 @@ describe("reservationPaymentApi", () => {
         headers: expect.objectContaining({
           "x-reservation-lookup-token": "lookup-token",
         }),
+        method: "GET",
+      }),
+    );
+  });
+
+  it("gets a payment summary with a member id", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ reservationId: 300, paymentStatus: "PAID" }), {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      }),
+    );
+    const client = createPublicApiClient({ baseUrl: "http://api.test", fetcher });
+
+    await getReservationPaymentSummary(300, { memberId: 1 }, client);
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "http://api.test/api/public/reservations/300/payment-summary?memberId=1",
+      expect.objectContaining({
         method: "GET",
       }),
     );

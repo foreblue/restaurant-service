@@ -30,16 +30,33 @@ test("CUST-RES-001 공개 예약 페이지에서 예약을 생성한다", async 
   await expect(page.getByRole("link", { name: "예약 상세 확인" })).toBeVisible();
 });
 
-test("CUST-LOOKUP-001 예약번호와 휴대폰 번호로 조회 후 취소한다", async ({ page }) => {
+test("CUST-LOOKUP-001 로그인 회원의 내 예약에서 조회 후 취소한다", async ({ page }) => {
+  await loginAsMember(page, "1");
+  await selectReservationSlot(page);
+  await fillReservationCustomer(page, {
+    memberName: "김민지",
+    requestNotes: "내 예약 조회 테스트",
+  });
+  await page.getByRole("button", { name: "예약 완료" }).click();
+  await expect(page.getByText("예약이 완료되었습니다.")).toBeVisible();
+  const reservationNumberText =
+    (await page
+      .getByText(/RSV-E2E-/)
+      .first()
+      .textContent()) ?? "";
+  const reservationNumber =
+    reservationNumberText.match(/RSV-E2E-\d+/)?.[0] ?? reservationNumberText;
+
   await page.goto("/reservations");
 
-  await page.getByLabel("예약번호").fill("RSV-LOOKUP-0001");
-  await page.getByLabel("휴대폰 번호").fill("01012345678");
-  await page.getByRole("button", { name: "예약 조회" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "내 예약" })).toBeVisible();
+  await expect(page.getByText("김민지님의 예약")).toBeVisible();
+  await expect(page.getByText(reservationNumber)).toBeVisible();
+  await page.getByRole("link", { name: new RegExp(reservationNumber) }).click();
 
-  await expect(page).toHaveURL(/\/reservations\/301\?token=lookup-token-301/);
+  await expect(page).toHaveURL(/\/reservations\/\d+\?memberId=1/);
   await expect(page.getByText("예약 확정")).toBeVisible();
-  await expect(page.getByText("예약번호 RSV-LOOKUP-0001")).toBeVisible();
+  await expect(page.getByText(`예약번호 ${reservationNumber}`)).toBeVisible();
   await expect(page.getByRole("heading", { name: "결제/환불 상태" })).toBeVisible();
   await expect(page.getByText("결제 없음")).toBeVisible();
   await expect(page.getByText("환불 예정 없음")).toBeVisible();
