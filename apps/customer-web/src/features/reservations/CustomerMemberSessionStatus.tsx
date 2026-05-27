@@ -164,6 +164,7 @@ function HeaderSessionStatus({
       <Link
         className="inline-flex min-h-9 items-center justify-center rounded-md border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#03c75a] focus-visible:ring-offset-2"
         href={`/login?redirect=${encodeURIComponent(redirectTo)}`}
+        onClick={onLogout}
       >
         계정 전환
       </Link>
@@ -233,6 +234,7 @@ function CardSessionStatus({
         <Link
           className="inline-flex min-h-10 items-center justify-center rounded-md border border-teal-700 bg-white px-3 py-2 text-sm font-semibold text-teal-800 transition hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2"
           href={`/login?redirect=${encodeURIComponent(redirectTo)}`}
+          onClick={onLogout}
         >
           계정 전환
         </Link>
@@ -297,6 +299,7 @@ function EntrySessionStatus({
         <Link
           className="inline-flex min-h-10 items-center justify-center rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
           href={`/login?redirect=${encodeURIComponent(redirectTo)}`}
+          onClick={onLogout}
         >
           계정 전환
         </Link>

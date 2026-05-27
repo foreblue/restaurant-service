@@ -89,6 +89,7 @@ describe("CustomerLoginPageContent", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "계정 전환" }));
 
+    expect(readStoredCustomerMemberId()).toBeNull();
     expect(screen.getByRole("button", { name: "로그인" })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("회원 ID*"), { target: { value: "1" } });

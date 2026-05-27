@@ -72,6 +72,10 @@ describe("CustomerMemberSessionStatus", () => {
       "href",
       "/login?redirect=%2Freserve",
     );
+
+    fireEvent.click(screen.getByRole("link", { name: "계정 전환" }));
+
+    expect(readStoredCustomerMemberId()).toBeNull();
   });
 
   it("logs out and restores the login CTA", async () => {

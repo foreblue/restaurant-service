@@ -95,6 +95,8 @@ export function CustomerLoginPageContent({
                 className="inline-flex min-h-10 items-center justify-center rounded-md border border-teal-700 bg-white px-3 py-2 text-sm font-semibold text-teal-800 transition hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2"
                 type="button"
                 onClick={() => {
+                  clearStoredCustomerMemberId();
+                  setLoggedInMember(null);
                   setMemberId("");
                   setSwitchingAccount(true);
                   loginMutation.reset();
