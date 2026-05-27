@@ -423,7 +423,7 @@ class PublicReservationService(
             if (it < 1) {
                 throw ApiException(ErrorCode.VALIDATION_ERROR, "memberId가 올바르지 않습니다.")
             }
-            if (member?.id == it) {
+            if (member?.id == it && member?.status == CustomerMemberStatus.ACTIVE) {
                 return
             }
             throw ApiException(ErrorCode.ACCESS_DENIED, "예약 조회 권한이 없습니다.")

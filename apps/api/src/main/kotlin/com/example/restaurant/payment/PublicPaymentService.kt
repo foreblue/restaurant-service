@@ -3,6 +3,7 @@ package com.example.restaurant.payment
 import com.example.restaurant.auth.ReservationLookupTokenService
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.example.restaurant.member.CustomerMemberStatus
 import com.example.restaurant.reservation.ReservationEntity
 import com.example.restaurant.reservation.ReservationPaymentMode
 import com.example.restaurant.reservation.ReservationRepository
@@ -171,7 +172,10 @@ class PublicPaymentService(
             if (it < 1) {
                 throw ApiException(ErrorCode.VALIDATION_ERROR, "memberId가 올바르지 않습니다.")
             }
-            if (reservation.member?.id == it) {
+            if (
+                reservation.member?.id == it &&
+                reservation.member?.status == CustomerMemberStatus.ACTIVE
+            ) {
                 return reservation
             }
             throw ApiException(ErrorCode.ACCESS_DENIED, "예약 조회 권한이 없습니다.")
