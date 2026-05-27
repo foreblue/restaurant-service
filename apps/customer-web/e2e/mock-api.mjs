@@ -271,6 +271,30 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
+  const memberReservationsMatch = url.pathname.match(
+    /^\/api\/public\/members\/(\d+)\/reservations$/,
+  );
+  if (request.method === "GET" && memberReservationsMatch) {
+    const memberId = Number(memberReservationsMatch[1]);
+    const member = members.find((item) => item.id === memberId);
+    if (!member) {
+      sendJson(response, { code: "NOT_FOUND", message: "회원을 찾을 수 없습니다." }, 404);
+      return;
+    }
+
+    sendJson(response, {
+      reservations: [...reservations.values()]
+        .filter((reservation) => reservation.memberId === memberId)
+        .sort((a, b) =>
+          `${b.visitDate} ${b.startTime} ${b.id}`.localeCompare(
+            `${a.visitDate} ${a.startTime} ${a.id}`,
+          ),
+        )
+        .map(memberReservationResponse),
+    });
+    return;
+  }
+
   if (
     request.method === "GET" &&
     url.pathname === `/api/public/restaurants/${restaurant.id}/reservation-page`
@@ -365,6 +389,11 @@ const server = http.createServer(async (request, response) => {
 
     if (!reservation) {
       sendJson(response, { code: "NOT_FOUND", message: "예약을 찾을 수 없습니다." }, 404);
+      return;
+    }
+
+    if (!hasReservationAccess(url, reservation)) {
+      sendJson(response, { code: "ACCESS_DENIED", message: "예약 조회 권한이 없습니다." }, 403);
       return;
     }
 
@@ -534,6 +563,39 @@ function publicMemberResponse(member) {
     anniversaryDate: member.anniversaryDate,
     marketingOptIn: member.marketingOptIn,
   };
+}
+
+function memberReservationResponse(reservation) {
+  const detail = detailResponse(reservation);
+
+  return {
+    id: detail.id,
+    reservationNumber: detail.reservationNumber,
+    status: detail.status,
+    restaurantId: detail.restaurantId,
+    restaurantName: detail.restaurantName,
+    productId: detail.productId,
+    productName: detail.productName,
+    memberId: detail.memberId,
+    visitDate: detail.visitDate,
+    startTime: detail.startTime,
+    endTime: detail.endTime,
+    partySize: detail.partySize,
+    paymentRequired: paymentSummary(reservation).paymentRequired,
+    paymentMode: paymentSummary(reservation).paymentMode,
+    paymentStatus: paymentSummary(reservation).paymentStatus,
+    cancelable: detail.cancelable,
+  };
+}
+
+function hasReservationAccess(url, reservation) {
+  const memberId = url.searchParams.get("memberId");
+
+  if (!memberId) {
+    return true;
+  }
+
+  return reservation.memberId === Number(memberId);
 }
 
 function refundPreview(reservation) {

@@ -30,11 +30,13 @@ class PublicReservationController(
         @PathVariable reservationId: Long,
         @RequestHeader("X-Reservation-Lookup-Token", required = false) headerLookupToken: String?,
         @RequestParam(required = false) lookupToken: String?,
+        @RequestParam(required = false) memberId: Long?,
         @RequestParam(required = false) token: String?,
     ): PublicReservationDetailResponse =
         publicReservationService.detail(
             reservationId = reservationId,
             lookupToken = selectedLookupToken(headerLookupToken, lookupToken, token),
+            memberId = memberId,
         )
 
     @PostMapping("/{reservationId}/cancel")
@@ -42,12 +44,14 @@ class PublicReservationController(
         @PathVariable reservationId: Long,
         @RequestHeader("X-Reservation-Lookup-Token", required = false) headerLookupToken: String?,
         @RequestParam(required = false) lookupToken: String?,
+        @RequestParam(required = false) memberId: Long?,
         @RequestParam(required = false) token: String?,
         @RequestBody(required = false) request: PublicReservationCancelRequest?,
     ): PublicReservationDetailResponse =
         publicReservationService.cancel(
             reservationId = reservationId,
             lookupToken = selectedLookupToken(headerLookupToken, lookupToken, token),
+            memberId = memberId,
             request = request,
         )
 

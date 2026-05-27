@@ -12,7 +12,7 @@ describe("reservationDetailApi", () => {
     );
     const client = createPublicApiClient({ baseUrl: "http://api.test", fetcher });
 
-    await getPublicReservationDetail(300, "lookup-token", client);
+    await getPublicReservationDetail(300, { lookupToken: "lookup-token" }, client);
 
     expect(fetcher).toHaveBeenCalledWith(
       "http://api.test/api/public/reservations/300",
@@ -34,7 +34,12 @@ describe("reservationDetailApi", () => {
     );
     const client = createPublicApiClient({ baseUrl: "http://api.test", fetcher });
 
-    await cancelPublicReservation(300, "lookup-token", { reason: "일정 변경" }, client);
+    await cancelPublicReservation(
+      300,
+      { lookupToken: "lookup-token" },
+      { reason: "일정 변경" },
+      client,
+    );
 
     expect(fetcher).toHaveBeenCalledWith(
       "http://api.test/api/public/reservations/300/cancel",
@@ -45,6 +50,25 @@ describe("reservationDetailApi", () => {
           "x-reservation-lookup-token": "lookup-token",
         }),
         method: "POST",
+      }),
+    );
+  });
+
+  it("gets reservation detail with a member id", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ id: 300 }), {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      }),
+    );
+    const client = createPublicApiClient({ baseUrl: "http://api.test", fetcher });
+
+    await getPublicReservationDetail(300, { memberId: 1 }, client);
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "http://api.test/api/public/reservations/300?memberId=1",
+      expect.objectContaining({
+        method: "GET",
       }),
     );
   });

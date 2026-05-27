@@ -9,6 +9,7 @@ interface ReservationDetailPageProps {
   }>;
   searchParams: Promise<{
     lookupToken?: string | string[] | undefined;
+    memberId?: string | string[] | undefined;
     token?: string | string[] | undefined;
   }>;
 }
@@ -33,6 +34,7 @@ export default async function ReservationDetailPage({
   return (
     <ReservationDetailPageContent
       lookupToken={firstQueryValue(search.token) ?? firstQueryValue(search.lookupToken)}
+      memberId={positiveInteger(firstQueryValue(search.memberId))}
       reservationId={parsedReservationId}
     />
   );
@@ -44,4 +46,14 @@ function firstQueryValue(value: string | string[] | undefined) {
   }
 
   return value?.trim() || null;
+}
+
+function positiveInteger(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number(value);
+
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }

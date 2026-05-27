@@ -1223,6 +1223,9 @@ class RestaurantApiApplicationTests {
             jsonPath("$.paths['/api/public/members/{memberId}'].get.summary") {
                 value("예약 회원 단건 조회")
             }
+            jsonPath("$.paths['/api/public/members/{memberId}/reservations'].get.summary") {
+                value("예약 회원의 예약 목록 조회")
+            }
         }
     }
 
@@ -1242,6 +1245,7 @@ class RestaurantApiApplicationTests {
             "/api/public/restaurants/{restaurantId}/reservation-page",
             "/api/public/members",
             "/api/public/members/{memberId}",
+            "/api/public/members/{memberId}/reservations",
             "/api/public/restaurants/{restaurantId}/availability/dates",
             "/api/public/restaurants/{restaurantId}/availability/times",
             "/api/public/reservation-lookup-tokens",
@@ -4257,6 +4261,87 @@ class RestaurantApiApplicationTests {
         assertThat(customer).isNotNull
         assertThat(customer!!.email).isEqualTo("reservation.member@example.com")
         assertThat(customer.allergyNote).isEqualTo("갑각류")
+    }
+
+    @Test
+    fun publicMemberReservationsAreListedAndDetailedByMember() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "member-reservation-list-owner@example.com",
+            restaurantName = "Member Reservation List Table",
+            slug = "member-reservation-list",
+        )
+        val member = customerMemberRepository.saveAndFlush(
+            CustomerMemberEntity(
+                email = "member.list@example.com",
+                name = "예약목록회원",
+                phoneNumber = "01090900006",
+                status = CustomerMemberStatus.ACTIVE,
+            ),
+        )
+        val otherMember = customerMemberRepository.saveAndFlush(
+            CustomerMemberEntity(
+                email = "member.other@example.com",
+                name = "다른회원",
+                phoneNumber = "01090900007",
+                status = CustomerMemberStatus.ACTIVE,
+            ),
+        )
+
+        val createResult = mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "public-member-reservation-list-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "restaurantId": ${fixture.restaurant.id},
+              "productId": ${fixture.productId},
+              "visitDate": "${fixture.targetDate}",
+              "startTime": "11:00:00",
+              "partySize": 2,
+              "memberId": ${member.id}
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.memberId") { value(member.id.toInt()) }
+        }.andReturn()
+        val reservationId = JsonPath.read<Int>(createResult.response.contentAsString, "$.id")
+        val reservationNumber = JsonPath.read<String>(createResult.response.contentAsString, "$.reservationNumber")
+
+        mockMvc.get("/api/public/members/${member.id}/reservations").andExpect {
+            status { isOk() }
+            jsonPath("$.reservations[0].id") { value(reservationId) }
+            jsonPath("$.reservations[0].reservationNumber") { value(reservationNumber) }
+            jsonPath("$.reservations[0].restaurantName") { value("Member Reservation List Table") }
+            jsonPath("$.reservations[0].productName") { value("공개 예약 코스") }
+            jsonPath("$.reservations[0].memberId") { value(member.id.toInt()) }
+            jsonPath("$.reservations[0].cancelable") { value(true) }
+        }
+
+        mockMvc.get("/api/public/reservations/$reservationId") {
+            param("memberId", member.id.toString())
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.id") { value(reservationId) }
+            jsonPath("$.memberId") { value(member.id.toInt()) }
+            jsonPath("$.reservationNumber") { value(reservationNumber) }
+        }
+
+        mockMvc.get("/api/public/reservations/$reservationId") {
+            param("memberId", otherMember.id.toString())
+        }.andExpect {
+            status { isForbidden() }
+            jsonPath("$.code") { value("ACCESS_DENIED") }
+        }
+
+        mockMvc.post("/api/public/reservations/$reservationId/cancel") {
+            param("memberId", member.id.toString())
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"reason":"회원 내 예약에서 취소"}"""
+        }.andExpect {
+            status { isOk() }
+            jsonPath("$.status") { value("CANCELLED_BY_CUSTOMER") }
+            jsonPath("$.memberId") { value(member.id.toInt()) }
+        }
     }
 
     @Test

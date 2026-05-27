@@ -3,6 +3,8 @@ package com.example.restaurant.member
 import io.swagger.v3.oas.annotations.Operation
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.example.restaurant.reservation.PublicMemberReservationListResponse
+import com.example.restaurant.reservation.PublicReservationService
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RequestMapping
@@ -12,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController
 @RequestMapping("/api/public/members")
 class PublicMemberController(
     private val memberRepository: CustomerMemberRepository,
+    private val publicReservationService: PublicReservationService,
 ) {
     @Operation(summary = "예약 회원 목록 조회")
     @GetMapping
@@ -33,6 +36,13 @@ class PublicMemberController(
         }
         return member.toResponse()
     }
+
+    @Operation(summary = "예약 회원의 예약 목록 조회")
+    @GetMapping("/{memberId}/reservations")
+    fun reservations(
+        @PathVariable memberId: Long,
+    ): PublicMemberReservationListResponse =
+        publicReservationService.listByMember(memberId)
 
     private fun CustomerMemberEntity.toResponse(): PublicMemberResponse =
         PublicMemberResponse(

@@ -1,6 +1,7 @@
 package com.example.restaurant.reservation
 
 import com.example.restaurant.refund.RefundOperationResponse
+import com.example.restaurant.payment.PaymentStatus
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -81,4 +82,27 @@ data class PublicReservationDetailResponse(
     val cancelledAt: Instant?,
     val cancelReason: String?,
     val refund: RefundOperationResponse? = null,
+)
+
+data class PublicMemberReservationListResponse(
+    val reservations: List<PublicMemberReservationItemResponse>,
+)
+
+data class PublicMemberReservationItemResponse(
+    val id: Long,
+    val reservationNumber: String,
+    val status: ReservationStatus,
+    val restaurantId: Long,
+    val restaurantName: String?,
+    val productId: Long,
+    val productName: String,
+    val memberId: Long,
+    val visitDate: LocalDate,
+    val startTime: LocalTime,
+    val endTime: LocalTime,
+    val partySize: Int,
+    val paymentRequired: Boolean,
+    val paymentMode: ReservationPaymentMode,
+    val paymentStatus: PaymentStatus,
+    val cancelable: Boolean,
 )

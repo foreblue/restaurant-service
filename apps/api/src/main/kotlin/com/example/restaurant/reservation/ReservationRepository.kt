@@ -53,6 +53,21 @@ interface ReservationRepository : JpaRepository<ReservationEntity, Long> {
         join fetch r.restaurant
         join fetch r.reservationProduct
         join fetch r.customer
+        join fetch r.member
+        where r.member.id = :memberId
+        order by r.visitDate desc, r.startTime desc, r.id desc
+        """,
+    )
+    fun findPublicMemberReservations(
+        @Param("memberId") memberId: Long,
+    ): List<ReservationEntity>
+
+    @Query(
+        """
+        select r from ReservationEntity r
+        join fetch r.restaurant
+        join fetch r.reservationProduct
+        join fetch r.customer
         where r.restaurant.id = :restaurantId
           and r.visitDate between :fromDate and :toDate
         order by r.visitDate asc, r.startTime asc, r.id asc

@@ -40,11 +40,13 @@ import {
 
 interface ReservationDetailPageContentProps {
   lookupToken: string | null;
+  memberId?: number | null | undefined;
   reservationId: number;
 }
 
 export function ReservationDetailPageContent({
   lookupToken,
+  memberId = null,
   reservationId,
 }: ReservationDetailPageContentProps) {
   return (
@@ -53,36 +55,46 @@ export function ReservationDetailPageContent({
       eyebrow="예약 확인"
       title="예약 상세"
     >
-      <ReservationDetailPanel lookupToken={lookupToken} reservationId={reservationId} />
+      <ReservationDetailPanel
+        lookupToken={lookupToken}
+        memberId={memberId}
+        reservationId={reservationId}
+      />
     </ReservationPageShell>
   );
 }
 
-function ReservationDetailPanel({ lookupToken, reservationId }: ReservationDetailPageContentProps) {
+function ReservationDetailPanel({
+  lookupToken,
+  memberId = null,
+  reservationId,
+}: ReservationDetailPageContentProps) {
   const apiClient = usePublicApiClient();
   const queryClient = useQueryClient();
   const router = useRouter();
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
+  const access = { lookupToken, memberId };
+  const hasAccess = Boolean(lookupToken || memberId);
 
   const detailQuery = useQuery({
-    enabled: Boolean(lookupToken),
-    queryFn: () => getPublicReservationDetail(reservationId, lookupToken ?? "", apiClient),
-    queryKey: reservationDetailQueryKey(reservationId, lookupToken),
+    enabled: hasAccess,
+    queryFn: () => getPublicReservationDetail(reservationId, access, apiClient),
+    queryKey: reservationDetailQueryKey(reservationId, access),
   });
   const reservation = detailQuery.data;
   const refundPreviewEnabled = Boolean(
-    lookupToken && reservation && shouldLoadRefundPreview(reservation),
+    hasAccess && reservation && shouldLoadRefundPreview(reservation),
   );
   const paymentSummaryQuery = useQuery({
-    enabled: Boolean(lookupToken) && detailQuery.isSuccess,
-    queryFn: () => getReservationPaymentSummary(reservationId, lookupToken ?? "", apiClient),
-    queryKey: reservationPaymentSummaryQueryKey(reservationId, lookupToken),
+    enabled: hasAccess && detailQuery.isSuccess,
+    queryFn: () => getReservationPaymentSummary(reservationId, access, apiClient),
+    queryKey: reservationPaymentSummaryQueryKey(reservationId, access),
   });
   const refundPreviewQuery = useQuery({
     enabled: refundPreviewEnabled,
-    queryFn: () => getReservationRefundPreview(reservationId, lookupToken ?? "", apiClient),
-    queryKey: reservationRefundPreviewQueryKey(reservationId, lookupToken),
+    queryFn: () => getReservationRefundPreview(reservationId, access, apiClient),
+    queryKey: reservationRefundPreviewQueryKey(reservationId, access),
   });
 
   const cancelMutation = useMutation({
@@ -92,29 +104,29 @@ function ReservationDetailPanel({ lookupToken, reservationId }: ReservationDetai
         request.confirmRefundAmount = refundPreviewQuery.data.refundableAmount;
       }
 
-      return cancelPublicReservation(reservationId, lookupToken ?? "", request, apiClient);
+      return cancelPublicReservation(reservationId, access, request, apiClient);
     },
     onSuccess: (reservation) => {
-      queryClient.setQueryData(reservationDetailQueryKey(reservationId, lookupToken), reservation);
+      queryClient.setQueryData(reservationDetailQueryKey(reservationId, access), reservation);
       void queryClient.invalidateQueries({
-        queryKey: reservationPaymentSummaryQueryKey(reservationId, lookupToken),
+        queryKey: reservationPaymentSummaryQueryKey(reservationId, access),
       });
       queryClient.removeQueries({
         exact: true,
-        queryKey: reservationRefundPreviewQueryKey(reservationId, lookupToken),
+        queryKey: reservationRefundPreviewQueryKey(reservationId, access),
       });
       setCancelDialogOpen(false);
     },
   });
 
-  if (!lookupToken) {
+  if (!hasAccess) {
     return (
       <StateBlock
-        action={{ label: "예약 조회", onClick: () => router.push("/reservations") }}
-        title="예약 조회 토큰이 필요합니다."
+        action={{ label: "내 예약 보기", onClick: () => router.push("/reservations") }}
+        title="예약 조회 로그인이 필요합니다."
         variant="error"
       >
-        <p>예약 완료 화면이나 알림 메시지에 포함된 조회 링크로 다시 접근해 주세요.</p>
+        <p>사용자 로그인 후 내 예약에서 다시 접근해 주세요.</p>
       </StateBlock>
     );
   }

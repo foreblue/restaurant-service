@@ -9,45 +9,62 @@ import {
   type PublicPaymentStartResponse,
   type PublicRefundPreviewResponse,
 } from "./reservationPaymentTypes";
+import { type PublicReservationAccess } from "./reservationDetailApi";
 
 const defaultPublicApiClient = createPublicApiClient({ baseUrl: customerWebEnv.apiBaseUrl });
 
 export function reservationPaymentSummaryQueryKey(
   reservationId: number,
-  lookupToken: string | null,
+  access: PublicReservationAccess,
 ) {
-  return ["reservation-payment-summary", reservationId, lookupToken] as const;
+  return [
+    "reservation-payment-summary",
+    reservationId,
+    access.lookupToken ?? null,
+    access.memberId ?? null,
+  ] as const;
 }
 
 export function reservationRefundPreviewQueryKey(
   reservationId: number,
-  lookupToken: string | null,
+  access: PublicReservationAccess,
 ) {
-  return ["reservation-refund-preview", reservationId, lookupToken] as const;
+  return [
+    "reservation-refund-preview",
+    reservationId,
+    access.lookupToken ?? null,
+    access.memberId ?? null,
+  ] as const;
 }
 
 export function getReservationPaymentSummary(
   reservationId: number,
-  lookupToken: string,
+  access: PublicReservationAccess,
   client: PublicApiClient = defaultPublicApiClient,
 ) {
   return client.get<PublicPaymentSummaryResponse>(
     `/api/public/reservations/${reservationId}/payment-summary`,
     {
-      lookupToken,
+      lookupToken: access.lookupToken ?? null,
+      searchParams: {
+        memberId: access.memberId ?? null,
+      },
     },
   );
 }
 
 export function getReservationRefundPreview(
   reservationId: number,
-  lookupToken: string,
+  access: PublicReservationAccess,
   client: PublicApiClient = defaultPublicApiClient,
 ) {
   return client.get<PublicRefundPreviewResponse>(
     `/api/public/reservations/${reservationId}/refund-preview`,
     {
-      lookupToken,
+      lookupToken: access.lookupToken ?? null,
+      searchParams: {
+        memberId: access.memberId ?? null,
+      },
     },
   );
 }

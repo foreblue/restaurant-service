@@ -88,7 +88,7 @@ export function ReservationPaymentActionPanel({
     mutationFn: () =>
       cancelPublicReservation(
         reservation.id,
-        reservation.lookupToken,
+        { lookupToken: reservation.lookupToken },
         { reason: "결제 단계에서 예약 포기" },
         apiClient,
       ),

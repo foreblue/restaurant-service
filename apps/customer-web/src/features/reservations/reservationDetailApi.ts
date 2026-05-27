@@ -8,23 +8,36 @@ import {
 
 const defaultPublicApiClient = createPublicApiClient({ baseUrl: customerWebEnv.apiBaseUrl });
 
-export function reservationDetailQueryKey(reservationId: number, lookupToken: string | null) {
-  return ["reservation-detail", reservationId, lookupToken] as const;
+export interface PublicReservationAccess {
+  lookupToken?: string | null;
+  memberId?: number | null;
+}
+
+export function reservationDetailQueryKey(reservationId: number, access: PublicReservationAccess) {
+  return [
+    "reservation-detail",
+    reservationId,
+    access.lookupToken ?? null,
+    access.memberId ?? null,
+  ] as const;
 }
 
 export function getPublicReservationDetail(
   reservationId: number,
-  lookupToken: string,
+  access: PublicReservationAccess,
   client: PublicApiClient = defaultPublicApiClient,
 ) {
   return client.get<PublicReservationDetailResponse>(`/api/public/reservations/${reservationId}`, {
-    lookupToken,
+    lookupToken: access.lookupToken ?? null,
+    searchParams: {
+      memberId: access.memberId ?? null,
+    },
   });
 }
 
 export function cancelPublicReservation(
   reservationId: number,
-  lookupToken: string,
+  access: PublicReservationAccess,
   request: PublicReservationCancelRequest = {},
   client: PublicApiClient = defaultPublicApiClient,
 ) {
@@ -32,7 +45,10 @@ export function cancelPublicReservation(
     `/api/public/reservations/${reservationId}/cancel`,
     {
       body: request,
-      lookupToken,
+      lookupToken: access.lookupToken ?? null,
+      searchParams: {
+        memberId: access.memberId ?? null,
+      },
     },
   );
 }

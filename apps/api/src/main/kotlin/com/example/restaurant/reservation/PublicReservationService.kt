@@ -162,10 +162,11 @@ class PublicReservationService(
     fun detail(
         reservationId: Long,
         lookupToken: String?,
+        memberId: Long? = null,
     ): PublicReservationDetailResponse {
         val reservation = reservationRepository.findById(reservationId)
             .orElseThrow { ApiException(ErrorCode.NOT_FOUND, "예약을 찾을 수 없습니다.") }
-        reservation.requireLookupAccess(lookupToken)
+        reservation.requirePublicAccess(lookupToken, memberId)
         return reservation.toDetailResponse()
     }
 
@@ -173,11 +174,12 @@ class PublicReservationService(
     fun cancel(
         reservationId: Long,
         lookupToken: String?,
+        memberId: Long? = null,
         request: PublicReservationCancelRequest?,
     ): PublicReservationDetailResponse {
         val reservation = reservationRepository.findByIdForUpdate(reservationId)
             ?: throw ApiException(ErrorCode.NOT_FOUND, "예약을 찾을 수 없습니다.")
-        reservation.requireLookupAccess(lookupToken)
+        reservation.requirePublicAccess(lookupToken, memberId)
         if (reservation.status == ReservationStatus.CANCELLED_BY_CUSTOMER) {
             return reservation.toDetailResponse(refundService.latestRefundOperation(reservation))
         }
@@ -197,6 +199,16 @@ class PublicReservationService(
         notificationService.recordReservationCancelled(reservation)
 
         return reservation.toDetailResponse(refund)
+    }
+
+    @Transactional(readOnly = true)
+    fun listByMember(memberId: Long): PublicMemberReservationListResponse {
+        val member = findActiveMember(memberId)
+        val reservations = reservationRepository.findPublicMemberReservations(member.id)
+
+        return PublicMemberReservationListResponse(
+            reservations = reservations.map { it.toMemberReservationItemResponse() },
+        )
     }
 
     private fun PublicReservationCreateRequest.normalized(
@@ -372,6 +384,27 @@ class PublicReservationService(
             refund = refund,
         )
 
+    private fun ReservationEntity.toMemberReservationItemResponse(): PublicMemberReservationItemResponse =
+        PublicMemberReservationItemResponse(
+            id = id,
+            reservationNumber = reservationNumber,
+            status = status,
+            restaurantId = restaurant.id,
+            restaurantName = restaurant.name,
+            productId = reservationProduct.id,
+            productName = reservationProduct.name,
+            memberId = member?.id
+                ?: throw ApiException(ErrorCode.INTERNAL_SERVER_ERROR, "회원 예약 정보가 올바르지 않습니다."),
+            visitDate = visitDate,
+            startTime = startTime,
+            endTime = endTime,
+            partySize = partySize,
+            paymentRequired = paymentRequired,
+            paymentMode = paymentMode,
+            paymentStatus = paymentStatus,
+            cancelable = isCancelableNow(),
+        )
+
     private fun ReservationEntity.requireLookupAccess(lookupToken: String?) {
         val token = lookupToken?.trim().orEmpty()
         if (token.isBlank()) {
@@ -380,6 +413,23 @@ class PublicReservationService(
         if (!lookupTokenService.hasLookupAccess(reservationNumber, token)) {
             throw ApiException(ErrorCode.ACCESS_DENIED, "예약 조회 권한이 없습니다.")
         }
+    }
+
+    private fun ReservationEntity.requirePublicAccess(
+        lookupToken: String?,
+        memberId: Long?,
+    ) {
+        memberId?.let {
+            if (it < 1) {
+                throw ApiException(ErrorCode.VALIDATION_ERROR, "memberId가 올바르지 않습니다.")
+            }
+            if (member?.id == it) {
+                return
+            }
+            throw ApiException(ErrorCode.ACCESS_DENIED, "예약 조회 권한이 없습니다.")
+        }
+
+        requireLookupAccess(lookupToken)
     }
 
     private fun ReservationEntity.isCancelableNow(): Boolean =

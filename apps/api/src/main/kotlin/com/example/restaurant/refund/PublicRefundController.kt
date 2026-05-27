@@ -17,11 +17,13 @@ class PublicRefundController(
         @PathVariable reservationId: Long,
         @RequestHeader("X-Reservation-Lookup-Token", required = false) headerLookupToken: String?,
         @RequestParam(required = false) lookupToken: String?,
+        @RequestParam(required = false) memberId: Long?,
         @RequestParam(required = false) token: String?,
     ): RefundPreviewResponse =
         refundService.previewCustomerCancellation(
             reservationId = reservationId,
             lookupToken = selectedLookupToken(headerLookupToken, lookupToken, token),
+            memberId = memberId,
         )
 
     private fun selectedLookupToken(
