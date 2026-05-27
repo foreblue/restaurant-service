@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
@@ -7,6 +9,12 @@ import { Alert, Button, Select, StateBlock } from "@/components/ui";
 import { usePublicApiClient } from "@/shared/api/usePublicApiClient";
 import { PublicApiError, toCustomerApiErrorMessage } from "@/shared/api/apiError";
 
+import {
+  clearStoredCustomerMemberId,
+  CUSTOMER_MEMBER_ID_STORAGE_KEY,
+  readStoredCustomerMemberId,
+} from "./customerMemberSession";
+import { getPublicMembers } from "./publicMemberApi";
 import { ReservationCustomerForm } from "./ReservationCustomerForm";
 import { buildReservationCreateRequest, createPublicReservation } from "./reservationCreateApi";
 import { ReservationCompletionCard } from "./ReservationCompletionCard";
@@ -33,6 +41,7 @@ export function ReservationSelectionPanel({
   restaurantId,
 }: ReservationSelectionPanelProps) {
   const apiClient = usePublicApiClient();
+  const pathname = usePathname();
   const [selectedProductId, setSelectedProductId] = useState<number | null>(
     () => products[0]?.id ?? null,
   );
@@ -43,6 +52,8 @@ export function ReservationSelectionPanel({
   const [partySize, setPartySize] = useState(() => selectedProduct?.minPartySize ?? 1);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTimeSlot, setSelectedTimeSlot] = useState<AvailableTimeSlot | null>(null);
+  const [storedMemberId, setStoredMemberId] = useState<number | null>(null);
+  const [memberSessionLoaded, setMemberSessionLoaded] = useState(false);
 
   useEffect(() => {
     if (selectedProduct) {
@@ -64,6 +75,21 @@ export function ReservationSelectionPanel({
   useEffect(() => {
     createReservationMutation.reset();
   }, [selectedProductId, partySize, selectedDate, selectedTimeSlot?.timeSlotId]);
+
+  useEffect(() => {
+    setStoredMemberId(readStoredCustomerMemberId());
+    setMemberSessionLoaded(true);
+
+    function handleStorage(event: StorageEvent) {
+      if (event.key === CUSTOMER_MEMBER_ID_STORAGE_KEY) {
+        setStoredMemberId(readStoredCustomerMemberId());
+      }
+    }
+
+    window.addEventListener("storage", handleStorage);
+
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
 
   const partySizeOptions = useMemo(
     () => createPartySizeOptions(selectedProduct),
@@ -98,6 +124,25 @@ export function ReservationSelectionPanel({
       ),
     queryKey: ["availability-times", restaurantId, selectedProduct?.id, partySize, selectedDate],
   });
+
+  const membersQuery = useQuery({
+    queryFn: () => getPublicMembers(apiClient),
+    queryKey: ["public-members"],
+  });
+  const members = membersQuery.data?.members ?? [];
+  const loggedInMember = storedMemberId
+    ? (members.find((member) => member.id === storedMemberId) ?? null)
+    : null;
+  const loginHref = `/login?redirect=${encodeURIComponent(pathname || "/reserve")}`;
+
+  useEffect(() => {
+    if (!membersQuery.data || !storedMemberId || loggedInMember) {
+      return;
+    }
+
+    clearStoredCustomerMemberId();
+    setStoredMemberId(null);
+  }, [loggedInMember, membersQuery.data, storedMemberId]);
 
   const createReservationMutation = useMutation({
     mutationFn: (customerInfo: ReservationCustomerFormValues) => {
@@ -211,8 +256,30 @@ export function ReservationSelectionPanel({
           paymentPolicy={selectedPaymentPolicy ?? undefined}
           reservation={createReservationMutation.data}
         />
+      ) : selectedProduct && selectedDate && selectedTimeSlot && membersQuery.isLoading ? (
+        <StateBlock title="회원 정보를 불러오는 중입니다." variant="loading" />
+      ) : selectedProduct && selectedDate && selectedTimeSlot && membersQuery.isError ? (
+        <StateBlock title="회원 정보를 불러오지 못했습니다." variant="error" />
+      ) : selectedProduct && selectedDate && selectedTimeSlot && !memberSessionLoaded ? (
+        <StateBlock title="로그인 정보를 확인하는 중입니다." variant="loading" />
+      ) : selectedProduct && selectedDate && selectedTimeSlot && members.length === 0 ? (
+        <StateBlock title="예약 가능한 회원이 없습니다.">
+          <p>테스트 회원 데이터가 준비되면 예약을 진행할 수 있습니다.</p>
+        </StateBlock>
+      ) : selectedProduct && selectedDate && selectedTimeSlot && !loggedInMember ? (
+        <StateBlock title="사용자 로그인 후 예약할 수 있습니다.">
+          <p>회원 ID만 입력하면 테스트 사용자로 로그인됩니다.</p>
+          <Link
+            className="mt-3 inline-flex min-h-10 items-center justify-center rounded-md border border-teal-700 bg-white px-3 py-2 text-sm font-semibold text-teal-800 transition hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2"
+            href={loginHref}
+          >
+            사용자 로그인
+          </Link>
+        </StateBlock>
       ) : selectedProduct && selectedDate && selectedTimeSlot ? (
         <ReservationCustomerForm
+          defaultMemberId={loggedInMember?.id}
+          members={loggedInMember ? [loggedInMember] : []}
           submitLabel={
             selectedPaymentPolicy ? getReservationSubmitLabel(selectedPaymentPolicy) : "예약 완료"
           }

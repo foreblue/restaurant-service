@@ -14,6 +14,9 @@ import com.example.restaurant.audit.AuditLogRepository
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
 import com.example.restaurant.common.trace.TraceContext
+import com.example.restaurant.member.CustomerMemberEntity
+import com.example.restaurant.member.CustomerMemberRepository
+import com.example.restaurant.member.CustomerMemberStatus
 import com.example.restaurant.notification.NotificationRepository
 import com.example.restaurant.notification.NotificationStatus
 import com.example.restaurant.notification.NotificationChannel
@@ -158,6 +161,9 @@ class RestaurantApiApplicationTests {
 
     @Autowired
     private lateinit var customerRepository: CustomerRepository
+
+    @Autowired
+    private lateinit var customerMemberRepository: CustomerMemberRepository
 
     @Autowired
     private lateinit var reservationRepository: ReservationRepository
@@ -1202,11 +1208,20 @@ class RestaurantApiApplicationTests {
             status { isOk() }
             jsonPath("$.openapi") { exists() }
             jsonPath("$.info.title") { value("Restaurant Service API") }
+            jsonPath("$.paths['/api/public/restaurants'].get.summary") {
+                value("전체 매장 목록 조회")
+            }
             jsonPath("$.paths['/api/public/restaurants/{slug}'].get.summary") {
                 value("slug 기준 공개 예약 페이지 조회")
             }
             jsonPath("$.paths['/api/public/restaurants/{restaurantId}/reservation-page'].get.summary") {
                 value("restaurantId 기준 공개 예약 페이지 조회")
+            }
+            jsonPath("$.paths['/api/public/members'].get.summary") {
+                value("예약 회원 목록 조회")
+            }
+            jsonPath("$.paths['/api/public/members/{memberId}'].get.summary") {
+                value("예약 회원 단건 조회")
             }
         }
     }
@@ -1222,8 +1237,11 @@ class RestaurantApiApplicationTests {
         val schemas = JsonPath.read<Map<String, Any>>(openApiJson, "$.components.schemas")
 
         assertThat(paths.keys).contains(
+            "/api/public/restaurants",
             "/api/public/restaurants/{slug}",
             "/api/public/restaurants/{restaurantId}/reservation-page",
+            "/api/public/members",
+            "/api/public/members/{memberId}",
             "/api/public/restaurants/{restaurantId}/availability/dates",
             "/api/public/restaurants/{restaurantId}/availability/times",
             "/api/public/reservation-lookup-tokens",
@@ -1256,6 +1274,9 @@ class RestaurantApiApplicationTests {
             "RestaurantApplicationSaveRequest",
             "RestaurantApplicationResponse",
             "RestaurantSettingsResponse",
+            "PublicRestaurantListResponse",
+            "PublicMemberListResponse",
+            "PublicMemberResponse",
             "ReservationProductSaveRequest",
             "ReservationProductResponse",
             "PublicReservationCreateRequest",
@@ -2295,6 +2316,64 @@ class RestaurantApiApplicationTests {
             ?: error("Reservation page should exist.")
         assertThat(auditLogRepository.findByTargetTypeAndTargetId("reservation_page", pageId).map { it.action })
             .contains("RESERVATION_PAGE_UPDATED")
+    }
+
+    @Test
+    fun publicRestaurantListReturnsAllTestRestaurants() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "restaurant-list-public-owner@example.com",
+            restaurantName = "목록 공개 예약 매장",
+            slug = "restaurant-list-public",
+        )
+        val emptyOwner = createBusinessUser("restaurant-list-empty-owner@example.com")
+        val emptyCookie = loginAndExtractSessionCookie(emptyOwner.email)
+        val emptyRestaurant = createApprovedRestaurantForSettings(
+            owner = emptyOwner,
+            restaurantName = "상품 없는 공개 매장",
+            slug = "restaurant-list-empty",
+        )
+
+        mockMvc.put("/api/business/restaurants/${emptyRestaurant.id}/business-hours") {
+            cookie(emptyCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "hours": [
+                {"dayOfWeek": "MONDAY", "opensAt": "11:00:00", "closesAt": "13:00:00"}
+              ]
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isOk() }
+        }
+
+        mockMvc.put("/api/business/restaurants/${emptyRestaurant.id}/reservation-page") {
+            cookie(emptyCookie)
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"slug": "restaurant-list-empty", "status": "PUBLIC"}"""
+        }.andExpect {
+            status { isOk() }
+        }
+
+        val responseBody = mockMvc.get("/api/public/restaurants")
+            .andExpect {
+                status { isOk() }
+            }
+            .andReturn()
+            .response
+            .contentAsString
+        val restaurants = JsonPath.read<List<Map<String, Any?>>>(responseBody, "$.restaurants")
+        val slugs = restaurants.map { it["slug"] }
+        val target = restaurants.single { it["slug"] == "restaurant-list-public" }
+        val emptyTarget = restaurants.single { it["slug"] == "restaurant-list-empty" }
+
+        assertThat(slugs).contains("restaurant-list-public")
+        assertThat(slugs).contains("restaurant-list-empty")
+        assertThat(target["id"]).isEqualTo(fixture.restaurant.id.toInt())
+        assertThat(target["name"]).isEqualTo("목록 공개 예약 매장")
+        assertThat(target["publicUrl"]).isEqualTo("/r/restaurant-list-public")
+        assertThat(target["reservationProductCount"]).isEqualTo(1)
+        assertThat(emptyTarget["reservationProductCount"]).isEqualTo(0)
     }
 
     @Test
@@ -3980,6 +4059,84 @@ class RestaurantApiApplicationTests {
     }
 
     @Test
+    fun publicMemberCanBeFetchedById() {
+        val member = customerMemberRepository.saveAndFlush(
+            CustomerMemberEntity(
+                email = "login.member@example.com",
+                name = "로그인회원",
+                phoneNumber = "01090900004",
+                allergyNote = "유제품",
+                status = CustomerMemberStatus.ACTIVE,
+            ),
+        )
+        val inactiveMember = customerMemberRepository.saveAndFlush(
+            CustomerMemberEntity(
+                email = "login.inactive@example.com",
+                name = "비활성로그인",
+                phoneNumber = "01090900005",
+                status = CustomerMemberStatus.INACTIVE,
+            ),
+        )
+
+        mockMvc.get("/api/public/members/${member.id}").andExpect {
+            status { isOk() }
+            jsonPath("$.id") { value(member.id.toInt()) }
+            jsonPath("$.name") { value("로그인회원") }
+            jsonPath("$.phoneLast4") { value("0004") }
+            jsonPath("$.email") { value("login.member@example.com") }
+            jsonPath("$.allergyNote") { value("유제품") }
+        }
+
+        mockMvc.get("/api/public/members/${inactiveMember.id}").andExpect {
+            status { isNotFound() }
+            jsonPath("$.code") { value("NOT_FOUND") }
+        }
+    }
+
+    @Test
+    fun publicMembersAreListed() {
+        customerMemberRepository.saveAndFlush(
+            CustomerMemberEntity(
+                email = "listed.member@example.com",
+                name = "목록회원",
+                phoneNumber = "01090900001",
+                allergyNote = "복숭아",
+                anniversaryType = "BIRTHDAY",
+                anniversaryDate = "05-17",
+                marketingOptIn = true,
+                status = CustomerMemberStatus.ACTIVE,
+            ),
+        )
+        customerMemberRepository.saveAndFlush(
+            CustomerMemberEntity(
+                email = "inactive.member@example.com",
+                name = "비활성회원",
+                phoneNumber = "01090900002",
+                status = CustomerMemberStatus.INACTIVE,
+            ),
+        )
+
+        mockMvc.get("/api/public/members").andExpect {
+            status { isOk() }
+            jsonPath("$.members[?(@.email == 'listed.member@example.com')].name") {
+                value(org.hamcrest.Matchers.hasItem("목록회원"))
+            }
+            jsonPath("$.members[?(@.email == 'listed.member@example.com')].phoneLast4") {
+                value(org.hamcrest.Matchers.hasItem("0001"))
+            }
+            jsonPath("$.members[?(@.email == 'listed.member@example.com')].allergyNote") {
+                value(org.hamcrest.Matchers.hasItem("복숭아"))
+            }
+            jsonPath("$.members[?(@.email == 'listed.member@example.com')].marketingOptIn") {
+                value(org.hamcrest.Matchers.hasItem(true))
+            }
+            jsonPath("$.members[?(@.email == 'inactive.member@example.com')]") {
+                value(org.hamcrest.Matchers.empty<Any>())
+            }
+        }
+    }
+
+    @Test
     fun publicReservationCreateMatchesCustomerAndReusesIdempotencyKey() {
         val fixture = createPublicReservationFixture(
             ownerEmail = "reservation-create-owner@example.com",
@@ -4044,6 +4201,62 @@ class RestaurantApiApplicationTests {
 
         assertThat(customerRepository.countByRestaurantId(fixture.restaurant.id)).isEqualTo(1)
         assertThat(reservationRepository.countByRestaurantId(fixture.restaurant.id)).isEqualTo(2)
+    }
+
+    @Test
+    fun publicReservationCanBeCreatedForMember() {
+        val fixture = createPublicReservationFixture(
+            ownerEmail = "reservation-member-owner@example.com",
+            restaurantName = "Reservation Member Table",
+            slug = "reservation-member",
+        )
+        val member = customerMemberRepository.saveAndFlush(
+            CustomerMemberEntity(
+                email = "reservation.member@example.com",
+                name = "회원예약",
+                phoneNumber = "01090900003",
+                allergyNote = "갑각류",
+                anniversaryType = "BIRTHDAY",
+                anniversaryDate = "05-17",
+                marketingOptIn = true,
+                status = CustomerMemberStatus.ACTIVE,
+            ),
+        )
+
+        val createResult = mockMvc.post("/api/public/reservations") {
+            header("Idempotency-Key", "public-reserve-member-1")
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+            {
+              "restaurantId": ${fixture.restaurant.id},
+              "productId": ${fixture.productId},
+              "visitDate": "${fixture.targetDate}",
+              "startTime": "11:00:00",
+              "partySize": 2,
+              "memberId": ${member.id},
+              "customerRequest": "회원 예약 요청"
+            }
+            """.trimIndent()
+        }.andExpect {
+            status { isCreated() }
+            jsonPath("$.memberId") { value(member.id.toInt()) }
+            jsonPath("$.customerName") { value("회원예약") }
+            jsonPath("$.customerPhoneLast4") { value("0003") }
+            jsonPath("$.customerEmail") { value("reservation.member@example.com") }
+            jsonPath("$.allergyNote") { value("갑각류") }
+            jsonPath("$.anniversaryType") { value("BIRTHDAY") }
+            jsonPath("$.anniversaryDate") { value("05-17") }
+            jsonPath("$.marketingOptIn") { value(true) }
+        }.andReturn()
+
+        val reservationId = JsonPath.read<Int>(createResult.response.contentAsString, "$.id").toLong()
+        val reservation = reservationRepository.findById(reservationId).orElseThrow()
+        val customer = customerRepository.findByRestaurantIdAndPhoneNumber(fixture.restaurant.id, "01090900003")
+
+        assertThat(reservation.member?.id).isEqualTo(member.id)
+        assertThat(customer).isNotNull
+        assertThat(customer!!.email).isEqualTo("reservation.member@example.com")
+        assertThat(customer.allergyNote).isEqualTo("갑각류")
     }
 
     @Test

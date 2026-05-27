@@ -16,6 +16,19 @@ import org.springframework.web.bind.annotation.RestController
 class PublicRestaurantController(
     private val restaurantSettingsService: RestaurantSettingsService,
 ) {
+    @GetMapping
+    @Operation(
+        summary = "전체 매장 목록 조회",
+        description = "고객 예약 진입 화면에 노출할 매장 목록을 반환합니다.",
+    )
+    @ApiResponses(
+        value = [
+            ApiResponse(responseCode = "200", description = "전체 매장 목록 조회 성공"),
+        ],
+    )
+    fun publicRestaurants(): PublicRestaurantListResponse =
+        restaurantSettingsService.publicRestaurants()
+
     @GetMapping("/{slug}")
     @Operation(
         summary = "slug 기준 공개 예약 페이지 조회",

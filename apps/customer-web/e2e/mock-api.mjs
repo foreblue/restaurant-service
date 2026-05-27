@@ -88,6 +88,42 @@ const products = [
   },
 ];
 
+const members = [
+  {
+    id: 1,
+    name: "김민지",
+    phoneNumber: "01010001001",
+    phoneLast4: "1001",
+    email: "minji.member@example.com",
+    allergyNote: "갑각류",
+    anniversaryType: "BIRTHDAY",
+    anniversaryDate: "05-17",
+    marketingOptIn: true,
+  },
+  {
+    id: 2,
+    name: "박지수",
+    phoneNumber: "01010001002",
+    phoneLast4: "1002",
+    email: "jisoo.member@example.com",
+    allergyNote: null,
+    anniversaryType: null,
+    anniversaryDate: null,
+    marketingOptIn: false,
+  },
+  {
+    id: 3,
+    name: "결제실패",
+    phoneNumber: "01010001003",
+    phoneLast4: "1003",
+    email: "fail.member@example.com",
+    allergyNote: null,
+    anniversaryType: null,
+    anniversaryDate: null,
+    marketingOptIn: false,
+  },
+];
+
 const longContentRestaurant = {
   ...restaurant,
   name: "청담 테스트 다이닝 프라이빗 셰프 테이블 긴 매장명 검증 지점",
@@ -159,6 +195,79 @@ const server = http.createServer(async (request, response) => {
 
   if (request.method === "GET" && url.pathname === "/api/public/restaurants/cheongdam-main") {
     sendJson(response, activeRestaurant());
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/public/restaurants") {
+    const item = activeRestaurant();
+    sendJson(response, {
+      restaurants: [
+        {
+          id: item.id,
+          name: item.name,
+          slug: item.slug,
+          description: item.description,
+          phone: item.phone,
+          addressLine1: item.addressLine1,
+          addressLine2: item.addressLine2,
+          cuisineTypes: item.cuisineTypes,
+          coverImageFileId: item.coverImageFileId,
+          coverImageUrl: item.coverImageUrl,
+          publicUrl: item.reservationPage.publicUrl,
+          reservationProductCount: activeProducts().length,
+          publishedAt: item.reservationPage.publishedAt,
+        },
+        {
+          id: 102,
+          name: "미나리 다이닝",
+          slug: "minari-dining",
+          description: "기념일 방문에 적합한 프라이빗 코스 다이닝입니다.",
+          phone: "02-555-2020",
+          addressLine1: "서울시 강남구 도산대로 120",
+          addressLine2: "3층",
+          cuisineTypes: ["코스요리"],
+          coverImageFileId: null,
+          coverImageUrl: null,
+          publicUrl: "/r/minari-dining",
+          reservationProductCount: 0,
+          publishedAt: "2026-05-02T00:00:00.000Z",
+        },
+        {
+          id: 103,
+          name: "오후의 테이블",
+          slug: "afternoon-table",
+          description: "성수동 브런치와 파스타를 예약으로 운영하는 테스트 매장입니다.",
+          phone: "02-555-3030",
+          addressLine1: "서울시 성동구 연무장길 24",
+          addressLine2: null,
+          cuisineTypes: ["브런치"],
+          coverImageFileId: null,
+          coverImageUrl: null,
+          publicUrl: "/r/afternoon-table",
+          reservationProductCount: 0,
+          publishedAt: "2026-05-03T00:00:00.000Z",
+        },
+      ],
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/public/members") {
+    sendJson(response, {
+      members: members.map(publicMemberResponse),
+    });
+    return;
+  }
+
+  const memberMatch = url.pathname.match(/^\/api\/public\/members\/(\d+)$/);
+  if (request.method === "GET" && memberMatch) {
+    const member = members.find((item) => item.id === Number(memberMatch[1]));
+    if (!member) {
+      sendJson(response, { code: "NOT_FOUND", message: "회원을 찾을 수 없습니다." }, 404);
+      return;
+    }
+
+    sendJson(response, publicMemberResponse(member));
     return;
   }
 
@@ -343,7 +452,11 @@ server.listen(port, "127.0.0.1", () => {
 
 function createReservation(payload) {
   const id = nextReservationId++;
-  const customerPhone = String(payload.customerPhone ?? "01012345678").replace(/\D/g, "");
+  const member = members.find((item) => item.id === Number(payload.memberId)) ?? null;
+  const customerName = payload.customerName ?? member?.name ?? "홍길동";
+  const customerPhone = String(
+    payload.customerPhone ?? member?.phoneNumber ?? "01012345678",
+  ).replace(/\D/g, "");
 
   return {
     id,
@@ -352,20 +465,21 @@ function createReservation(payload) {
     restaurantId: restaurant.id,
     productId: Number(payload.productId ?? 10),
     customerId: 800 + id,
+    memberId: member?.id ?? payload.memberId ?? null,
     visitDate: payload.visitDate ?? baseDate,
     startTime: payload.startTime ?? "18:00",
     endTime: "19:30",
     partySize: Number(payload.partySize ?? 2),
-    customerName: payload.customerName ?? "홍길동",
+    customerName,
     customerPhone,
     customerPhoneLast4: customerPhone.slice(-4),
-    customerEmail: payload.customerEmail ?? null,
+    customerEmail: payload.customerEmail ?? member?.email ?? null,
     customerRequest: payload.customerRequest ?? null,
-    allergyNote: payload.allergyNote ?? null,
-    anniversaryType: payload.anniversaryType ?? null,
-    anniversaryDate: payload.anniversaryDate ?? null,
+    allergyNote: payload.allergyNote ?? member?.allergyNote ?? null,
+    anniversaryType: payload.anniversaryType ?? member?.anniversaryType ?? null,
+    anniversaryDate: payload.anniversaryDate ?? member?.anniversaryDate ?? null,
     requestTemplateValues: payload.requestTemplateValues ?? [],
-    marketingOptIn: Boolean(payload.marketingOptIn),
+    marketingOptIn: Boolean(payload.marketingOptIn ?? member?.marketingOptIn),
     lookupToken: `lookup-token-${id}`,
     lookupTokenExpiresAt: "2026-05-19T00:00:00.000Z",
     cancelable: true,
@@ -407,6 +521,19 @@ function activeRestaurant() {
 
 function activeProducts() {
   return currentScenario === "long-content" ? longContentProducts : products;
+}
+
+function publicMemberResponse(member) {
+  return {
+    id: member.id,
+    name: member.name,
+    phoneLast4: member.phoneLast4,
+    email: member.email,
+    allergyNote: member.allergyNote,
+    anniversaryType: member.anniversaryType,
+    anniversaryDate: member.anniversaryDate,
+    marketingOptIn: member.marketingOptIn,
+  };
 }
 
 function refundPreview(reservation) {

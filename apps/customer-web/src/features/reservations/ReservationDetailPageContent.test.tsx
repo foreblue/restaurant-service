@@ -32,6 +32,7 @@ const reservationDetail: PublicReservationDetailResponse = {
   productId: 10,
   productName: "디너 코스",
   customerId: 11,
+  memberId: 1,
   visitDate: "2026-05-18",
   startTime: "18:00",
   endTime: "19:30",

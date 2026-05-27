@@ -1,8 +1,32 @@
 import { createPublicApiClient } from "@/shared/api/publicApiClient";
 
-import { getPublicRestaurantById, getPublicRestaurantBySlug } from "./publicRestaurantApi";
+import {
+  getPublicRestaurantById,
+  getPublicRestaurantBySlug,
+  getPublicRestaurants,
+} from "./publicRestaurantApi";
 
 describe("publicRestaurantApi", () => {
+  it("requests public reservable restaurants", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ restaurants: [] }), {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      }),
+    );
+    const client = createPublicApiClient({
+      baseUrl: "http://api.test",
+      fetcher,
+    });
+
+    await getPublicRestaurants(client);
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "http://api.test/api/public/restaurants",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
   it("requests a public restaurant by slug", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ id: 1 }), {

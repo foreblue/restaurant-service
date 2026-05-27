@@ -1,6 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useEffect } from "react";
 import { type SubmitHandler, useForm } from "react-hook-form";
 
 import {
@@ -14,6 +15,7 @@ import {
   Textarea,
 } from "@/components/ui";
 
+import { type PublicMember } from "./publicMemberTypes";
 import {
   reservationCustomerSchema,
   type ReservationCustomerFormInput,
@@ -21,6 +23,8 @@ import {
 } from "./reservationCustomerSchema";
 
 interface ReservationCustomerFormProps {
+  defaultMemberId?: number | null | undefined;
+  members: PublicMember[];
   onSubmit: SubmitHandler<ReservationCustomerFormValues>;
   submitLabel?: string | undefined;
   submitting?: boolean | undefined;
@@ -42,27 +46,29 @@ const anniversaryTypeOptions = [
 ] as const;
 
 const privacyConsentDescription =
-  "예약 확인과 매장 응대를 위해 이름, 연락처, 선택 입력 정보를 수집합니다.";
+  "예약 확인과 매장 응대를 위해 회원 정보와 선택 입력 정보를 수집합니다.";
 const marketingConsentDescription = "수신 동의는 선택이며, 동의하지 않아도 예약할 수 있습니다.";
 
 export function ReservationCustomerForm({
+  defaultMemberId = null,
+  members,
   onSubmit,
   submitLabel = "입력 정보 확인",
   submitting = false,
 }: ReservationCustomerFormProps) {
+  const defaultMemberFormValue = toMemberFormValue(defaultMemberId);
   const {
     formState: { errors, isSubmitting },
     handleSubmit,
     register,
+    setValue,
   } = useForm<ReservationCustomerFormInput, unknown, ReservationCustomerFormValues>({
     defaultValues: {
-      customerName: "",
-      email: "",
       allergyNote: "",
       anniversaryDate: "",
       anniversaryType: "",
       marketingConsent: false,
-      phoneNumber: "",
+      memberId: defaultMemberFormValue,
       privacyConsent: false,
       requestNotes: "",
       requestTemplateValues: [],
@@ -70,6 +76,11 @@ export function ReservationCustomerForm({
     resolver: zodResolver(reservationCustomerSchema),
     shouldFocusError: true,
   });
+  const memberFieldId = `reservation-member-${members[0]?.id ?? "empty"}`;
+
+  useEffect(() => {
+    setValue("memberId", defaultMemberFormValue, { shouldValidate: false });
+  }, [defaultMemberFormValue, setValue]);
 
   return (
     <form
@@ -78,68 +89,49 @@ export function ReservationCustomerForm({
       onSubmit={handleSubmit(onSubmit)}
     >
       <div>
-        <h3 className="text-base font-semibold text-slate-950">고객 정보</h3>
+        <h3 className="text-base font-semibold text-slate-950">예약 회원</h3>
         <p className="mt-1 text-sm leading-6 text-slate-600">
-          예약 확인에 필요한 정보를 입력해 주세요.
+          회원 정보로 예약자와 연락처를 자동 연결합니다.
         </p>
       </div>
 
-      <Field
-        error={errors.customerName?.message}
-        htmlFor="reservation-customer-name"
-        label="이름"
-        required
-      >
-        <Input
-          autoComplete="name"
-          id="reservation-customer-name"
-          invalid={Boolean(errors.customerName)}
-          {...register("customerName")}
-          aria-describedby={getFieldDescriptionIds(
-            "reservation-customer-name",
-            false,
-            Boolean(errors.customerName),
-          )}
-        />
-      </Field>
-
-      <Field
-        error={errors.phoneNumber?.message}
-        htmlFor="reservation-phone-number"
-        label="휴대폰 번호"
-        required
-      >
-        <Input
-          autoComplete="tel"
-          id="reservation-phone-number"
-          inputMode="tel"
-          invalid={Boolean(errors.phoneNumber)}
-          placeholder="01012345678"
-          type="tel"
-          {...register("phoneNumber")}
-          aria-describedby={getFieldDescriptionIds(
-            "reservation-phone-number",
-            false,
-            Boolean(errors.phoneNumber),
-          )}
-        />
-      </Field>
-
-      <Field error={errors.email?.message} htmlFor="reservation-email" label="이메일">
-        <Input
-          autoComplete="email"
-          id="reservation-email"
-          inputMode="email"
-          invalid={Boolean(errors.email)}
-          placeholder="name@example.com"
-          type="email"
-          {...register("email")}
-          aria-describedby={getFieldDescriptionIds(
-            "reservation-email",
-            false,
-            Boolean(errors.email),
-          )}
-        />
+      <Field error={errors.memberId?.message} htmlFor={memberFieldId} label="회원" required>
+        <div
+          aria-describedby={getFieldDescriptionIds(memberFieldId, false, Boolean(errors.memberId))}
+          aria-invalid={errors.memberId ? true : undefined}
+          className="grid gap-2"
+          role="radiogroup"
+        >
+          {members.map((member) => (
+            <label
+              className="flex cursor-pointer gap-3 rounded-md border bg-white p-3 text-sm transition hover:border-teal-600 has-[:checked]:border-teal-700 has-[:checked]:bg-teal-50"
+              htmlFor={`reservation-member-${member.id}`}
+              key={member.id}
+            >
+              <input
+                className="mt-1 size-5 shrink-0 border-slate-300 text-teal-700 focus:ring-2 focus:ring-teal-600"
+                id={`reservation-member-${member.id}`}
+                type="radio"
+                value={member.id}
+                {...register("memberId")}
+              />
+              <span className="grid min-w-0 flex-1 gap-2">
+                <span className="flex items-start justify-between gap-3">
+                  <span className="min-w-0">
+                    <span className="block font-semibold text-slate-950">{member.name}</span>
+                    <span className="mt-0.5 block break-words text-xs leading-5 text-slate-500">
+                      연락처 끝자리 {member.phoneLast4} · {member.email}
+                    </span>
+                  </span>
+                  <span className="shrink-0 rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
+                    회원 #{member.id}
+                  </span>
+                </span>
+                <MemberProfileBadges member={member} />
+              </span>
+            </label>
+          ))}
+        </div>
       </Field>
 
       <Field
@@ -277,4 +269,44 @@ export function ReservationCustomerForm({
       </Button>
     </form>
   );
+}
+
+function MemberProfileBadges({ member }: { member: PublicMember }) {
+  const badges = [
+    member.allergyNote ? `알레르기 ${member.allergyNote}` : null,
+    member.anniversaryType ? formatAnniversary(member) : null,
+    member.marketingOptIn ? "마케팅 수신 동의" : null,
+  ].filter((badge): badge is string => Boolean(badge));
+
+  if (badges.length === 0) {
+    return null;
+  }
+
+  return (
+    <span className="flex flex-wrap gap-1.5">
+      {badges.map((badge) => (
+        <span
+          className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-600"
+          key={badge}
+        >
+          {badge}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function formatAnniversary(member: PublicMember) {
+  const typeLabels: Record<string, string> = {
+    BIRTHDAY: "생일",
+    OTHER: "기념일",
+    WEDDING_ANNIVERSARY: "결혼기념일",
+  };
+  const typeLabel = typeLabels[member.anniversaryType ?? ""] ?? "기념일";
+
+  return member.anniversaryDate ? `${typeLabel} ${member.anniversaryDate}` : typeLabel;
+}
+
+function toMemberFormValue(memberId: number | null | undefined) {
+  return memberId ? String(memberId) : "";
 }

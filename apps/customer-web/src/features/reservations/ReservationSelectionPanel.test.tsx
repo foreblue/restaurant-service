@@ -4,6 +4,7 @@ import { AppProviders } from "@/app/providers";
 import { PublicApiError } from "@/shared/api/apiError";
 import { type PublicApiClient } from "@/shared/api/publicApiClient";
 
+import { clearStoredCustomerMemberId, storeCustomerMemberId } from "./customerMemberSession";
 import { ReservationSelectionPanel } from "./ReservationSelectionPanel";
 import { type PublicReservationProduct } from "./reservationOptionsTypes";
 
@@ -49,6 +50,33 @@ function createMockClient(): PublicApiClient {
   return {
     baseUrl: "http://api.test",
     get: vi.fn((path: string) => {
+      if (path === "/api/public/members") {
+        return Promise.resolve({
+          members: [
+            {
+              id: 1,
+              name: "김민지",
+              phoneLast4: "1001",
+              email: "minji.member@example.com",
+              allergyNote: "갑각류",
+              anniversaryType: "BIRTHDAY",
+              anniversaryDate: "05-17",
+              marketingOptIn: true,
+            },
+            {
+              id: 2,
+              name: "박지수",
+              phoneLast4: "1002",
+              email: "jisoo.member@example.com",
+              allergyNote: null,
+              anniversaryType: null,
+              anniversaryDate: null,
+              marketingOptIn: false,
+            },
+          ],
+        });
+      }
+
       if (path.includes("/availability/dates")) {
         return Promise.resolve({
           restaurantId: 1,
@@ -104,6 +132,7 @@ function createMockClient(): PublicApiClient {
         restaurantId: 1,
         productId: 10,
         customerId: 11,
+        memberId: 1,
         visitDate: "2026-05-18",
         startTime: "18:00",
         endTime: "19:30",
@@ -125,6 +154,10 @@ function createMockClient(): PublicApiClient {
 }
 
 describe("ReservationSelectionPanel", () => {
+  beforeEach(() => {
+    clearStoredCustomerMemberId();
+  });
+
   it("lets customers select only available product, date, party size, and time options", async () => {
     const client = createMockClient();
 
@@ -161,6 +194,7 @@ describe("ReservationSelectionPanel", () => {
 
   it("shows payment policy summary and branches the submit copy", async () => {
     const client = createMockClient();
+    storeCustomerMemberId(1);
 
     render(
       <AppProviders apiClient={client}>
@@ -212,6 +246,7 @@ describe("ReservationSelectionPanel", () => {
 
   it("creates a reservation and shows the completion result", async () => {
     const client = createMockClient();
+    storeCustomerMemberId(1);
 
     render(
       <AppProviders apiClient={client}>
@@ -221,8 +256,6 @@ describe("ReservationSelectionPanel", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /2026-05-18/ }));
     fireEvent.click(await screen.findByRole("button", { name: /18:00/ }));
-    fireEvent.change(screen.getByLabelText(/이름/), { target: { value: "홍길동" } });
-    fireEvent.change(screen.getByLabelText(/휴대폰 번호/), { target: { value: "010-1234-5678" } });
     fireEvent.click(screen.getByLabelText("개인정보 수집에 동의합니다."));
     fireEvent.click(screen.getByRole("button", { name: "예약 완료" }));
 
@@ -231,8 +264,7 @@ describe("ReservationSelectionPanel", () => {
         "/api/public/reservations",
         expect.objectContaining({
           body: expect.objectContaining({
-            customerName: "홍길동",
-            customerPhone: "01012345678",
+            memberId: 1,
             partySize: 2,
             productId: 10,
             restaurantId: 1,
@@ -249,6 +281,7 @@ describe("ReservationSelectionPanel", () => {
 
   it("offers availability refresh when reservation creation conflicts", async () => {
     const client = createMockClient();
+    storeCustomerMemberId(1);
     vi.mocked(client.post).mockRejectedValueOnce(
       new PublicApiError({
         code: "CONFLICT",
@@ -266,8 +299,6 @@ describe("ReservationSelectionPanel", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /2026-05-18/ }));
     fireEvent.click(await screen.findByRole("button", { name: /18:00/ }));
-    fireEvent.change(screen.getByLabelText(/이름/), { target: { value: "홍길동" } });
-    fireEvent.change(screen.getByLabelText(/휴대폰 번호/), { target: { value: "010-1234-5678" } });
     fireEvent.click(screen.getByLabelText("개인정보 수집에 동의합니다."));
     fireEvent.click(screen.getByRole("button", { name: "예약 완료" }));
 
@@ -286,5 +317,25 @@ describe("ReservationSelectionPanel", () => {
         expect.any(Object),
       );
     });
+  });
+
+  it("prompts login before showing the reservation customer form", async () => {
+    const client = createMockClient();
+
+    render(
+      <AppProviders apiClient={client}>
+        <ReservationSelectionPanel products={products} restaurantId={1} />
+      </AppProviders>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /2026-05-18/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /18:00/ }));
+
+    expect(await screen.findByText("사용자 로그인 후 예약할 수 있습니다.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "사용자 로그인" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("/login?redirect="),
+    );
+    expect(screen.queryByRole("button", { name: "예약 완료" })).not.toBeInTheDocument();
   });
 });

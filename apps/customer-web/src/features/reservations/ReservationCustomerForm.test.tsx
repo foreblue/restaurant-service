@@ -1,42 +1,62 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { ReservationCustomerForm } from "./ReservationCustomerForm";
+import { type PublicMember } from "./publicMemberTypes";
+
+const members: PublicMember[] = [
+  {
+    id: 1,
+    name: "김민지",
+    phoneLast4: "1001",
+    email: "minji.member@example.com",
+    allergyNote: "갑각류",
+    anniversaryType: "BIRTHDAY",
+    anniversaryDate: "05-17",
+    marketingOptIn: true,
+  },
+  {
+    id: 2,
+    name: "박지수",
+    phoneLast4: "1002",
+    email: "jisoo.member@example.com",
+    allergyNote: null,
+    anniversaryType: null,
+    anniversaryDate: null,
+    marketingOptIn: false,
+  },
+];
 
 describe("ReservationCustomerForm", () => {
   it("blocks submit and focuses the first invalid required field", async () => {
     const onSubmit = vi.fn();
 
-    render(<ReservationCustomerForm onSubmit={onSubmit} />);
+    render(<ReservationCustomerForm members={members} onSubmit={onSubmit} />);
 
     fireEvent.click(screen.getByRole("button", { name: "입력 정보 확인" }));
 
-    expect(await screen.findByText("이름을 입력해 주세요.")).toBeInTheDocument();
-    expect(screen.getByText("휴대폰 번호를 입력해 주세요.")).toBeInTheDocument();
+    expect(await screen.findByText("예약할 회원을 선택해 주세요.")).toBeInTheDocument();
     expect(screen.getByText("개인정보 수집에 동의해 주세요.")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByLabelText(/이름/)).toHaveFocus());
+    await waitFor(() => expect(screen.getByLabelText(/김민지/)).toHaveFocus());
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it("allows optional fields to be empty", async () => {
     const onSubmit = vi.fn();
 
-    render(<ReservationCustomerForm onSubmit={onSubmit} />);
+    render(<ReservationCustomerForm members={members} onSubmit={onSubmit} />);
 
-    fireEvent.change(screen.getByLabelText(/이름/), { target: { value: "  홍길동 " } });
-    fireEvent.change(screen.getByLabelText(/휴대폰 번호/), { target: { value: "010-1234-5678" } });
+    fireEvent.click(screen.getByLabelText(/김민지/));
     fireEvent.click(screen.getByLabelText("개인정보 수집에 동의합니다."));
     fireEvent.click(screen.getByRole("button", { name: "입력 정보 확인" }));
 
     await waitFor(() => {
       expect(onSubmit).toHaveBeenCalledWith(
         expect.objectContaining({
-          customerName: "홍길동",
           allergyNote: null,
           anniversaryDate: null,
           anniversaryType: null,
-          email: null,
           marketingConsent: false,
-          phoneNumber: "01012345678",
+          memberId: 1,
           privacyConsent: true,
           requestNotes: null,
           requestTemplateValues: [],
@@ -46,13 +66,35 @@ describe("ReservationCustomerForm", () => {
     });
   });
 
+  it("checks the default member when a logged-in member is provided", async () => {
+    const onSubmit = vi.fn();
+
+    render(
+      <ReservationCustomerForm defaultMemberId={1} members={[members[0]]} onSubmit={onSubmit} />,
+    );
+
+    expect(screen.getByLabelText(/김민지/)).toBeChecked();
+
+    fireEvent.click(screen.getByLabelText("개인정보 수집에 동의합니다."));
+    fireEvent.click(screen.getByRole("button", { name: "입력 정보 확인" }));
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          memberId: 1,
+          privacyConsent: true,
+        }),
+        expect.anything(),
+      );
+    });
+  });
+
   it("submits optional crm fields when customers provide them", async () => {
     const onSubmit = vi.fn();
 
-    render(<ReservationCustomerForm onSubmit={onSubmit} />);
+    render(<ReservationCustomerForm members={members} onSubmit={onSubmit} />);
 
-    fireEvent.change(screen.getByLabelText(/이름/), { target: { value: "홍길동" } });
-    fireEvent.change(screen.getByLabelText(/휴대폰 번호/), { target: { value: "01012345678" } });
+    fireEvent.click(screen.getByLabelText(/박지수/));
     fireEvent.change(screen.getByLabelText("알레르기"), { target: { value: "견과류" } });
     fireEvent.change(screen.getByLabelText("기념일"), { target: { value: "BIRTHDAY" } });
     fireEvent.change(screen.getByLabelText("기념일 날짜"), { target: { value: "05-17" } });
@@ -69,6 +111,7 @@ describe("ReservationCustomerForm", () => {
           anniversaryDate: "05-17",
           anniversaryType: "BIRTHDAY",
           marketingConsent: true,
+          memberId: 2,
           requestTemplateValues: ["조용한 좌석 선호", "기념일 방문"],
         }),
         expect.anything(),
@@ -76,21 +119,19 @@ describe("ReservationCustomerForm", () => {
     });
   });
 
-  it("validates optional email format when provided", async () => {
-    render(<ReservationCustomerForm onSubmit={vi.fn()} />);
+  it("renders member profile details", () => {
+    render(<ReservationCustomerForm members={members} onSubmit={vi.fn()} />);
 
-    fireEvent.change(screen.getByLabelText(/이메일/), { target: { value: "invalid" } });
-    fireEvent.click(screen.getByRole("button", { name: "입력 정보 확인" }));
-
-    expect(await screen.findByText("이메일 형식을 확인해 주세요.")).toBeInTheDocument();
+    expect(screen.getByText("연락처 끝자리 1001 · minji.member@example.com")).toBeInTheDocument();
+    expect(screen.getByText("알레르기 갑각류")).toBeInTheDocument();
+    expect(screen.getByText("생일 05-17")).toBeInTheDocument();
   });
 
-  it("uses mobile-friendly input attributes", () => {
-    render(<ReservationCustomerForm onSubmit={vi.fn()} />);
+  it("keeps optional input guidance and privacy copy visible", () => {
+    render(<ReservationCustomerForm members={members} onSubmit={vi.fn()} />);
 
-    expect(screen.getByLabelText(/휴대폰 번호/)).toHaveAttribute("inputmode", "tel");
-    expect(screen.getByLabelText(/이메일/)).toHaveAttribute("type", "email");
+    expect(screen.getByLabelText("기념일 날짜")).toHaveAttribute("placeholder", "05-17");
     expect(screen.getByText("민감 정보 입력 안내")).toBeInTheDocument();
-    expect(screen.getByText(/예약 확인과 매장 응대를 위해/)).toBeInTheDocument();
+    expect(screen.getByText(/회원 정보와 선택 입력 정보를 수집합니다/)).toBeInTheDocument();
   });
 });

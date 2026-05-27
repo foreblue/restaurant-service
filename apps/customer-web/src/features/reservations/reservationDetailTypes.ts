@@ -15,6 +15,7 @@ export interface PublicReservationDetailResponse {
   productId: number;
   productName: string;
   customerId: number;
+  memberId: number | null;
   visitDate: string;
   startTime: string;
   endTime: string;

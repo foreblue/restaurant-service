@@ -1,59 +1,35 @@
-"use client";
-
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { type FormEvent, useState } from "react";
 
 import { ReservationPageShell } from "@/components/layout/ReservationPageShell";
-import { Alert, Button, Field, Input, StateBlock } from "@/components/ui";
+import { StateBlock } from "@/components/ui";
+import { PublicRestaurantList } from "@/features/restaurants/PublicRestaurantList";
+import { type PublicRestaurantListItem } from "@/features/restaurants/publicRestaurantTypes";
 
-export function ReservationEntryPageContent() {
-  const router = useRouter();
-  const [reservationPath, setReservationPath] = useState("");
-  const [error, setError] = useState<string | null>(null);
+import { CustomerMemberSessionStatus } from "./CustomerMemberSessionStatus";
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+interface ReservationEntryPageContentProps {
+  restaurantListError?: boolean | undefined;
+  restaurants?: PublicRestaurantListItem[] | undefined;
+}
 
-    const targetPath = toReservationPagePath(reservationPath);
-
-    if (!targetPath) {
-      setError("매장에서 공유한 예약 링크나 예약 페이지 코드를 입력해 주세요.");
-      return;
-    }
-
-    setError(null);
-    router.push(targetPath);
-  }
-
+export function ReservationEntryPageContent({
+  restaurantListError = false,
+  restaurants = [],
+}: ReservationEntryPageContentProps) {
   return (
     <ReservationPageShell
-      description="매장에서 공유한 예약 링크나 예약 페이지 코드로 예약을 시작합니다."
+      description="테스트 매장 전체 목록에서 원하는 매장을 선택해 예약을 시작합니다."
       eyebrow="예약 신청"
-      title="예약 페이지 찾기"
+      title="전체 매장"
     >
       <div className="grid gap-4">
-        <form
-          className="grid gap-4 rounded-lg border bg-white p-5 shadow-sm"
-          onSubmit={handleSubmit}
-        >
-          <Field
-            error={error ?? undefined}
-            htmlFor="reservation-page-code"
-            label="예약 링크 또는 코드"
-          >
-            <Input
-              id="reservation-page-code"
-              placeholder="예: /r/cheongdam-main 또는 cheongdam-main"
-              value={reservationPath}
-              onChange={(event) => {
-                setError(null);
-                setReservationPath(event.target.value);
-              }}
-            />
-          </Field>
-          <Button type="submit">예약 화면 열기</Button>
-        </form>
+        <PublicRestaurantList
+          loadFailed={restaurantListError}
+          restaurants={restaurants}
+          sessionRedirectTo="/reserve"
+        />
+
+        <CustomerMemberSessionStatus redirectTo="/reserve" variant="entry" />
 
         <StateBlock title="예약번호가 이미 있나요?">
           <p>예약 조회에서 예약번호와 휴대폰 번호로 기존 예약을 확인할 수 있습니다.</p>
@@ -64,43 +40,7 @@ export function ReservationEntryPageContent() {
             예약 조회
           </Link>
         </StateBlock>
-
-        <Alert>
-          공개되지 않은 예약 페이지는 열리지 않습니다. 링크가 맞는데도 예약 화면이 보이지 않으면
-          매장에 공개 상태를 확인해 주세요.
-        </Alert>
       </div>
     </ReservationPageShell>
   );
-}
-
-function toReservationPagePath(value: string) {
-  const normalized = value.trim();
-
-  if (!normalized) {
-    return null;
-  }
-
-  try {
-    const url = new URL(normalized);
-    return toReservationPagePath(`${url.pathname}${url.search}`);
-  } catch {
-    // Plain codes are expected; URLs are handled above.
-  }
-
-  const path = normalized.replace(/^\/+/, "");
-
-  if (!path) {
-    return null;
-  }
-
-  if (path.startsWith("r/") || path.startsWith("reserve/")) {
-    return `/${path}`;
-  }
-
-  if (/^\d+$/.test(path)) {
-    return `/reserve/${path}`;
-  }
-
-  return `/r/${encodeURIComponent(path)}`;
 }

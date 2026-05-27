@@ -1,62 +1,61 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 
+import { AppProviders } from "@/app/providers";
+import { type PublicApiClient } from "@/shared/api/publicApiClient";
+
+import { clearStoredCustomerMemberId } from "./customerMemberSession";
 import { ReservationEntryPageContent } from "./ReservationEntryPageContent";
 
-const pushMock = vi.fn();
-
-vi.mock("next/navigation", async () => {
-  const actual = await vi.importActual<typeof import("next/navigation")>("next/navigation");
-
+function createMockClient(): PublicApiClient {
   return {
-    ...actual,
-    useRouter: () => ({
-      push: pushMock,
-    }),
+    baseUrl: "http://api.test",
+    get: vi.fn(),
+    post: vi.fn(),
+    request: vi.fn(),
   };
-});
+}
 
 describe("ReservationEntryPageContent", () => {
   beforeEach(() => {
-    pushMock.mockReset();
+    clearStoredCustomerMemberId();
   });
 
   it("renders a reservation entry screen", () => {
-    render(<ReservationEntryPageContent />);
+    render(
+      <AppProviders apiClient={createMockClient()}>
+        <ReservationEntryPageContent
+          restaurants={[
+            {
+              id: 101,
+              name: "청담 테스트 다이닝",
+              slug: "cheongdam-main",
+              description: "테스트 예약 매장",
+              phone: "02-555-1212",
+              addressLine1: "서울시 강남구 테스트로 17",
+              addressLine2: "2층",
+              cuisineTypes: ["코스", "다이닝"],
+              coverImageFileId: null,
+              coverImageUrl: null,
+              publicUrl: "/r/cheongdam-main",
+              reservationProductCount: 2,
+              publishedAt: "2026-05-01T00:00:00.000Z",
+            },
+          ]}
+        />
+      </AppProviders>,
+    );
 
-    expect(screen.getByRole("heading", { name: "예약 페이지 찾기" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "예약 화면 열기" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "예약 조회" })).toHaveAttribute(
+    expect(screen.getByRole("heading", { level: 1, name: "전체 매장" })).toBeInTheDocument();
+    expect(screen.getByText("테스트 데이터 전체 노출 · 1개")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /청담 테스트 다이닝/ })).toHaveAttribute(
+      "href",
+      "/r/cheongdam-main",
+    );
+    expect(screen.queryByLabelText("예약 링크 또는 코드")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "예약 화면 열기" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "예약 조회" })[0]).toHaveAttribute(
       "href",
       "/reservations",
     );
-  });
-
-  it("opens slug and numeric reservation pages", () => {
-    render(<ReservationEntryPageContent />);
-
-    fireEvent.change(screen.getByLabelText("예약 링크 또는 코드"), {
-      target: { value: "cheongdam-main" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "예약 화면 열기" }));
-
-    expect(pushMock).toHaveBeenCalledWith("/r/cheongdam-main");
-
-    fireEvent.change(screen.getByLabelText("예약 링크 또는 코드"), {
-      target: { value: "15" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "예약 화면 열기" }));
-
-    expect(pushMock).toHaveBeenCalledWith("/reserve/15");
-  });
-
-  it("requires a reservation page code", () => {
-    render(<ReservationEntryPageContent />);
-
-    fireEvent.click(screen.getByRole("button", { name: "예약 화면 열기" }));
-
-    expect(
-      screen.getByText("매장에서 공유한 예약 링크나 예약 페이지 코드를 입력해 주세요."),
-    ).toBeInTheDocument();
-    expect(pushMock).not.toHaveBeenCalled();
   });
 });

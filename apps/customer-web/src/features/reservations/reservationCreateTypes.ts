@@ -13,8 +13,7 @@ export interface PublicReservationCreateRequest {
   visitDate: string;
   startTime: string;
   partySize: number;
-  customerName: string;
-  customerPhone: string;
+  memberId: number;
   customerRequest?: string | null;
   customerEmail?: string | null;
   allergyNote?: string | null;
@@ -32,6 +31,7 @@ export interface PublicReservationResponse {
   restaurantId: number;
   productId: number;
   customerId: number;
+  memberId: number | null;
   visitDate: string;
   startTime: string;
   endTime: string;

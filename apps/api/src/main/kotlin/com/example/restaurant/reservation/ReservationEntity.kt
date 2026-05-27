@@ -1,5 +1,6 @@
 package com.example.restaurant.reservation
 
+import com.example.restaurant.member.CustomerMemberEntity
 import com.example.restaurant.payment.PaymentStatus
 import com.example.restaurant.reservationproduct.ReservationProductEntity
 import com.example.restaurant.restaurant.RestaurantEntity
@@ -36,6 +37,10 @@ class ReservationEntity(
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "customer_id", nullable = false)
     val customer: CustomerEntity,
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "member_id")
+    val member: CustomerMemberEntity? = null,
 
     @Column(name = "reservation_number", nullable = false, length = 64)
     val reservationNumber: String,
