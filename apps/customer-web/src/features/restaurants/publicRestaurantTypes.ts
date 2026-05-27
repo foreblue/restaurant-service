@@ -45,3 +45,23 @@ export interface PublicRestaurantResponse {
   holidayRules: HolidayRuleResponse[];
   reservationPage: PublicReservationPageResponse;
 }
+
+export interface PublicRestaurantListResponse {
+  restaurants: PublicRestaurantListItem[];
+}
+
+export interface PublicRestaurantListItem {
+  id: number;
+  name: string;
+  slug: string;
+  description: string | null;
+  phone: string;
+  addressLine1: string;
+  addressLine2: string | null;
+  cuisineTypes: string[];
+  coverImageFileId: number | null;
+  coverImageUrl?: string | null;
+  publicUrl: string;
+  reservationProductCount: number;
+  publishedAt: string | null;
+}

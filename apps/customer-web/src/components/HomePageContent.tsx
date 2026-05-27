@@ -1,28 +1,33 @@
 import Link from "next/link";
 
 import { ReservationPageShell } from "@/components/layout/ReservationPageShell";
+import { CustomerMemberSessionStatus } from "@/features/reservations/CustomerMemberSessionStatus";
+import { PublicRestaurantList } from "@/features/restaurants/PublicRestaurantList";
+import { type PublicRestaurantListItem } from "@/features/restaurants/publicRestaurantTypes";
 
-export function HomePageContent() {
+interface HomePageContentProps {
+  restaurantListError?: boolean | undefined;
+  restaurants?: PublicRestaurantListItem[] | undefined;
+}
+
+export function HomePageContent({
+  restaurantListError = false,
+  restaurants = [],
+}: HomePageContentProps) {
   return (
     <ReservationPageShell
-      description="공유받은 매장 예약 링크에서 새 예약을 진행하거나 예약번호로 기존 예약을 확인할 수 있습니다."
+      description="전체 매장 목록에서 원하는 매장을 선택하거나 예약번호로 기존 예약을 확인할 수 있습니다."
       eyebrow="고객 예약"
       title="식당 예약"
     >
-      <div className="grid gap-3">
-        <section className="grid gap-3 rounded-lg border bg-[var(--surface)] p-5 shadow-sm">
-          <h2 className="text-base font-semibold text-slate-950">예약 신청</h2>
-          <p className="text-sm leading-6 text-slate-600">
-            매장이 공유한 예약 경로로 이동해 상품, 인원, 날짜와 시간을 선택합니다.
-          </p>
-          <Link
-            className="inline-flex min-h-11 items-center justify-center rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 focus-visible:ring-offset-2"
-            href="/reserve"
-            prefetch={false}
-          >
-            예약 신청
-          </Link>
-        </section>
+      <div className="grid gap-4">
+        <PublicRestaurantList
+          loadFailed={restaurantListError}
+          restaurants={restaurants}
+          sessionRedirectTo="/"
+        />
+
+        <CustomerMemberSessionStatus redirectTo="/" variant="card" />
 
         <section className="grid gap-3 rounded-lg border bg-[var(--surface)] p-5 shadow-sm">
           <h2 className="text-base font-semibold text-slate-950">예약 확인</h2>

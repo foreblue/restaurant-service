@@ -19,6 +19,7 @@ const reservation: PublicReservationResponse = {
   restaurantId: 1,
   productId: 10,
   customerId: 11,
+  memberId: 1,
   visitDate: "2026-05-18",
   startTime: "18:00",
   endTime: "19:30",

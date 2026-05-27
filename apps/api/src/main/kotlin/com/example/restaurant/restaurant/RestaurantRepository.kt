@@ -6,4 +6,6 @@ interface RestaurantRepository : JpaRepository<RestaurantEntity, Long> {
     fun findByOwnerId(ownerId: Long): RestaurantEntity?
 
     fun findBySlug(slug: String): RestaurantEntity?
+
+    fun findAllByOrderByIdAsc(): List<RestaurantEntity>
 }

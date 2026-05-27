@@ -7,6 +7,9 @@ import com.example.restaurant.availability.AvailabilityService
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
 import com.example.restaurant.inventory.SeatInventoryService
+import com.example.restaurant.member.CustomerMemberEntity
+import com.example.restaurant.member.CustomerMemberRepository
+import com.example.restaurant.member.CustomerMemberStatus
 import com.example.restaurant.notification.NotificationService
 import com.example.restaurant.payment.CancellationPolicyEntity
 import com.example.restaurant.payment.CancellationPolicyRepository
@@ -51,6 +54,7 @@ class PublicReservationService(
     private val reservationProductRepository: ReservationProductRepository,
     private val reservationPageRepository: ReservationPageRepository,
     private val customerRepository: CustomerRepository,
+    private val customerMemberRepository: CustomerMemberRepository,
     private val reservationRepository: ReservationRepository,
     private val seatInventoryService: SeatInventoryService,
     private val lookupTokenService: ReservationLookupTokenService,
@@ -123,6 +127,7 @@ class PublicReservationService(
                 restaurant = product.restaurant,
                 reservationProduct = product,
                 customer = customer,
+                member = normalized.member,
                 reservationNumber = generateReservationNumber(normalized.visitDate),
                 visitDate = normalized.visitDate,
                 startTime = normalized.startTime,
@@ -209,7 +214,8 @@ class PublicReservationService(
             throw ApiException(ErrorCode.VALIDATION_ERROR, "partySize는 1 이상이어야 합니다.")
         }
 
-        val normalizedCustomerName = customerName?.trim().orEmpty()
+        val member = memberId?.let { findActiveMember(it) }
+        val normalizedCustomerName = member?.name ?: customerName?.trim().orEmpty()
         if (normalizedCustomerName.isBlank()) {
             throw ApiException(ErrorCode.VALIDATION_ERROR, "customerName이 필요합니다.")
         }
@@ -217,7 +223,8 @@ class PublicReservationService(
             throw ApiException(ErrorCode.VALIDATION_ERROR, "customerName은 80자 이하여야 합니다.")
         }
 
-        val normalizedCustomerPhone = customerPhone.orEmpty().filter { it.isDigit() }
+        val normalizedCustomerPhone = member?.phoneNumber
+            ?: customerPhone.orEmpty().filter { it.isDigit() }
         if (normalizedCustomerPhone.length !in 8..20) {
             throw ApiException(ErrorCode.VALIDATION_ERROR, "customerPhone이 유효하지 않습니다.")
         }
@@ -228,12 +235,16 @@ class PublicReservationService(
         if ((normalizedCustomerRequest?.length ?: 0) > MAX_CUSTOMER_REQUEST_LENGTH) {
             throw ApiException(ErrorCode.VALIDATION_ERROR, "customerRequest는 500자 이하여야 합니다.")
         }
-        val normalizedCustomerEmail = customerEmail.normalizedEmail()
-        val normalizedAllergyNote = allergyNote.normalizedText(MAX_CUSTOMER_NOTE_LENGTH, "allergyNote")
-        val normalizedAnniversaryType = anniversaryType.normalizedText(MAX_CUSTOMER_SHORT_FIELD_LENGTH, "anniversaryType")
-        val normalizedAnniversaryDate = anniversaryDate.normalizedAnniversaryDate()
+        val normalizedCustomerEmail = customerEmail.normalizedEmail() ?: member?.email
+        val normalizedAllergyNote =
+            allergyNote.normalizedText(MAX_CUSTOMER_NOTE_LENGTH, "allergyNote") ?: member?.allergyNote
+        val normalizedAnniversaryType =
+            anniversaryType.normalizedText(MAX_CUSTOMER_SHORT_FIELD_LENGTH, "anniversaryType")
+                ?: member?.anniversaryType
+        val normalizedAnniversaryDate =
+            anniversaryDate.normalizedAnniversaryDate() ?: member?.anniversaryDate
         val normalizedRequestTemplateValues = requestTemplateValues.normalizedRequestTemplateValues()
-        val normalizedMarketingOptIn = marketingOptIn ?: false
+        val normalizedMarketingOptIn = marketingOptIn ?: member?.marketingOptIn ?: false
 
         val normalizedIdempotencyKey = (headerIdempotencyKey?.takeIf { it.isNotBlank() } ?: idempotencyKey)
             ?.trim()
@@ -252,6 +263,7 @@ class PublicReservationService(
                 normalizedVisitDate.toString(),
                 normalizedStartTime.toString(),
                 normalizedPartySize.toString(),
+                member?.id?.toString().orEmpty(),
                 normalizedCustomerName,
                 normalizedCustomerPhone,
                 normalizedCustomerRequest.orEmpty(),
@@ -270,6 +282,7 @@ class PublicReservationService(
             visitDate = normalizedVisitDate,
             startTime = normalizedStartTime,
             partySize = normalizedPartySize,
+            member = member,
             customerName = normalizedCustomerName,
             customerPhone = normalizedCustomerPhone,
             customerRequest = normalizedCustomerRequest,
@@ -308,6 +321,7 @@ class PublicReservationService(
             restaurantId = restaurant.id,
             productId = reservationProduct.id,
             customerId = customer.id,
+            memberId = member?.id,
             visitDate = visitDate,
             startTime = startTime,
             endTime = endTime,
@@ -337,6 +351,7 @@ class PublicReservationService(
             productId = reservationProduct.id,
             productName = reservationProduct.name,
             customerId = customer.id,
+            memberId = member?.id,
             visitDate = visitDate,
             startTime = startTime,
             endTime = endTime,
@@ -416,6 +431,15 @@ class PublicReservationService(
         normalized.allergyNote?.let { allergyNote = it }
         normalized.anniversaryType?.let { anniversaryType = it }
         normalized.anniversaryDate?.let { anniversaryDate = it }
+    }
+
+    private fun findActiveMember(memberId: Long): CustomerMemberEntity {
+        val member = customerMemberRepository.findById(memberId)
+            .orElseThrow { ApiException(ErrorCode.NOT_FOUND, "회원을 찾을 수 없습니다.") }
+        if (member.status != CustomerMemberStatus.ACTIVE) {
+            throw ApiException(ErrorCode.NOT_FOUND, "회원을 찾을 수 없습니다.")
+        }
+        return member
     }
 
     private fun NormalizedReservationCreateRequest.requestTemplateValuesJson(): String? =
@@ -512,6 +536,7 @@ private data class NormalizedReservationCreateRequest(
     val visitDate: LocalDate,
     val startTime: LocalTime,
     val partySize: Int,
+    val member: CustomerMemberEntity?,
     val customerName: String,
     val customerPhone: String,
     val customerRequest: String?,

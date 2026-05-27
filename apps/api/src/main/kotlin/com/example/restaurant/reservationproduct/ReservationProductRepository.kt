@@ -17,6 +17,11 @@ interface ReservationProductRepository : JpaRepository<ReservationProductEntity,
         status: ReservationProductStatus,
     ): List<ReservationProductEntity>
 
+    fun countByRestaurantIdAndStatusAndVisibleTrue(
+        restaurantId: Long,
+        status: ReservationProductStatus,
+    ): Long
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select p from ReservationProductEntity p where p.id = :id")
     fun findByIdForUpdate(

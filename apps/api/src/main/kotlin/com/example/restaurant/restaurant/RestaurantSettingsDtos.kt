@@ -139,6 +139,26 @@ data class PublicRestaurantResponse(
     val reservationPage: PublicReservationPageResponse,
 )
 
+data class PublicRestaurantListResponse(
+    val restaurants: List<PublicRestaurantListItemResponse>,
+)
+
+data class PublicRestaurantListItemResponse(
+    val id: Long,
+    val name: String,
+    val slug: String,
+    val description: String?,
+    val phone: String,
+    val addressLine1: String,
+    val addressLine2: String?,
+    val cuisineTypes: List<String>,
+    val coverImageFileId: Long?,
+    val coverImageUrl: String?,
+    val publicUrl: String,
+    val reservationProductCount: Long,
+    val publishedAt: Instant?,
+)
+
 data class PublicReservationPageResponse(
     val status: ReservationPageStatus,
     val publishedAt: Instant?,

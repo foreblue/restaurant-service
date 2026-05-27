@@ -6,6 +6,8 @@ import com.example.restaurant.auth.BusinessUserEntity
 import com.example.restaurant.auth.BusinessUserRepository
 import com.example.restaurant.common.error.ApiException
 import com.example.restaurant.common.error.ErrorCode
+import com.example.restaurant.reservationproduct.ReservationProductRepository
+import com.example.restaurant.reservationproduct.ReservationProductStatus
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.springframework.stereotype.Service
@@ -26,6 +28,7 @@ class RestaurantSettingsService(
     private val businessHourRepository: BusinessHourRepository,
     private val holidayRuleRepository: HolidayRuleRepository,
     private val storedFileRepository: StoredFileRepository,
+    private val reservationProductRepository: ReservationProductRepository,
     private val auditLogService: AuditLogService,
     private val clock: Clock,
 ) {
@@ -209,6 +212,23 @@ class RestaurantSettingsService(
         val page = reservationPageRepository.findByRestaurantId(restaurant.id)
             ?: throw ApiException(ErrorCode.NOT_FOUND, "공개 예약 페이지를 찾을 수 없습니다.")
         return publicRestaurant(page)
+    }
+
+    @Transactional(readOnly = true)
+    fun publicRestaurants(): PublicRestaurantListResponse {
+        val restaurants = restaurantRepository
+            .findAllByOrderByIdAsc()
+            .map { restaurant ->
+                val page = reservationPageRepository.findByRestaurantId(restaurant.id)
+                val reservationProductCount = reservationProductRepository
+                    .countByRestaurantIdAndStatusAndVisibleTrue(
+                        restaurant.id,
+                        ReservationProductStatus.ACTIVE,
+                    )
+                restaurant.toPublicListItem(page, reservationProductCount)
+            }
+
+        return PublicRestaurantListResponse(restaurants = restaurants)
     }
 
     private fun publicRestaurant(page: ReservationPageEntity): PublicRestaurantResponse {
@@ -515,6 +535,29 @@ class RestaurantSettingsService(
                 publicUrl = "/r/$pageSlug",
                 reservationAvailable = true,
             ),
+        )
+    }
+
+    private fun RestaurantEntity.toPublicListItem(
+        page: ReservationPageEntity?,
+        reservationProductCount: Long,
+    ): PublicRestaurantListItemResponse {
+        val pageSlug = page?.slug ?: slug ?: id.toString()
+        val publicUrl = page?.slug?.let { "/r/$it" } ?: "/reserve/$id"
+        return PublicRestaurantListItemResponse(
+            id = id,
+            name = name ?: "매장명 미정",
+            slug = pageSlug,
+            description = description,
+            phone = phone ?: "전화번호 미정",
+            addressLine1 = addressLine1 ?: "주소 준비 중",
+            addressLine2 = addressLine2,
+            cuisineTypes = parseCuisineTypes(cuisineTypesJson),
+            coverImageFileId = coverImageFile?.id,
+            coverImageUrl = coverImageFile?.id?.let { "/api/public/files/$it" },
+            publicUrl = publicUrl,
+            reservationProductCount = reservationProductCount,
+            publishedAt = page?.publishedAt,
         )
     }
 

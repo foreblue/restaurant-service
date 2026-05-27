@@ -7,10 +7,8 @@ describe("reservationCustomerSchema", () => {
         allergyNote: "",
         anniversaryDate: "",
         anniversaryType: "",
-        customerName: " 홍길동 ",
-        email: "",
         marketingConsent: false,
-        phoneNumber: "010-1234-5678",
+        memberId: "1",
         privacyConsent: true,
         requestNotes: "",
         requestTemplateValues: [],
@@ -19,10 +17,8 @@ describe("reservationCustomerSchema", () => {
       allergyNote: null,
       anniversaryDate: null,
       anniversaryType: null,
-      customerName: "홍길동",
-      email: null,
       marketingConsent: false,
-      phoneNumber: "01012345678",
+      memberId: 1,
       privacyConsent: true,
       requestNotes: null,
       requestTemplateValues: [],
@@ -35,10 +31,8 @@ describe("reservationCustomerSchema", () => {
         allergyNote: " 견과류 ",
         anniversaryDate: "05-17",
         anniversaryType: "BIRTHDAY",
-        customerName: "홍길동",
-        email: "",
         marketingConsent: true,
-        phoneNumber: "01012345678",
+        memberId: 2,
         privacyConsent: true,
         requestNotes: "창가 좌석",
         requestTemplateValues: ["조용한 좌석 선호", "기념일 방문"],
@@ -55,15 +49,25 @@ describe("reservationCustomerSchema", () => {
   it("validates anniversary date shape", () => {
     expect(() =>
       reservationCustomerSchema.parse({
-        customerName: "홍길동",
-        email: "",
         marketingConsent: false,
-        phoneNumber: "01012345678",
+        memberId: 1,
         privacyConsent: true,
         requestNotes: "",
         anniversaryDate: "5월 17일",
         requestTemplateValues: [],
       }),
     ).toThrow("기념일 날짜는 MM-DD 또는 YYYY-MM-DD 형식으로 입력해 주세요.");
+  });
+
+  it("requires a member selection", () => {
+    expect(() =>
+      reservationCustomerSchema.parse({
+        marketingConsent: false,
+        memberId: 0,
+        privacyConsent: true,
+        requestNotes: "",
+        requestTemplateValues: [],
+      }),
+    ).toThrow("예약할 회원을 선택해 주세요.");
   });
 });
